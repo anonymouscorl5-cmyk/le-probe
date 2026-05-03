@@ -1,7 +1,5 @@
-import os
 import json
 import cv2
-import threading
 import argparse
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
@@ -51,13 +49,6 @@ async def get_frame(idx: int):
     return Response(content=buffer.tobytes(), media_type="image/jpeg")
 
 
-def start_pinggy():
-    """Starts the Pinggy SSH tunnel in the background."""
-    print("\n🚀 Starting Pinggy Tunnel...")
-    print("💡 Copy the .pinggy.link URL and provide it to the local proxy server.")
-    os.system("ssh -p 443 -R0:localhost:8000 a.pinggy.io")
-
-
 def main():
     parser = argparse.ArgumentParser(description="LeWM Colab Visual Bridge")
     parser.add_argument(
@@ -67,17 +58,12 @@ def main():
         "--dataset", type=str, required=True, help="Path to gr1_pickup_grasp directory"
     )
     parser.add_argument("--port", type=int, default=8000, help="Local server port")
-    parser.add_argument("--tunnel", action="store_true", help="Start Pinggy tunnel")
     args = parser.parse_args()
 
     # Load metadata
     with open(args.meta, "r") as f:
         CONFIG["meta"] = json.load(f)
     CONFIG["dataset_dir"] = Path(args.dataset)
-
-    # Start tunnel if requested
-    if args.tunnel:
-        threading.Thread(target=start_pinggy, daemon=True).start()
 
     # Launch server
     print(f"📡 Image server starting on port {args.port}...")
