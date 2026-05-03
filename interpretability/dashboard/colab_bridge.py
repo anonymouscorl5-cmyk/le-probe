@@ -91,8 +91,8 @@ async def get_frame(idx: int):
             x1, y1 = col * patch_px, row * patch_px
             x2, y2 = x1 + patch_px, y1 + patch_px
 
-            # Draw red rectangle (BGR: 0, 0, 255)
-            cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            # Draw green rectangle (BGR: 0, 255, 0)
+            cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 3)
             # Add a subtle glow/label
             cv2.putText(
                 img_bgr,
@@ -100,7 +100,7 @@ async def get_frame(idx: int):
                 (x1 + 2, y1 + 12),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
-                (0, 0, 255),
+                (0, 255, 0),
                 1,
             )
 
