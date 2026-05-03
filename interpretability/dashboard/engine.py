@@ -271,6 +271,44 @@ async def generate_graph(request: Dict[str, Any]):
 # --- 3. MAIN BOOTSTRAP ---
 
 
+def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda"):
+    print(f"🚀 Initializing Engine Resources | Device: {device}")
+
+    # 1. Dataset
+    print(f"📦 Loading Dataset: {dataset_repo}")
+    STATE["dataset"] = LeRobotDataset(dataset_repo)
+
+    # 2. Model
+    print(f"🧠 Loading LeWM Model: {model_path}")
+    mapper = GoalMapper(model_path=model_path, dataset_root=".")
+    STATE["model"] = mapper.model.to(device).eval()
+
+    # 3. Transcoders (Auto-Discovery)
+    tc_path = Path(transcoder_dir)
+    if tc_path.exists():
+        print(f"🔍 Discovering Transcoders in {transcoder_dir}...")
+        for path in tc_path.glob("*.pt"):
+            # Expected format: encoder_L3_clt.pt or predictor_L1_clt.pt
+            layer_id = path.stem.split("_clt")[0].split("_sae")[0]
+
+            checkpoint = torch.load(path, map_location="cpu")
+            config = checkpoint["config"]
+
+            # Initialize Transcoder with correct dims
+            tc = Transcoder(
+                config["dict_size"], config["dict_size"]
+            )  # Placeholder for real dims
+            # Use state dict dims to be safe
+            d_model = checkpoint["state_dict"]["encoder.weight"].shape[1]
+            tc = Transcoder(d_model, config["dict_size"]).to(device)
+
+            tc.load_state_dict(checkpoint["state_dict"])
+            STATE["transcoders"][layer_id] = tc.eval()
+            print(f"  ✅ Linked: {layer_id}")
+    else:
+        print(f"⚠️ Warning: Transcoder directory {transcoder_dir} not found.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="LeWM Unified Interpretability Engine")
     parser.add_argument(
@@ -282,15 +320,19 @@ def main():
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
     parser.add_argument("--transcoders", type=str, default="transcoder_checkpoints")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     args = parser.parse_args()
 
-    # Load Resources
-    print(f"📦 Loading Dataset: {args.repo}")
-    STATE["dataset"] = LeRobotDataset(args.repo)
-
+    # 1. Load Metadata
     with open(args.meta, "r") as f:
         STATE["meta"] = json.load(f)
 
+    # 2. Load Compute Resources
+    load_engine_resources(args.model, args.repo, args.transcoders, device=args.device)
+
+    # 3. Start Server
     print(f"📡 Engine starting on port {args.port}...")
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
