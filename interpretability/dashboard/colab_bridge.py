@@ -35,15 +35,15 @@ async def get_frame(idx: int):
     try:
         sample = dataset[sample_idx]
 
-        # Find the first image key (usually observation.images.*)
+        # Find the image key (STRICT: world_center only)
         img_key = None
         for key in sample.keys():
-            if "image" in key:
+            if "world_center" in key:
                 img_key = key
                 break
 
         if not img_key:
-            raise HTTPException(status_code=404, detail="No image key found in sample")
+            raise HTTPException(status_code=404, detail="Strict modality 'world_center' not found in dataset")
 
         # LeRobot returns tensors (C, H, W)
         img_tensor = sample[img_key]
