@@ -31,52 +31,42 @@ async def get_frame(idx: int):
     if sample_idx >= len(dataset):
         raise HTTPException(status_code=404, detail="Sample index out of range")
 
-    # 2. Extract Frame using LeRobot's internal mapping
+    # 2. Extract Frame using LeRobot's native indexing
     try:
-        # We need to find which episode this sample belongs to
-        # dataset.episode_data_index is a tensor/list of (start, end)
-        ep_idx = -1
-        for i, (start, end) in enumerate(
-            zip(dataset.episode_data_index["from"], dataset.episode_data_index["to"])
-        ):
-            if start <= sample_idx < end:
-                ep_idx = i
-                local_frame_idx = sample_idx - start
+        sample = dataset[sample_idx]
+
+        # Find the first image key (usually observation.images.*)
+        img_key = None
+        for key in sample.keys():
+            if "image" in key:
+                img_key = key
                 break
 
-        if ep_idx == -1:
-            raise HTTPException(status_code=404, detail="Episode not found for sample")
+        if not img_key:
+            raise HTTPException(status_code=404, detail="No image key found in sample")
 
-        ep_id = dataset.hf_dataset[ep_idx]["episode_id"]
-        video_path = Path(dataset.root) / "videos" / f"{ep_id}.mp4"
+        # LeRobot returns tensors (C, H, W)
+        img_tensor = sample[img_key]
 
-        if not video_path.exists():
-            # Try searching in subfolders if modality subfolders exist
-            video_paths = list(Path(dataset.root).glob(f"**/videos/{ep_id}.mp4"))
-            if video_paths:
-                video_path = video_paths[0]
-            else:
-                raise HTTPException(
-                    status_code=404, detail=f"Video not found for episode {ep_id}"
-                )
+        # Convert to NumPy (H, W, C)
+        # Handle both torch and numpy types
+        if hasattr(img_tensor, "permute"):
+            img_np = img_tensor.permute(1, 2, 0).cpu().numpy()
+        else:
+            img_np = img_tensor.transpose(1, 2, 0)
 
-        cap = cv2.VideoCapture(str(video_path))
-        # local_frame_idx is 0-based in the episode, but videos might have offset
-        # Usually for LeRobot, it's 1-to-1
-        cap.set(cv2.CAP_PROP_POS_FRAMES, local_frame_idx)
-        ret, frame = cap.read()
-        cap.release()
+        # Ensure uint8 and BGR for OpenCV
+        if img_np.max() <= 1.0:
+            img_np = (img_np * 255).astype("uint8")
 
-        if not ret:
-            raise HTTPException(
-                status_code=500, detail="Failed to extract frame from video"
-            )
+        # Convert RGB to BGR for OpenCV
+        img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
         # 3. Resize for dashboard
-        frame = cv2.resize(frame, (480, 480))
+        img_bgr = cv2.resize(img_bgr, (480, 480))
 
         # 4. Return as JPEG
-        _, buffer = cv2.imencode(".jpg", frame)
+        _, buffer = cv2.imencode(".jpg", img_bgr)
         return Response(content=buffer.tobytes(), media_type="image/jpeg")
 
     except Exception as e:
@@ -115,6 +105,10 @@ def main():
     print(f"📦 Initializing dataset from {dataset_path}...")
     dataset = LeRobotDataset(args.repo or str(dataset_path), root=dataset_path.parent)
     CONFIG["dataset"] = dataset
+
+    # Debug: show available keys
+    if len(dataset) > 0:
+        print(f"✅ Dataset loaded. Available keys: {list(dataset[0].keys())}")
 
     # Load metadata
     with open(args.meta, "r") as f:
