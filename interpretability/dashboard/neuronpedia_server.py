@@ -5,6 +5,9 @@ import requests
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()  # Load variables from .env
 
 app = FastAPI()
 
@@ -64,6 +67,8 @@ async def get_frame(idx: int):
 
 
 if __name__ == "__main__":
+    # Priority: 1. CLI Arg (--remote-url) | 2. Env Var (COLAB_BRIDGE_URL)
+    COLAB_BRIDGE_URL = os.getenv("COLAB_BRIDGE_URL")
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dashboard", type=str, required=True, help="Path to dashboard JSON"
@@ -75,7 +80,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     CONFIG["dashboard_path"] = Path(args.dashboard)
-    CONFIG["remote_url"] = args.remote_url
+    CONFIG["remote_url"] = args.remote_url or COLAB_BRIDGE_URL
 
     import uvicorn
 
