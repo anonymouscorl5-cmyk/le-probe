@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
 import uvicorn
 
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+
 app = FastAPI()
 
 # Global config to be set by CLI args
@@ -57,13 +59,22 @@ def main():
     parser.add_argument(
         "--dataset", type=str, required=True, help="Path to gr1_pickup_grasp directory"
     )
+    parser.add_argument(
+        "--repo", type=str, help="Hugging Face repo ID (e.g. lerobot/gr1_pickup_grasp)"
+    )
     parser.add_argument("--port", type=int, default=8000, help="Local server port")
     args = parser.parse_args()
+
+    # Download dataset if repo is provided and local path is missing
+    CONFIG["dataset_dir"] = Path(args.dataset)
+    if args.repo and not CONFIG["dataset_dir"].exists():
+        print(f"📥 Dataset missing. Downloading {args.repo} from HF...")
+        # We use the parent directory because LeRobotDataset creates the repo folder inside root
+        LeRobotDataset(args.repo, root=CONFIG["dataset_dir"].parent)
 
     # Load metadata
     with open(args.meta, "r") as f:
         CONFIG["meta"] = json.load(f)
-    CONFIG["dataset_dir"] = Path(args.dataset)
 
     # Launch server
     print(f"📡 Image server starting on port {args.port}...")
