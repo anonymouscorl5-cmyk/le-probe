@@ -25,7 +25,7 @@ def run_sql_batch(sqls):
 
 
 def ingest():
-    dashboard_path = Path("le-probe/interpretability/transcoders/lewm_dashboard.json")
+    dashboard_path = Path(__file__).parent / "lewm_dashboard.json"
     if not dashboard_path.exists():
         print(f"❌ Dashboard file not found at {dashboard_path}")
         return

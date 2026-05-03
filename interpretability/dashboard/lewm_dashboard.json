@@ -1,0 +1,3756 @@
+{
+    "model_name": "lewm-robot",
+    "layer": "layer-0",
+    "features": [
+        {
+            "feature_index": 11414,
+            "activations": [
+                {
+                    "token": "<|IMG_3824180|>",
+                    "value": 14.4194,
+                    "context": [
+                        "<|IMG_3824180|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1677716|>",
+                    "value": 12.9864,
+                    "context": [
+                        "<|IMG_1677716|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2492921|>",
+                    "value": 12.9168,
+                    "context": [
+                        "<|IMG_2492921|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2492407|>",
+                    "value": 12.9168,
+                    "context": [
+                        "<|IMG_2492407|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2493435|>",
+                    "value": 12.9168,
+                    "context": [
+                        "<|IMG_2493435|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2492920|>",
+                    "value": 12.5582,
+                    "context": [
+                        "<|IMG_2492920|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2492406|>",
+                    "value": 12.5582,
+                    "context": [
+                        "<|IMG_2492406|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2493434|>",
+                    "value": 12.5582,
+                    "context": [
+                        "<|IMG_2493434|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1827047|>",
+                    "value": 11.9928,
+                    "context": [
+                        "<|IMG_1827047|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1828075|>",
+                    "value": 11.9928,
+                    "context": [
+                        "<|IMG_1828075|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 10091,
+            "activations": [
+                {
+                    "token": "<|IMG_261990|>",
+                    "value": 14.1796,
+                    "context": [
+                        "<|IMG_261990|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_263018|>",
+                    "value": 14.1796,
+                    "context": [
+                        "<|IMG_263018|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_262504|>",
+                    "value": 14.1796,
+                    "context": [
+                        "<|IMG_262504|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2615773|>",
+                    "value": 14.1681,
+                    "context": [
+                        "<|IMG_2615773|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2616801|>",
+                    "value": 14.1681,
+                    "context": [
+                        "<|IMG_2616801|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2616287|>",
+                    "value": 14.1681,
+                    "context": [
+                        "<|IMG_2616287|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1304335|>",
+                    "value": 13.7675,
+                    "context": [
+                        "<|IMG_1304335|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1306648|>",
+                    "value": 13.7675,
+                    "context": [
+                        "<|IMG_1306648|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1304849|>",
+                    "value": 13.7675,
+                    "context": [
+                        "<|IMG_1304849|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1307162|>",
+                    "value": 13.7675,
+                    "context": [
+                        "<|IMG_1307162|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 4599,
+            "activations": [
+                {
+                    "token": "<|IMG_2961454|>",
+                    "value": 12.691,
+                    "context": [
+                        "<|IMG_2961454|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2960940|>",
+                    "value": 12.691,
+                    "context": [
+                        "<|IMG_2960940|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4465932|>",
+                    "value": 12.4288,
+                    "context": [
+                        "<|IMG_4465932|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4466446|>",
+                    "value": 12.4288,
+                    "context": [
+                        "<|IMG_4466446|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4391662|>",
+                    "value": 12.4274,
+                    "context": [
+                        "<|IMG_4391662|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1182566|>",
+                    "value": 12.3785,
+                    "context": [
+                        "<|IMG_1182566|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4737103|>",
+                    "value": 12.3533,
+                    "context": [
+                        "<|IMG_4737103|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1974353|>",
+                    "value": 12.339,
+                    "context": [
+                        "<|IMG_1974353|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1975381|>",
+                    "value": 12.339,
+                    "context": [
+                        "<|IMG_1975381|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1974867|>",
+                    "value": 12.339,
+                    "context": [
+                        "<|IMG_1974867|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 2222,
+            "activations": [
+                {
+                    "token": "<|IMG_3725537|>",
+                    "value": 12.6751,
+                    "context": [
+                        "<|IMG_3725537|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2715281|>",
+                    "value": 12.4604,
+                    "context": [
+                        "<|IMG_2715281|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2716309|>",
+                    "value": 12.4604,
+                    "context": [
+                        "<|IMG_2716309|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2715795|>",
+                    "value": 12.4604,
+                    "context": [
+                        "<|IMG_2715795|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_172756|>",
+                    "value": 12.4447,
+                    "context": [
+                        "<|IMG_172756|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2812660|>",
+                    "value": 12.4015,
+                    "context": [
+                        "<|IMG_2812660|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_666211|>",
+                    "value": 12.396,
+                    "context": [
+                        "<|IMG_666211|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1208987|>",
+                    "value": 12.3958,
+                    "context": [
+                        "<|IMG_1208987|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4738878|>",
+                    "value": 12.391,
+                    "context": [
+                        "<|IMG_4738878|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4738364|>",
+                    "value": 12.391,
+                    "context": [
+                        "<|IMG_4738364|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 9967,
+            "activations": [
+                {
+                    "token": "<|IMG_3799569|>",
+                    "value": 12.6157,
+                    "context": [
+                        "<|IMG_3799569|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_785997|>",
+                    "value": 12.3963,
+                    "context": [
+                        "<|IMG_785997|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_785483|>",
+                    "value": 12.3963,
+                    "context": [
+                        "<|IMG_785483|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_786511|>",
+                    "value": 12.3963,
+                    "context": [
+                        "<|IMG_786511|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_788824|>",
+                    "value": 12.3963,
+                    "context": [
+                        "<|IMG_788824|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_788310|>",
+                    "value": 12.3963,
+                    "context": [
+                        "<|IMG_788310|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2294577|>",
+                    "value": 11.6447,
+                    "context": [
+                        "<|IMG_2294577|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2615827|>",
+                    "value": 11.6085,
+                    "context": [
+                        "<|IMG_2615827|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2616855|>",
+                    "value": 11.6085,
+                    "context": [
+                        "<|IMG_2616855|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2616341|>",
+                    "value": 11.6085,
+                    "context": [
+                        "<|IMG_2616341|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 849,
+            "activations": [
+                {
+                    "token": "<|IMG_3824212|>",
+                    "value": 12.0794,
+                    "context": [
+                        "<|IMG_3824212|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_345470|>",
+                    "value": 12.0691,
+                    "context": [
+                        "<|IMG_345470|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3728133|>",
+                    "value": 12.0032,
+                    "context": [
+                        "<|IMG_3728133|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3727619|>",
+                    "value": 12.0032,
+                    "context": [
+                        "<|IMG_3727619|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3728647|>",
+                    "value": 12.0032,
+                    "context": [
+                        "<|IMG_3728647|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3824213|>",
+                    "value": 11.8776,
+                    "context": [
+                        "<|IMG_3824213|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_345469|>",
+                    "value": 11.5982,
+                    "context": [
+                        "<|IMG_345469|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2442592|>",
+                    "value": 11.3413,
+                    "context": [
+                        "<|IMG_2442592|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4664878|>",
+                    "value": 11.1125,
+                    "context": [
+                        "<|IMG_4664878|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4664364|>",
+                    "value": 11.1125,
+                    "context": [
+                        "<|IMG_4664364|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 5208,
+            "activations": [
+                {
+                    "token": "<|IMG_2936819|>",
+                    "value": 11.3387,
+                    "context": [
+                        "<|IMG_2936819|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2936305|>",
+                    "value": 11.3387,
+                    "context": [
+                        "<|IMG_2936305|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1554374|>",
+                    "value": 11.3227,
+                    "context": [
+                        "<|IMG_1554374|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_49920|>",
+                    "value": 10.8863,
+                    "context": [
+                        "<|IMG_49920|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_50948|>",
+                    "value": 10.8863,
+                    "context": [
+                        "<|IMG_50948|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_50434|>",
+                    "value": 10.8863,
+                    "context": [
+                        "<|IMG_50434|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3355430|>",
+                    "value": 10.8846,
+                    "context": [
+                        "<|IMG_3355430|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4490368|>",
+                    "value": 10.8737,
+                    "context": [
+                        "<|IMG_4490368|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4121031|>",
+                    "value": 10.8499,
+                    "context": [
+                        "<|IMG_4121031|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4120517|>",
+                    "value": 10.8499,
+                    "context": [
+                        "<|IMG_4120517|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 11427,
+            "activations": [
+                {
+                    "token": "<|IMG_2347284|>",
+                    "value": 11.1234,
+                    "context": [
+                        "<|IMG_2347284|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2346770|>",
+                    "value": 11.1234,
+                    "context": [
+                        "<|IMG_2346770|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2347798|>",
+                    "value": 11.1234,
+                    "context": [
+                        "<|IMG_2347798|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2591940|>",
+                    "value": 10.9293,
+                    "context": [
+                        "<|IMG_2591940|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2592968|>",
+                    "value": 10.9293,
+                    "context": [
+                        "<|IMG_2592968|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2592454|>",
+                    "value": 10.9293,
+                    "context": [
+                        "<|IMG_2592454|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2764918|>",
+                    "value": 10.7777,
+                    "context": [
+                        "<|IMG_2764918|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2764404|>",
+                    "value": 10.7777,
+                    "context": [
+                        "<|IMG_2764404|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2763890|>",
+                    "value": 10.7777,
+                    "context": [
+                        "<|IMG_2763890|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_229592|>",
+                    "value": 10.7406,
+                    "context": [
+                        "<|IMG_229592|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 5919,
+            "activations": [
+                {
+                    "token": "<|IMG_3085602|>",
+                    "value": 11.0705,
+                    "context": [
+                        "<|IMG_3085602|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3085088|>",
+                    "value": 11.0705,
+                    "context": [
+                        "<|IMG_3085088|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3084574|>",
+                    "value": 11.0705,
+                    "context": [
+                        "<|IMG_3084574|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_641536|>",
+                    "value": 11.0077,
+                    "context": [
+                        "<|IMG_641536|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4490368|>",
+                    "value": 10.9239,
+                    "context": [
+                        "<|IMG_4490368|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1702944|>",
+                    "value": 10.7942,
+                    "context": [
+                        "<|IMG_1702944|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1703972|>",
+                    "value": 10.7942,
+                    "context": [
+                        "<|IMG_1703972|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1703458|>",
+                    "value": 10.7942,
+                    "context": [
+                        "<|IMG_1703458|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1110301|>",
+                    "value": 10.7784,
+                    "context": [
+                        "<|IMG_1110301|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_863581|>",
+                    "value": 10.7212,
+                    "context": [
+                        "<|IMG_863581|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 9866,
+            "activations": [
+                {
+                    "token": "<|IMG_1050660|>",
+                    "value": 10.8647,
+                    "context": [
+                        "<|IMG_1050660|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1051688|>",
+                    "value": 10.8647,
+                    "context": [
+                        "<|IMG_1051688|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1051174|>",
+                    "value": 10.8647,
+                    "context": [
+                        "<|IMG_1051174|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_246506|>",
+                    "value": 9.9067,
+                    "context": [
+                        "<|IMG_246506|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_244707|>",
+                    "value": 9.9067,
+                    "context": [
+                        "<|IMG_244707|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_244193|>",
+                    "value": 9.9067,
+                    "context": [
+                        "<|IMG_244193|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1368358|>",
+                    "value": 9.5982,
+                    "context": [
+                        "<|IMG_1368358|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1369386|>",
+                    "value": 9.5982,
+                    "context": [
+                        "<|IMG_1369386|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1368872|>",
+                    "value": 9.5982,
+                    "context": [
+                        "<|IMG_1368872|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4835761|>",
+                    "value": 9.587,
+                    "context": [
+                        "<|IMG_4835761|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 5644,
+            "activations": [
+                {
+                    "token": "<|IMG_83102|>",
+                    "value": 10.5077,
+                    "context": [
+                        "<|IMG_83102|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_84130|>",
+                    "value": 10.5077,
+                    "context": [
+                        "<|IMG_84130|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_83616|>",
+                    "value": 10.5077,
+                    "context": [
+                        "<|IMG_83616|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1239361|>",
+                    "value": 10.381,
+                    "context": [
+                        "<|IMG_1239361|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1238847|>",
+                    "value": 10.381,
+                    "context": [
+                        "<|IMG_1238847|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1239875|>",
+                    "value": 10.381,
+                    "context": [
+                        "<|IMG_1239875|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1439821|>",
+                    "value": 9.9661,
+                    "context": [
+                        "<|IMG_1439821|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1439307|>",
+                    "value": 9.9661,
+                    "context": [
+                        "<|IMG_1439307|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1440335|>",
+                    "value": 9.9661,
+                    "context": [
+                        "<|IMG_1440335|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1928635|>",
+                    "value": 9.9156,
+                    "context": [
+                        "<|IMG_1928635|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 12114,
+            "activations": [
+                {
+                    "token": "<|IMG_2837288|>",
+                    "value": 10.2541,
+                    "context": [
+                        "<|IMG_2837288|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_719642|>",
+                    "value": 9.821,
+                    "context": [
+                        "<|IMG_719642|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_719128|>",
+                    "value": 9.821,
+                    "context": [
+                        "<|IMG_719128|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_720156|>",
+                    "value": 9.821,
+                    "context": [
+                        "<|IMG_720156|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3824180|>",
+                    "value": 9.5194,
+                    "context": [
+                        "<|IMG_3824180|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1234123|>",
+                    "value": 9.4762,
+                    "context": [
+                        "<|IMG_1234123|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1235151|>",
+                    "value": 9.4762,
+                    "context": [
+                        "<|IMG_1235151|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1234637|>",
+                    "value": 9.4762,
+                    "context": [
+                        "<|IMG_1234637|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2492407|>",
+                    "value": 9.4507,
+                    "context": [
+                        "<|IMG_2492407|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2493435|>",
+                    "value": 9.4507,
+                    "context": [
+                        "<|IMG_2493435|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 7699,
+            "activations": [
+                {
+                    "token": "<|IMG_1824041|>",
+                    "value": 10.2454,
+                    "context": [
+                        "<|IMG_1824041|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1824040|>",
+                    "value": 10.2439,
+                    "context": [
+                        "<|IMG_1824040|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1824039|>",
+                    "value": 10.2412,
+                    "context": [
+                        "<|IMG_1824039|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_639781|>",
+                    "value": 10.2383,
+                    "context": [
+                        "<|IMG_639781|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3918075|>",
+                    "value": 9.0318,
+                    "context": [
+                        "<|IMG_3918075|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3919103|>",
+                    "value": 9.0318,
+                    "context": [
+                        "<|IMG_3919103|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3918589|>",
+                    "value": 9.0318,
+                    "context": [
+                        "<|IMG_3918589|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3921416|>",
+                    "value": 9.0318,
+                    "context": [
+                        "<|IMG_3921416|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4908295|>",
+                    "value": 9.0191,
+                    "context": [
+                        "<|IMG_4908295|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4905982|>",
+                    "value": 9.0191,
+                    "context": [
+                        "<|IMG_4905982|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 11623,
+            "activations": [
+                {
+                    "token": "<|IMG_1307690|>",
+                    "value": 9.9943,
+                    "context": [
+                        "<|IMG_1307690|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_367569|>",
+                    "value": 9.9441,
+                    "context": [
+                        "<|IMG_367569|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_369882|>",
+                    "value": 9.9441,
+                    "context": [
+                        "<|IMG_369882|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_368083|>",
+                    "value": 9.9441,
+                    "context": [
+                        "<|IMG_368083|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_39653|>",
+                    "value": 9.737,
+                    "context": [
+                        "<|IMG_39653|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_39139|>",
+                    "value": 9.737,
+                    "context": [
+                        "<|IMG_39139|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_40167|>",
+                    "value": 9.737,
+                    "context": [
+                        "<|IMG_40167|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_910867|>",
+                    "value": 9.5261,
+                    "context": [
+                        "<|IMG_910867|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_912666|>",
+                    "value": 9.5261,
+                    "context": [
+                        "<|IMG_912666|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_910353|>",
+                    "value": 9.5261,
+                    "context": [
+                        "<|IMG_910353|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 9395,
+            "activations": [
+                {
+                    "token": "<|IMG_2319746|>",
+                    "value": 9.7658,
+                    "context": [
+                        "<|IMG_2319746|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2320774|>",
+                    "value": 9.7658,
+                    "context": [
+                        "<|IMG_2320774|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2320260|>",
+                    "value": 9.7658,
+                    "context": [
+                        "<|IMG_2320260|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4343085|>",
+                    "value": 9.411,
+                    "context": [
+                        "<|IMG_4343085|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4342571|>",
+                    "value": 9.411,
+                    "context": [
+                        "<|IMG_4342571|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4491139|>",
+                    "value": 9.2652,
+                    "context": [
+                        "<|IMG_4491139|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4490625|>",
+                    "value": 9.2652,
+                    "context": [
+                        "<|IMG_4490625|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3232846|>",
+                    "value": 9.1946,
+                    "context": [
+                        "<|IMG_3232846|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3232332|>",
+                    "value": 9.1946,
+                    "context": [
+                        "<|IMG_3232332|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1481133|>",
+                    "value": 9.1932,
+                    "context": [
+                        "<|IMG_1481133|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 8699,
+            "activations": [
+                {
+                    "token": "<|IMG_518173|>",
+                    "value": 9.6575,
+                    "context": [
+                        "<|IMG_518173|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3130126|>",
+                    "value": 9.1311,
+                    "context": [
+                        "<|IMG_3130126|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3132439|>",
+                    "value": 9.1311,
+                    "context": [
+                        "<|IMG_3132439|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3130640|>",
+                    "value": 9.1311,
+                    "context": [
+                        "<|IMG_3130640|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3132953|>",
+                    "value": 9.1311,
+                    "context": [
+                        "<|IMG_3132953|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3131154|>",
+                    "value": 9.1311,
+                    "context": [
+                        "<|IMG_3131154|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3129869|>",
+                    "value": 8.9782,
+                    "context": [
+                        "<|IMG_3129869|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3129355|>",
+                    "value": 8.9782,
+                    "context": [
+                        "<|IMG_3129355|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3132182|>",
+                    "value": 8.9782,
+                    "context": [
+                        "<|IMG_3132182|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3132696|>",
+                    "value": 8.9782,
+                    "context": [
+                        "<|IMG_3132696|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 6411,
+            "activations": [
+                {
+                    "token": "<|IMG_39942|>",
+                    "value": 9.5275,
+                    "context": [
+                        "<|IMG_39942|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_40970|>",
+                    "value": 9.5275,
+                    "context": [
+                        "<|IMG_40970|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_40456|>",
+                    "value": 9.5275,
+                    "context": [
+                        "<|IMG_40456|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_39685|>",
+                    "value": 9.4499,
+                    "context": [
+                        "<|IMG_39685|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_39171|>",
+                    "value": 9.4499,
+                    "context": [
+                        "<|IMG_39171|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_40199|>",
+                    "value": 9.4499,
+                    "context": [
+                        "<|IMG_40199|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2517901|>",
+                    "value": 9.1202,
+                    "context": [
+                        "<|IMG_2517901|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2518415|>",
+                    "value": 9.1202,
+                    "context": [
+                        "<|IMG_2518415|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2518929|>",
+                    "value": 9.1202,
+                    "context": [
+                        "<|IMG_2518929|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2267361|>",
+                    "value": 8.8747,
+                    "context": [
+                        "<|IMG_2267361|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 10213,
+            "activations": [
+                {
+                    "token": "<|IMG_3907744|>",
+                    "value": 9.3925,
+                    "context": [
+                        "<|IMG_3907744|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3907230|>",
+                    "value": 9.3925,
+                    "context": [
+                        "<|IMG_3907230|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3908258|>",
+                    "value": 9.3925,
+                    "context": [
+                        "<|IMG_3908258|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4627119|>",
+                    "value": 9.3089,
+                    "context": [
+                        "<|IMG_4627119|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4626605|>",
+                    "value": 9.3089,
+                    "context": [
+                        "<|IMG_4626605|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4627633|>",
+                    "value": 9.3089,
+                    "context": [
+                        "<|IMG_4627633|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1455965|>",
+                    "value": 8.8503,
+                    "context": [
+                        "<|IMG_1455965|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1456479|>",
+                    "value": 8.8503,
+                    "context": [
+                        "<|IMG_1456479|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_444413|>",
+                    "value": 8.7568,
+                    "context": [
+                        "<|IMG_444413|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_444927|>",
+                    "value": 8.7568,
+                    "context": [
+                        "<|IMG_444927|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 39,
+            "activations": [
+                {
+                    "token": "<|IMG_4811835|>",
+                    "value": 9.3457,
+                    "context": [
+                        "<|IMG_4811835|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4811321|>",
+                    "value": 9.3457,
+                    "context": [
+                        "<|IMG_4811321|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_825076|>",
+                    "value": 8.5649,
+                    "context": [
+                        "<|IMG_825076|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_824562|>",
+                    "value": 8.5649,
+                    "context": [
+                        "<|IMG_824562|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_824048|>",
+                    "value": 8.5649,
+                    "context": [
+                        "<|IMG_824048|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4645106|>",
+                    "value": 8.323,
+                    "context": [
+                        "<|IMG_4645106|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4646134|>",
+                    "value": 8.323,
+                    "context": [
+                        "<|IMG_4646134|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4645620|>",
+                    "value": 8.323,
+                    "context": [
+                        "<|IMG_4645620|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1305152|>",
+                    "value": 8.3082,
+                    "context": [
+                        "<|IMG_1305152|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1307465|>",
+                    "value": 8.3082,
+                    "context": [
+                        "<|IMG_1307465|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 10196,
+            "activations": [
+                {
+                    "token": "<|IMG_2402528|>",
+                    "value": 9.2463,
+                    "context": [
+                        "<|IMG_2402528|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2402014|>",
+                    "value": 9.2463,
+                    "context": [
+                        "<|IMG_2402014|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2401500|>",
+                    "value": 9.2463,
+                    "context": [
+                        "<|IMG_2401500|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4583913|>",
+                    "value": 9.1937,
+                    "context": [
+                        "<|IMG_4583913|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4583399|>",
+                    "value": 9.1937,
+                    "context": [
+                        "<|IMG_4583399|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4584427|>",
+                    "value": 9.1937,
+                    "context": [
+                        "<|IMG_4584427|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2037557|>",
+                    "value": 9.1216,
+                    "context": [
+                        "<|IMG_2037557|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2038585|>",
+                    "value": 9.1216,
+                    "context": [
+                        "<|IMG_2038585|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2038071|>",
+                    "value": 9.1216,
+                    "context": [
+                        "<|IMG_2038071|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2037814|>",
+                    "value": 9.0132,
+                    "context": [
+                        "<|IMG_2037814|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 7470,
+            "activations": [
+                {
+                    "token": "<|IMG_200305|>",
+                    "value": 9.0387,
+                    "context": [
+                        "<|IMG_200305|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_201333|>",
+                    "value": 9.0387,
+                    "context": [
+                        "<|IMG_201333|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_200819|>",
+                    "value": 9.0387,
+                    "context": [
+                        "<|IMG_200819|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_229592|>",
+                    "value": 8.9524,
+                    "context": [
+                        "<|IMG_229592|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_230620|>",
+                    "value": 8.9524,
+                    "context": [
+                        "<|IMG_230620|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_230106|>",
+                    "value": 8.9524,
+                    "context": [
+                        "<|IMG_230106|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3446448|>",
+                    "value": 8.7972,
+                    "context": [
+                        "<|IMG_3446448|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3445934|>",
+                    "value": 8.7972,
+                    "context": [
+                        "<|IMG_3445934|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3445420|>",
+                    "value": 8.7972,
+                    "context": [
+                        "<|IMG_3445420|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4315124|>",
+                    "value": 8.7501,
+                    "context": [
+                        "<|IMG_4315124|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 8302,
+            "activations": [
+                {
+                    "token": "<|IMG_1059975|>",
+                    "value": 8.6804,
+                    "context": [
+                        "<|IMG_1059975|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1058690|>",
+                    "value": 8.6804,
+                    "context": [
+                        "<|IMG_1058690|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1058176|>",
+                    "value": 8.6804,
+                    "context": [
+                        "<|IMG_1058176|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1057662|>",
+                    "value": 8.6804,
+                    "context": [
+                        "<|IMG_1057662|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1060489|>",
+                    "value": 8.6804,
+                    "context": [
+                        "<|IMG_1060489|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_765186|>",
+                    "value": 8.5895,
+                    "context": [
+                        "<|IMG_765186|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_765700|>",
+                    "value": 8.5895,
+                    "context": [
+                        "<|IMG_765700|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4614018|>",
+                    "value": 8.1875,
+                    "context": [
+                        "<|IMG_4614018|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4614532|>",
+                    "value": 8.1875,
+                    "context": [
+                        "<|IMG_4614532|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4263739|>",
+                    "value": 8.1683,
+                    "context": [
+                        "<|IMG_4263739|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 3029,
+            "activations": [
+                {
+                    "token": "<|IMG_2667554|>",
+                    "value": 8.6637,
+                    "context": [
+                        "<|IMG_2667554|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2668582|>",
+                    "value": 8.6637,
+                    "context": [
+                        "<|IMG_2668582|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2668068|>",
+                    "value": 8.6637,
+                    "context": [
+                        "<|IMG_2668068|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2667811|>",
+                    "value": 8.4765,
+                    "context": [
+                        "<|IMG_2667811|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2667297|>",
+                    "value": 8.4765,
+                    "context": [
+                        "<|IMG_2667297|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2666783|>",
+                    "value": 8.4765,
+                    "context": [
+                        "<|IMG_2666783|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2668325|>",
+                    "value": 8.3131,
+                    "context": [
+                        "<|IMG_2668325|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2669353|>",
+                    "value": 8.3131,
+                    "context": [
+                        "<|IMG_2669353|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2668839|>",
+                    "value": 8.3131,
+                    "context": [
+                        "<|IMG_2668839|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_738259|>",
+                    "value": 8.0293,
+                    "context": [
+                        "<|IMG_738259|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 3128,
+            "activations": [
+                {
+                    "token": "<|IMG_1427762|>",
+                    "value": 8.2586,
+                    "context": [
+                        "<|IMG_1427762|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1428276|>",
+                    "value": 8.2586,
+                    "context": [
+                        "<|IMG_1428276|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1428790|>",
+                    "value": 8.2586,
+                    "context": [
+                        "<|IMG_1428790|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1430075|>",
+                    "value": 8.2586,
+                    "context": [
+                        "<|IMG_1430075|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1430589|>",
+                    "value": 8.2586,
+                    "context": [
+                        "<|IMG_1430589|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1429818|>",
+                    "value": 8.252,
+                    "context": [
+                        "<|IMG_1429818|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1428019|>",
+                    "value": 8.252,
+                    "context": [
+                        "<|IMG_1428019|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1427505|>",
+                    "value": 8.252,
+                    "context": [
+                        "<|IMG_1427505|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1426991|>",
+                    "value": 8.252,
+                    "context": [
+                        "<|IMG_1426991|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1430332|>",
+                    "value": 8.252,
+                    "context": [
+                        "<|IMG_1430332|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 4115,
+            "activations": [
+                {
+                    "token": "<|IMG_1751776|>",
+                    "value": 8.1548,
+                    "context": [
+                        "<|IMG_1751776|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2231093|>",
+                    "value": 8.153,
+                    "context": [
+                        "<|IMG_2231093|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2231607|>",
+                    "value": 8.153,
+                    "context": [
+                        "<|IMG_2231607|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2232121|>",
+                    "value": 8.153,
+                    "context": [
+                        "<|IMG_2232121|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4836537|>",
+                    "value": 8.09,
+                    "context": [
+                        "<|IMG_4836537|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4836023|>",
+                    "value": 8.09,
+                    "context": [
+                        "<|IMG_4836023|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1776445|>",
+                    "value": 7.9951,
+                    "context": [
+                        "<|IMG_1776445|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_272225|>",
+                    "value": 7.961,
+                    "context": [
+                        "<|IMG_272225|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_271711|>",
+                    "value": 7.961,
+                    "context": [
+                        "<|IMG_271711|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1777216|>",
+                    "value": 7.9224,
+                    "context": [
+                        "<|IMG_1777216|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 3631,
+            "activations": [
+                {
+                    "token": "<|IMG_988767|>",
+                    "value": 8.0434,
+                    "context": [
+                        "<|IMG_988767|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_988253|>",
+                    "value": 8.0434,
+                    "context": [
+                        "<|IMG_988253|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_989281|>",
+                    "value": 8.0434,
+                    "context": [
+                        "<|IMG_989281|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4751780|>",
+                    "value": 7.9195,
+                    "context": [
+                        "<|IMG_4751780|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4751266|>",
+                    "value": 7.9195,
+                    "context": [
+                        "<|IMG_4751266|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4750752|>",
+                    "value": 7.9195,
+                    "context": [
+                        "<|IMG_4750752|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2274281|>",
+                    "value": 7.2544,
+                    "context": [
+                        "<|IMG_2274281|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2274795|>",
+                    "value": 7.2544,
+                    "context": [
+                        "<|IMG_2274795|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2275309|>",
+                    "value": 7.2544,
+                    "context": [
+                        "<|IMG_2275309|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2732275|>",
+                    "value": 7.1912,
+                    "context": [
+                        "<|IMG_2732275|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 1852,
+            "activations": [
+                {
+                    "token": "<|IMG_2453189|>",
+                    "value": 7.9959,
+                    "context": [
+                        "<|IMG_2453189|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2454217|>",
+                    "value": 7.9959,
+                    "context": [
+                        "<|IMG_2454217|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2453703|>",
+                    "value": 7.9959,
+                    "context": [
+                        "<|IMG_2453703|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2453446|>",
+                    "value": 7.9956,
+                    "context": [
+                        "<|IMG_2453446|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2452932|>",
+                    "value": 7.9956,
+                    "context": [
+                        "<|IMG_2452932|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2452418|>",
+                    "value": 7.9956,
+                    "context": [
+                        "<|IMG_2452418|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4156843|>",
+                    "value": 7.9805,
+                    "context": [
+                        "<|IMG_4156843|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4157357|>",
+                    "value": 7.9805,
+                    "context": [
+                        "<|IMG_4157357|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4156329|>",
+                    "value": 7.9805,
+                    "context": [
+                        "<|IMG_4156329|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4158128|>",
+                    "value": 7.9739,
+                    "context": [
+                        "<|IMG_4158128|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 3172,
+            "activations": [
+                {
+                    "token": "<|IMG_891351|>",
+                    "value": 7.9338,
+                    "context": [
+                        "<|IMG_891351|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_890837|>",
+                    "value": 7.9338,
+                    "context": [
+                        "<|IMG_890837|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_890323|>",
+                    "value": 7.9338,
+                    "context": [
+                        "<|IMG_890323|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1088455|>",
+                    "value": 7.7567,
+                    "context": [
+                        "<|IMG_1088455|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1089483|>",
+                    "value": 7.7567,
+                    "context": [
+                        "<|IMG_1089483|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1088969|>",
+                    "value": 7.7567,
+                    "context": [
+                        "<|IMG_1088969|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_521239|>",
+                    "value": 7.7562,
+                    "context": [
+                        "<|IMG_521239|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_520725|>",
+                    "value": 7.7562,
+                    "context": [
+                        "<|IMG_520725|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_520211|>",
+                    "value": 7.7562,
+                    "context": [
+                        "<|IMG_520211|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2549516|>",
+                    "value": 7.5834,
+                    "context": [
+                        "<|IMG_2549516|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 3246,
+            "activations": [
+                {
+                    "token": "<|IMG_242683|>",
+                    "value": 7.739,
+                    "context": [
+                        "<|IMG_242683|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_246024|>",
+                    "value": 7.739,
+                    "context": [
+                        "<|IMG_246024|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_243197|>",
+                    "value": 7.739,
+                    "context": [
+                        "<|IMG_243197|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_245510|>",
+                    "value": 7.739,
+                    "context": [
+                        "<|IMG_245510|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_243711|>",
+                    "value": 7.739,
+                    "context": [
+                        "<|IMG_243711|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3271430|>",
+                    "value": 7.6651,
+                    "context": [
+                        "<|IMG_3271430|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3270916|>",
+                    "value": 7.6651,
+                    "context": [
+                        "<|IMG_3270916|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3270402|>",
+                    "value": 7.6651,
+                    "context": [
+                        "<|IMG_3270402|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_681639|>",
+                    "value": 7.5333,
+                    "context": [
+                        "<|IMG_681639|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_681125|>",
+                    "value": 7.5333,
+                    "context": [
+                        "<|IMG_681125|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 5283,
+            "activations": [
+                {
+                    "token": "<|IMG_2346754|>",
+                    "value": 7.6067,
+                    "context": [
+                        "<|IMG_2346754|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2347782|>",
+                    "value": 7.6067,
+                    "context": [
+                        "<|IMG_2347782|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2347268|>",
+                    "value": 7.6067,
+                    "context": [
+                        "<|IMG_2347268|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2592968|>",
+                    "value": 7.2782,
+                    "context": [
+                        "<|IMG_2592968|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2592454|>",
+                    "value": 7.2782,
+                    "context": [
+                        "<|IMG_2592454|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2591940|>",
+                    "value": 7.2782,
+                    "context": [
+                        "<|IMG_2591940|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2347798|>",
+                    "value": 7.2762,
+                    "context": [
+                        "<|IMG_2347798|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2347284|>",
+                    "value": 7.2762,
+                    "context": [
+                        "<|IMG_2347284|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2346770|>",
+                    "value": 7.2762,
+                    "context": [
+                        "<|IMG_2346770|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2825308|>",
+                    "value": 6.6391,
+                    "context": [
+                        "<|IMG_2825308|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 3971,
+            "activations": [
+                {
+                    "token": "<|IMG_2468040|>",
+                    "value": 7.5834,
+                    "context": [
+                        "<|IMG_2468040|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2467526|>",
+                    "value": 7.5834,
+                    "context": [
+                        "<|IMG_2467526|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3673409|>",
+                    "value": 7.0095,
+                    "context": [
+                        "<|IMG_3673409|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3672895|>",
+                    "value": 7.0095,
+                    "context": [
+                        "<|IMG_3672895|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3673923|>",
+                    "value": 7.0095,
+                    "context": [
+                        "<|IMG_3673923|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3675722|>",
+                    "value": 7.0095,
+                    "context": [
+                        "<|IMG_3675722|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3675208|>",
+                    "value": 7.0095,
+                    "context": [
+                        "<|IMG_3675208|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_518711|>",
+                    "value": 6.7201,
+                    "context": [
+                        "<|IMG_518711|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_519739|>",
+                    "value": 6.7201,
+                    "context": [
+                        "<|IMG_519739|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_519225|>",
+                    "value": 6.7201,
+                    "context": [
+                        "<|IMG_519225|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 5822,
+            "activations": [
+                {
+                    "token": "<|IMG_752605|>",
+                    "value": 7.4702,
+                    "context": [
+                        "<|IMG_752605|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_752091|>",
+                    "value": 7.4702,
+                    "context": [
+                        "<|IMG_752091|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_751577|>",
+                    "value": 7.4702,
+                    "context": [
+                        "<|IMG_751577|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_857703|>",
+                    "value": 7.4075,
+                    "context": [
+                        "<|IMG_857703|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_857189|>",
+                    "value": 7.4075,
+                    "context": [
+                        "<|IMG_857189|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_858217|>",
+                    "value": 7.4075,
+                    "context": [
+                        "<|IMG_858217|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_635141|>",
+                    "value": 7.3874,
+                    "context": [
+                        "<|IMG_635141|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_636169|>",
+                    "value": 7.3874,
+                    "context": [
+                        "<|IMG_636169|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_635655|>",
+                    "value": 7.3874,
+                    "context": [
+                        "<|IMG_635655|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4237767|>",
+                    "value": 7.3161,
+                    "context": [
+                        "<|IMG_4237767|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 911,
+            "activations": [
+                {
+                    "token": "<|IMG_4586275|>",
+                    "value": 7.4196,
+                    "context": [
+                        "<|IMG_4586275|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4585761|>",
+                    "value": 7.4196,
+                    "context": [
+                        "<|IMG_4585761|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4586789|>",
+                    "value": 7.4196,
+                    "context": [
+                        "<|IMG_4586789|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4588588|>",
+                    "value": 7.4196,
+                    "context": [
+                        "<|IMG_4588588|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4588074|>",
+                    "value": 7.4196,
+                    "context": [
+                        "<|IMG_4588074|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_539553|>",
+                    "value": 7.4193,
+                    "context": [
+                        "<|IMG_539553|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_542380|>",
+                    "value": 7.4193,
+                    "context": [
+                        "<|IMG_542380|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_541866|>",
+                    "value": 7.4193,
+                    "context": [
+                        "<|IMG_541866|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_540067|>",
+                    "value": 7.4193,
+                    "context": [
+                        "<|IMG_540067|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_540581|>",
+                    "value": 7.4193,
+                    "context": [
+                        "<|IMG_540581|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 12014,
+            "activations": [
+                {
+                    "token": "<|IMG_2883153|>",
+                    "value": 7.2947,
+                    "context": [
+                        "<|IMG_2883153|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2882639|>",
+                    "value": 7.2947,
+                    "context": [
+                        "<|IMG_2882639|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2883667|>",
+                    "value": 7.2947,
+                    "context": [
+                        "<|IMG_2883667|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2885980|>",
+                    "value": 7.2947,
+                    "context": [
+                        "<|IMG_2885980|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2885466|>",
+                    "value": 7.2947,
+                    "context": [
+                        "<|IMG_2885466|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2885723|>",
+                    "value": 7.2868,
+                    "context": [
+                        "<|IMG_2885723|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2886237|>",
+                    "value": 7.2868,
+                    "context": [
+                        "<|IMG_2886237|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2884438|>",
+                    "value": 7.2868,
+                    "context": [
+                        "<|IMG_2884438|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2883410|>",
+                    "value": 7.2868,
+                    "context": [
+                        "<|IMG_2883410|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2883924|>",
+                    "value": 7.2868,
+                    "context": [
+                        "<|IMG_2883924|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 11001,
+            "activations": [
+                {
+                    "token": "<|IMG_542837|>",
+                    "value": 7.2327,
+                    "context": [
+                        "<|IMG_542837|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4787215|>",
+                    "value": 7.2212,
+                    "context": [
+                        "<|IMG_4787215|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4786701|>",
+                    "value": 7.2212,
+                    "context": [
+                        "<|IMG_4786701|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3848897|>",
+                    "value": 7.2052,
+                    "context": [
+                        "<|IMG_3848897|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2343916|>",
+                    "value": 7.0935,
+                    "context": [
+                        "<|IMG_2343916|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4836281|>",
+                    "value": 7.0444,
+                    "context": [
+                        "<|IMG_4836281|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4837309|>",
+                    "value": 7.0444,
+                    "context": [
+                        "<|IMG_4837309|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4836795|>",
+                    "value": 7.0444,
+                    "context": [
+                        "<|IMG_4836795|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4564909|>",
+                    "value": 7.0106,
+                    "context": [
+                        "<|IMG_4564909|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4565937|>",
+                    "value": 7.0106,
+                    "context": [
+                        "<|IMG_4565937|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 8002,
+            "activations": [
+                {
+                    "token": "<|IMG_3944817|>",
+                    "value": 7.2281,
+                    "context": [
+                        "<|IMG_3944817|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3944303|>",
+                    "value": 7.2281,
+                    "context": [
+                        "<|IMG_3944303|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3945331|>",
+                    "value": 7.2281,
+                    "context": [
+                        "<|IMG_3945331|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3947130|>",
+                    "value": 7.2281,
+                    "context": [
+                        "<|IMG_3947130|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3946616|>",
+                    "value": 7.2281,
+                    "context": [
+                        "<|IMG_3946616|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3946359|>",
+                    "value": 7.2249,
+                    "context": [
+                        "<|IMG_3946359|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3946873|>",
+                    "value": 7.2249,
+                    "context": [
+                        "<|IMG_3946873|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3944560|>",
+                    "value": 7.2249,
+                    "context": [
+                        "<|IMG_3944560|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3943532|>",
+                    "value": 7.2249,
+                    "context": [
+                        "<|IMG_3943532|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3944046|>",
+                    "value": 7.2249,
+                    "context": [
+                        "<|IMG_3944046|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 32,
+            "activations": [
+                {
+                    "token": "<|IMG_621278|>",
+                    "value": 7.219,
+                    "context": [
+                        "<|IMG_621278|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_622306|>",
+                    "value": 7.219,
+                    "context": [
+                        "<|IMG_622306|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_621792|>",
+                    "value": 7.219,
+                    "context": [
+                        "<|IMG_621792|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1510256|>",
+                    "value": 7.041,
+                    "context": [
+                        "<|IMG_1510256|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1511284|>",
+                    "value": 7.041,
+                    "context": [
+                        "<|IMG_1511284|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1510770|>",
+                    "value": 7.041,
+                    "context": [
+                        "<|IMG_1510770|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3105459|>",
+                    "value": 6.9141,
+                    "context": [
+                        "<|IMG_3105459|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3107772|>",
+                    "value": 6.9141,
+                    "context": [
+                        "<|IMG_3107772|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3105973|>",
+                    "value": 6.9141,
+                    "context": [
+                        "<|IMG_3105973|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3108286|>",
+                    "value": 6.9141,
+                    "context": [
+                        "<|IMG_3108286|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 620,
+            "activations": [
+                {
+                    "token": "<|IMG_2185395|>",
+                    "value": 7.066,
+                    "context": [
+                        "<|IMG_2185395|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2184881|>",
+                    "value": 7.066,
+                    "context": [
+                        "<|IMG_2184881|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2185909|>",
+                    "value": 7.066,
+                    "context": [
+                        "<|IMG_2185909|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1080039|>",
+                    "value": 7.0041,
+                    "context": [
+                        "<|IMG_1080039|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1081067|>",
+                    "value": 7.0041,
+                    "context": [
+                        "<|IMG_1081067|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1080553|>",
+                    "value": 7.0041,
+                    "context": [
+                        "<|IMG_1080553|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4389941|>",
+                    "value": 6.9649,
+                    "context": [
+                        "<|IMG_4389941|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2185394|>",
+                    "value": 6.9265,
+                    "context": [
+                        "<|IMG_2185394|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2184880|>",
+                    "value": 6.9265,
+                    "context": [
+                        "<|IMG_2184880|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2185908|>",
+                    "value": 6.9265,
+                    "context": [
+                        "<|IMG_2185908|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 5667,
+            "activations": [
+                {
+                    "token": "<|IMG_863931|>",
+                    "value": 7.0458,
+                    "context": [
+                        "<|IMG_863931|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_864445|>",
+                    "value": 7.0458,
+                    "context": [
+                        "<|IMG_864445|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_863674|>",
+                    "value": 7.0212,
+                    "context": [
+                        "<|IMG_863674|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_869071|>",
+                    "value": 6.5954,
+                    "context": [
+                        "<|IMG_869071|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_868043|>",
+                    "value": 6.5954,
+                    "context": [
+                        "<|IMG_868043|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_868557|>",
+                    "value": 6.5954,
+                    "context": [
+                        "<|IMG_868557|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_867786|>",
+                    "value": 6.5941,
+                    "context": [
+                        "<|IMG_867786|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_867272|>",
+                    "value": 6.5941,
+                    "context": [
+                        "<|IMG_867272|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_868300|>",
+                    "value": 6.5941,
+                    "context": [
+                        "<|IMG_868300|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3032752|>",
+                    "value": 5.9556,
+                    "context": [
+                        "<|IMG_3032752|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 12035,
+            "activations": [
+                {
+                    "token": "<|IMG_2495571|>",
+                    "value": 7.0057,
+                    "context": [
+                        "<|IMG_2495571|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2496599|>",
+                    "value": 7.0057,
+                    "context": [
+                        "<|IMG_2496599|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2496085|>",
+                    "value": 7.0057,
+                    "context": [
+                        "<|IMG_2496085|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4725052|>",
+                    "value": 6.6551,
+                    "context": [
+                        "<|IMG_4725052|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4724538|>",
+                    "value": 6.6551,
+                    "context": [
+                        "<|IMG_4724538|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4725566|>",
+                    "value": 6.6551,
+                    "context": [
+                        "<|IMG_4725566|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1687553|>",
+                    "value": 6.5278,
+                    "context": [
+                        "<|IMG_1687553|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1688581|>",
+                    "value": 6.5278,
+                    "context": [
+                        "<|IMG_1688581|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1688067|>",
+                    "value": 6.5278,
+                    "context": [
+                        "<|IMG_1688067|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4724281|>",
+                    "value": 6.5161,
+                    "context": [
+                        "<|IMG_4724281|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 7080,
+            "activations": [
+                {
+                    "token": "<|IMG_2369636|>",
+                    "value": 6.9953,
+                    "context": [
+                        "<|IMG_2369636|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2369122|>",
+                    "value": 6.9953,
+                    "context": [
+                        "<|IMG_2369122|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2370150|>",
+                    "value": 6.9953,
+                    "context": [
+                        "<|IMG_2370150|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4507887|>",
+                    "value": 6.6726,
+                    "context": [
+                        "<|IMG_4507887|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4508915|>",
+                    "value": 6.6726,
+                    "context": [
+                        "<|IMG_4508915|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4508401|>",
+                    "value": 6.6726,
+                    "context": [
+                        "<|IMG_4508401|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3845341|>",
+                    "value": 6.5441,
+                    "context": [
+                        "<|IMG_3845341|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3844827|>",
+                    "value": 6.5441,
+                    "context": [
+                        "<|IMG_3844827|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3845855|>",
+                    "value": 6.5441,
+                    "context": [
+                        "<|IMG_3845855|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3848168|>",
+                    "value": 6.5441,
+                    "context": [
+                        "<|IMG_3848168|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 10447,
+            "activations": [
+                {
+                    "token": "<|IMG_3699623|>",
+                    "value": 6.9299,
+                    "context": [
+                        "<|IMG_3699623|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3696796|>",
+                    "value": 6.9299,
+                    "context": [
+                        "<|IMG_3696796|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3697310|>",
+                    "value": 6.9299,
+                    "context": [
+                        "<|IMG_3697310|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3697824|>",
+                    "value": 6.9299,
+                    "context": [
+                        "<|IMG_3697824|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3700137|>",
+                    "value": 6.9299,
+                    "context": [
+                        "<|IMG_3700137|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4386584|>",
+                    "value": 6.7691,
+                    "context": [
+                        "<|IMG_4386584|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4386070|>",
+                    "value": 6.7691,
+                    "context": [
+                        "<|IMG_4386070|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4387098|>",
+                    "value": 6.7691,
+                    "context": [
+                        "<|IMG_4387098|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2238064|>",
+                    "value": 6.2085,
+                    "context": [
+                        "<|IMG_2238064|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2239092|>",
+                    "value": 6.2085,
+                    "context": [
+                        "<|IMG_2239092|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 6395,
+            "activations": [
+                {
+                    "token": "<|IMG_4293254|>",
+                    "value": 6.7808,
+                    "context": [
+                        "<|IMG_4293254|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4293768|>",
+                    "value": 6.7808,
+                    "context": [
+                        "<|IMG_4293768|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3252196|>",
+                    "value": 6.3788,
+                    "context": [
+                        "<|IMG_3252196|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3251682|>",
+                    "value": 6.3788,
+                    "context": [
+                        "<|IMG_3251682|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3251168|>",
+                    "value": 6.3788,
+                    "context": [
+                        "<|IMG_3251168|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_409960|>",
+                    "value": 6.3732,
+                    "context": [
+                        "<|IMG_409960|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_410474|>",
+                    "value": 6.3732,
+                    "context": [
+                        "<|IMG_410474|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_410988|>",
+                    "value": 6.3732,
+                    "context": [
+                        "<|IMG_410988|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1337231|>",
+                    "value": 6.295,
+                    "context": [
+                        "<|IMG_1337231|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1336717|>",
+                    "value": 6.295,
+                    "context": [
+                        "<|IMG_1336717|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 969,
+            "activations": [
+                {
+                    "token": "<|IMG_3544138|>",
+                    "value": 6.7267,
+                    "context": [
+                        "<|IMG_3544138|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3545166|>",
+                    "value": 6.7267,
+                    "context": [
+                        "<|IMG_3545166|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3544652|>",
+                    "value": 6.7267,
+                    "context": [
+                        "<|IMG_3544652|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1357040|>",
+                    "value": 6.35,
+                    "context": [
+                        "<|IMG_1357040|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_370150|>",
+                    "value": 6.319,
+                    "context": [
+                        "<|IMG_370150|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4414580|>",
+                    "value": 6.2086,
+                    "context": [
+                        "<|IMG_4414580|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3748693|>",
+                    "value": 6.1537,
+                    "context": [
+                        "<|IMG_3748693|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3746380|>",
+                    "value": 6.1537,
+                    "context": [
+                        "<|IMG_3746380|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3745866|>",
+                    "value": 6.1537,
+                    "context": [
+                        "<|IMG_3745866|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3745352|>",
+                    "value": 6.1537,
+                    "context": [
+                        "<|IMG_3745352|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 11684,
+            "activations": [
+                {
+                    "token": "<|IMG_3598670|>",
+                    "value": 6.7177,
+                    "context": [
+                        "<|IMG_3598670|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3598156|>",
+                    "value": 6.7177,
+                    "context": [
+                        "<|IMG_3598156|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3599184|>",
+                    "value": 6.7177,
+                    "context": [
+                        "<|IMG_3599184|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3600983|>",
+                    "value": 6.7177,
+                    "context": [
+                        "<|IMG_3600983|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3601497|>",
+                    "value": 6.7177,
+                    "context": [
+                        "<|IMG_3601497|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4526134|>",
+                    "value": 5.352,
+                    "context": [
+                        "<|IMG_4526134|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4525620|>",
+                    "value": 5.352,
+                    "context": [
+                        "<|IMG_4525620|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4526648|>",
+                    "value": 5.352,
+                    "context": [
+                        "<|IMG_4526648|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3256596|>",
+                    "value": 5.1346,
+                    "context": [
+                        "<|IMG_3256596|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3254797|>",
+                    "value": 5.1346,
+                    "context": [
+                        "<|IMG_3254797|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 6158,
+            "activations": [
+                {
+                    "token": "<|IMG_1566475|>",
+                    "value": 6.7104,
+                    "context": [
+                        "<|IMG_1566475|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1566989|>",
+                    "value": 6.7104,
+                    "context": [
+                        "<|IMG_1566989|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1567503|>",
+                    "value": 6.7104,
+                    "context": [
+                        "<|IMG_1567503|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1566732|>",
+                    "value": 6.7104,
+                    "context": [
+                        "<|IMG_1566732|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1566218|>",
+                    "value": 6.7104,
+                    "context": [
+                        "<|IMG_1566218|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1565704|>",
+                    "value": 6.7104,
+                    "context": [
+                        "<|IMG_1565704|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4514778|>",
+                    "value": 6.6242,
+                    "context": [
+                        "<|IMG_4514778|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4512979|>",
+                    "value": 6.6242,
+                    "context": [
+                        "<|IMG_4512979|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4512465|>",
+                    "value": 6.6242,
+                    "context": [
+                        "<|IMG_4512465|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_546955|>",
+                    "value": 6.5766,
+                    "context": [
+                        "<|IMG_546955|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 9959,
+            "activations": [
+                {
+                    "token": "<|IMG_1237092|>",
+                    "value": 6.6414,
+                    "context": [
+                        "<|IMG_1237092|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1236578|>",
+                    "value": 6.6414,
+                    "context": [
+                        "<|IMG_1236578|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1237606|>",
+                    "value": 6.6414,
+                    "context": [
+                        "<|IMG_1237606|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3459885|>",
+                    "value": 6.281,
+                    "context": [
+                        "<|IMG_3459885|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3459371|>",
+                    "value": 6.281,
+                    "context": [
+                        "<|IMG_3459371|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3460399|>",
+                    "value": 6.281,
+                    "context": [
+                        "<|IMG_3460399|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1236321|>",
+                    "value": 6.2775,
+                    "context": [
+                        "<|IMG_1236321|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1235807|>",
+                    "value": 6.2775,
+                    "context": [
+                        "<|IMG_1235807|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1236835|>",
+                    "value": 6.2775,
+                    "context": [
+                        "<|IMG_1236835|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1235293|>",
+                    "value": 6.2729,
+                    "context": [
+                        "<|IMG_1235293|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 3213,
+            "activations": [
+                {
+                    "token": "<|IMG_2666199|>",
+                    "value": 6.5933,
+                    "context": [
+                        "<|IMG_2666199|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2665685|>",
+                    "value": 6.5933,
+                    "context": [
+                        "<|IMG_2665685|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2665171|>",
+                    "value": 6.5933,
+                    "context": [
+                        "<|IMG_2665171|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1653064|>",
+                    "value": 6.3211,
+                    "context": [
+                        "<|IMG_1653064|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4592135|>",
+                    "value": 6.2555,
+                    "context": [
+                        "<|IMG_4592135|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4591621|>",
+                    "value": 6.2555,
+                    "context": [
+                        "<|IMG_4591621|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4591107|>",
+                    "value": 6.2555,
+                    "context": [
+                        "<|IMG_4591107|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3895405|>",
+                    "value": 6.1074,
+                    "context": [
+                        "<|IMG_3895405|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3894891|>",
+                    "value": 6.1074,
+                    "context": [
+                        "<|IMG_3894891|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3895919|>",
+                    "value": 6.1074,
+                    "context": [
+                        "<|IMG_3895919|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 5756,
+            "activations": [
+                {
+                    "token": "<|IMG_2147043|>",
+                    "value": 6.5713,
+                    "context": [
+                        "<|IMG_2147043|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2148071|>",
+                    "value": 6.5713,
+                    "context": [
+                        "<|IMG_2148071|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2147557|>",
+                    "value": 6.5713,
+                    "context": [
+                        "<|IMG_2147557|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1403056|>",
+                    "value": 6.3751,
+                    "context": [
+                        "<|IMG_1403056|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1405883|>",
+                    "value": 6.3751,
+                    "context": [
+                        "<|IMG_1405883|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1403570|>",
+                    "value": 6.3751,
+                    "context": [
+                        "<|IMG_1403570|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1405369|>",
+                    "value": 6.3751,
+                    "context": [
+                        "<|IMG_1405369|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_1404084|>",
+                    "value": 6.3751,
+                    "context": [
+                        "<|IMG_1404084|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4664399|>",
+                    "value": 6.367,
+                    "context": [
+                        "<|IMG_4664399|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_4664913|>",
+                    "value": 6.367,
+                    "context": [
+                        "<|IMG_4664913|>"
+                    ]
+                }
+            ]
+        },
+        {
+            "feature_index": 4624,
+            "activations": [
+                {
+                    "token": "<|IMG_3974400|>",
+                    "value": 6.5527,
+                    "context": [
+                        "<|IMG_3974400|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3975428|>",
+                    "value": 6.5527,
+                    "context": [
+                        "<|IMG_3975428|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3974914|>",
+                    "value": 6.5527,
+                    "context": [
+                        "<|IMG_3974914|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3189524|>",
+                    "value": 6.4704,
+                    "context": [
+                        "<|IMG_3189524|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3190038|>",
+                    "value": 6.4704,
+                    "context": [
+                        "<|IMG_3190038|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3190552|>",
+                    "value": 6.4704,
+                    "context": [
+                        "<|IMG_3190552|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3976199|>",
+                    "value": 6.4208,
+                    "context": [
+                        "<|IMG_3976199|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3975685|>",
+                    "value": 6.4208,
+                    "context": [
+                        "<|IMG_3975685|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_3975171|>",
+                    "value": 6.4208,
+                    "context": [
+                        "<|IMG_3975171|>"
+                    ]
+                },
+                {
+                    "token": "<|IMG_2581974|>",
+                    "value": 6.3194,
+                    "context": [
+                        "<|IMG_2581974|>"
+                    ]
+                }
+            ]
+        }
+    ]
+}
