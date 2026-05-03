@@ -57,7 +57,9 @@ def main():
         "--meta", type=str, required=True, help="Path to encoder_L0.json metadata"
     )
     parser.add_argument(
-        "--dataset", type=str, required=True, help="Path to gr1_pickup_grasp directory"
+        "--dataset",
+        type=str,
+        help="Local path to dataset directory (optional if --repo is used)",
     )
     parser.add_argument(
         "--repo", type=str, help="Hugging Face repo ID (e.g. lerobot/gr1_pickup_grasp)"
@@ -65,11 +67,22 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Local server port")
     args = parser.parse_args()
 
+    if not args.dataset and not args.repo:
+        parser.error("Either --dataset or --repo must be provided")
+
+    # If dataset path not provided, infer from repo
+    if not args.dataset:
+        repo_name = args.repo.split("/")[-1]
+        # Default to a 'dataset' folder in the current working directory
+        dataset_path = Path("dataset") / repo_name
+    else:
+        dataset_path = Path(args.dataset)
+
+    CONFIG["dataset_dir"] = dataset_path
+
     # Download dataset if repo is provided and local path is missing
-    CONFIG["dataset_dir"] = Path(args.dataset)
     if args.repo and not CONFIG["dataset_dir"].exists():
         print(f"📥 Dataset missing. Downloading {args.repo} from HF...")
-        # We use the parent directory because LeRobotDataset creates the repo folder inside root
         LeRobotDataset(args.repo, root=CONFIG["dataset_dir"].parent)
 
     # Load metadata
