@@ -10,45 +10,78 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 app = FastAPI()
 
 # Global config to be set by CLI args
-CONFIG = {"meta_path": None, "dataset_dir": None, "meta": None}
+CONFIG = {"meta": None, "dataset": None}
 
 
 @app.get("/api/robot-dataset/frames/{idx}.jpg")
 async def get_frame(idx: int):
     """
-    Extracts a frame from the cloud-stored dataset (Google Drive) and serves it via HTTP.
+    Maps a global token index to a dataset sample and extracts the corresponding frame.
     """
     meta = CONFIG["meta"]
-    dataset_dir = CONFIG["dataset_dir"]
+    dataset = CONFIG["dataset"]
 
-    # 1. Map index to episode and frame
-    ep_idx = idx // (meta["frames_per_ep"] - 2)
-    local_f = idx % (meta["frames_per_ep"] - 2)
+    if not dataset:
+        raise HTTPException(status_code=500, detail="Dataset not initialized")
 
-    if ep_idx >= len(meta["episodes"]):
-        raise HTTPException(status_code=404, detail="Index out of range")
+    # 1. Map global token index to sample index
+    tokens_per_sample = meta.get("tokens_per_sample", 771)
+    sample_idx = idx // tokens_per_sample
 
-    ep_id = meta["episodes"][ep_idx]
-    video_path = dataset_dir / "videos" / f"{ep_id}.mp4"
+    if sample_idx >= len(dataset):
+        raise HTTPException(status_code=404, detail="Sample index out of range")
 
-    if not video_path.exists():
-        raise HTTPException(status_code=404, detail=f"Video not found: {ep_id}")
+    # 2. Extract Frame using LeRobot's internal mapping
+    try:
+        # We need to find which episode this sample belongs to
+        # dataset.episode_data_index is a tensor/list of (start, end)
+        ep_idx = -1
+        for i, (start, end) in enumerate(
+            zip(dataset.episode_data_index["from"], dataset.episode_data_index["to"])
+        ):
+            if start <= sample_idx < end:
+                ep_idx = i
+                local_frame_idx = sample_idx - start
+                break
 
-    # 2. Extract Frame
-    cap = cv2.VideoCapture(str(video_path))
-    cap.set(cv2.CAP_PROP_POS_FRAMES, local_f + 1)
-    ret, frame = cap.read()
-    cap.release()
+        if ep_idx == -1:
+            raise HTTPException(status_code=404, detail="Episode not found for sample")
 
-    if not ret:
-        raise HTTPException(status_code=500, detail="Failed to extract frame")
+        ep_id = dataset.hf_dataset[ep_idx]["episode_id"]
+        video_path = Path(dataset.root) / "videos" / f"{ep_id}.mp4"
 
-    # 3. Resize for dashboard
-    frame = cv2.resize(frame, (480, 480))
+        if not video_path.exists():
+            # Try searching in subfolders if modality subfolders exist
+            video_paths = list(Path(dataset.root).glob(f"**/videos/{ep_id}.mp4"))
+            if video_paths:
+                video_path = video_paths[0]
+            else:
+                raise HTTPException(
+                    status_code=404, detail=f"Video not found for episode {ep_id}"
+                )
 
-    # 4. Return as JPEG
-    _, buffer = cv2.imencode(".jpg", frame)
-    return Response(content=buffer.tobytes(), media_type="image/jpeg")
+        cap = cv2.VideoCapture(str(video_path))
+        # local_frame_idx is 0-based in the episode, but videos might have offset
+        # Usually for LeRobot, it's 1-to-1
+        cap.set(cv2.CAP_PROP_POS_FRAMES, local_frame_idx)
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret:
+            raise HTTPException(
+                status_code=500, detail="Failed to extract frame from video"
+            )
+
+        # 3. Resize for dashboard
+        frame = cv2.resize(frame, (480, 480))
+
+        # 4. Return as JPEG
+        _, buffer = cv2.imencode(".jpg", frame)
+        return Response(content=buffer.tobytes(), media_type="image/jpeg")
+
+    except Exception as e:
+        print(f"❌ Error extracting frame: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def main():
@@ -78,12 +111,10 @@ def main():
     else:
         dataset_path = Path(args.dataset)
 
-    CONFIG["dataset_dir"] = dataset_path
-
-    # Download dataset if repo is provided and local path is missing
-    if args.repo and not CONFIG["dataset_dir"].exists():
-        print(f"📥 Dataset missing. Downloading {args.repo} from HF...")
-        LeRobotDataset(args.repo, root=CONFIG["dataset_dir"].parent)
+    # Initialize Dataset (this will download if missing and repo is provided)
+    print(f"📦 Initializing dataset from {dataset_path}...")
+    dataset = LeRobotDataset(args.repo or str(dataset_path), root=dataset_path.parent)
+    CONFIG["dataset"] = dataset
 
     # Load metadata
     with open(args.meta, "r") as f:

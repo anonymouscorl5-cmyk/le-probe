@@ -41,13 +41,19 @@ async def get_frame(idx: int):
         # REMOTE MODE: Proxy to Colab/Pinggy
         url = f"{CONFIG['remote_url'].rstrip('/')}/api/robot-dataset/frames/{idx}.jpg"
         try:
-            resp = requests.get(url, timeout=10)
+            resp = requests.get(url, timeout=15)
             if resp.status_code != 200:
-                raise HTTPException(
-                    status_code=resp.status_code, detail="Remote frame fetch failed"
-                )
+                error_detail = f"Remote error {resp.status_code}: {resp.text[:200]}"
+                print(f"❌ {error_detail}")
+                raise HTTPException(status_code=resp.status_code, detail=error_detail)
             return Response(content=resp.content, media_type="image/jpeg")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Connection error: {e}")
+            raise HTTPException(
+                status_code=502, detail=f"Connection to Colab failed: {e}"
+            )
         except Exception as e:
+            print(f"❌ Unexpected error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     else:
         # LOCAL MODE: Reverting to original CV2 logic (for small local subsets)
