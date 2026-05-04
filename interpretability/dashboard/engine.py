@@ -185,32 +185,54 @@ class LeWMAttributor:
 
         # Apply official preprocessor
         processed = self.transform({"pixels": raw_pixels})
-        pixels = processed["pixels"].to(self.device).float().detach()
+        pixels_base = processed["pixels"].to(self.device).float().detach()
 
-        # Ensure 5D: [B, T, C, H, W]
-        if pixels.ndim == 3:  # [C, H, W]
-            pixels = pixels.unsqueeze(0).unsqueeze(0)
-        elif pixels.ndim == 4:  # [T, C, H, W]
-            pixels = pixels.unsqueeze(0)
+        # FORCE 4D: [B*T, C, H, W]
+        # This is the key: we NEVER let the autograd graph see 5D
+        if pixels_base.ndim == 5:
+            pixels = pixels_base.view(-1, *pixels_base.shape[2:])
+        elif pixels_base.ndim == 4:
+            pixels = pixels_base
+        else:  # 3D
+            pixels = pixels_base.unsqueeze(0)
+
         pixels.requires_grad_(True)
 
         state_key = "action" if "action" in sample else "observation.state"
-        state = sample[state_key].to(self.device).float().detach()
-        # Ensure 3D: [B, T, D]
-        if state.ndim == 1:
-            state = state.unsqueeze(0).unsqueeze(0)
-        elif state.ndim == 2:
-            state = state.unsqueeze(0)
+        state_base = sample[state_key].to(self.device).float().detach()
+        # Ensure 2D: [B*T, D] for consistency
+        if state_base.ndim == 3:
+            state = state_base.view(-1, state_base.shape[-1])
+        elif state_base.ndim == 2:
+            state = state_base
+        else:
+            state = state_base.unsqueeze(0)
         state.requires_grad_(True)
 
         # 2. Forward Pass
+        # Pixels are already 4D [B*T, C, H, W]
+        # State is already 2D [B*T, D]
         print(f"DEBUG: Input Pixels Shape: {pixels.shape}")
-        print(f"DEBUG: Input State Shape: {state.shape}")
 
-        info = self.model.encode({"pixels": pixels, "action": state})
-        print(f"DEBUG: Encoded Emb Shape: {info['emb'].shape}")
+        # 1. Vision Encoding (Directly on 4D)
+        output = self.model.encoder(pixels, interpolate_pos_encoding=True)
+        pixels_emb = output.last_hidden_state[:, 0]  # CLS token
+        emb_flat = self.model.projector(pixels_emb)
 
-        logits = self.model.predict(info["emb"], info["act_emb"])
+        # 2. Unfold to [1, T, D] for the sequence-aware Predictor
+        # We assume Batch=1 for attribution
+        T_seq = pixels.shape[0]
+        emb = emb_flat.view(1, T_seq, -1)
+
+        # 3. Action Encoding
+        # action_encoder expects [B, T, D]
+        state_3d = state.view(1, T_seq, -1)
+        act_emb = self.model.action_encoder(state_3d)
+
+        print(f"DEBUG: Manually Encoded Emb Shape: {emb.shape}")
+
+        # 4. Predict next state logits
+        logits = self.model.predict(emb, act_emb)
         print(f"DEBUG: Logits Shape: {logits.shape}")
 
         # Target: Final action step, specific logit
@@ -223,130 +245,163 @@ class LeWMAttributor:
         pixel_grad = pixels.grad.detach().cpu()
         state_grad = state.grad.detach().cpu()
 
-        # 4. Build Multi-Modal Graph
-        nodes = []
-        edges = []
+        # 4. Build compliant CLTGraph structure
+        clt_nodes = []
+        clt_links = []
 
-        # A. Add Logit Node (Root)
-        nodes.append(
+        num_enc = 12
+        num_pred = 6
+        total_layers = num_enc + num_pred
+
+        # A. Add Logit Node
+        logit_id = "logit_0"
+        clt_nodes.append(
             {
-                "id": "logit_0",
-                "type": "logit",
-                "label": f"Action_{target_logit_idx}",
-                "value": float(target),
+                "node_id": logit_id,
+                "feature": target_logit_idx,
+                "layer": "Lgt",
+                "ctx_idx": 0,
+                "feature_type": "logit",
+                "token_prob": float(torch.sigmoid(target)),
+                "is_target_logit": True,
+                "run_idx": 0,
+                "reverse_ctx_idx": 0,
+                "jsNodeId": logit_id,
+                "streamIdx": total_layers + 1,
+                "clerp": f"Action {target_logit_idx}",
+                "influence": float(target),
             }
         )
 
-        # B. Add Input Layer: Visual Patches (Top Saliency)
+        # B. Add Input Layer: Visual Patches
         patch_saliency = self._aggregate_spatial_grad(pixel_grad)
         top_patches = torch.topk(patch_saliency.view(-1), k=15)
         for v, idx in zip(top_patches.values, top_patches.indices):
-            row, col = divmod(int(idx), 16)
-            nodes.append(
+            idx = int(idx)
+            row, col = divmod(idx, 16)
+            node_id = f"patch_{idx}"
+            clt_nodes.append(
                 {
-                    "id": f"patch_{idx}",
-                    "type": "patch",
-                    "label": f"Patch[{row},{col}]",
-                    "value": float(v),
-                    "metadata": {"row": row, "col": col},
+                    "node_id": node_id,
+                    "feature": idx,
+                    "layer": "Emb",
+                    "ctx_idx": 0,
+                    "feature_type": "patch",
+                    "token_prob": 1.0,
+                    "is_target_logit": False,
+                    "run_idx": 0,
+                    "reverse_ctx_idx": 0,
+                    "jsNodeId": node_id,
+                    "streamIdx": 0,
+                    "clerp": f"Patch[{row},{col}]",
+                    "influence": float(v),
                 }
             )
 
-        # C. Add Input Layer: Proprioception (State)
+        # C. Add Input Layer: Proprioception
         state_saliency = state_grad.abs().view(-1)
         top_states = torch.topk(state_saliency, k=5)
         for v, idx in zip(top_states.values, top_states.indices):
             idx = int(idx)
-            nodes.append(
+            node_id = f"state_{idx}"
+            clt_nodes.append(
                 {
-                    "id": f"state_{idx}",
-                    "type": "state",
-                    "label": self._get_state_label(idx),
-                    "value": float(v),
+                    "node_id": node_id,
+                    "feature": idx,
+                    "layer": "Emb",
+                    "ctx_idx": 0,
+                    "feature_type": "state",
+                    "token_prob": 1.0,
+                    "is_target_logit": False,
+                    "run_idx": 0,
+                    "reverse_ctx_idx": 0,
+                    "jsNodeId": node_id,
+                    "streamIdx": 0,
+                    "clerp": self._get_state_label(idx),
+                    "influence": float(v),
                 }
             )
 
-        # D. Add Transcoder Features and link to Logit
-        feature_nodes = []
+        # D. Add Transcoder Features
         for lid, act in self.activations.items():
             grad = self.gradients.get(lid)
-            # Project layer gradient to feature space using decoder weights
-            # grad: [B, T, D_model], decoder.weight: [D_model, D_dict]
-            # act: [B, T, D_dict]
+            if grad is None:
+                continue
+
+            # lid example: "encoder_L3"
+            try:
+                comp, l_idx = lid.split("_L")
+                l_idx = int(l_idx)
+                if comp == "encoder":
+                    stream_idx = l_idx + 1
+                else:  # predictor
+                    stream_idx = l_idx + 1 + num_enc
+            except:
+                stream_idx = 1
+
             with torch.no_grad():
                 W_dec = self.transcoders[lid].decoder.weight.data
-                # Projects D_model grad to D_dict space
                 feat_grad = torch.matmul(grad, W_dec)
 
-            # Attribution = Activation * Feature Gradient
+            D_dict = act.shape[-1]
             influence = (act * feat_grad).view(-1)
             top_vals, top_idx = torch.topk(influence.abs(), k=15)
 
             for v, i in zip(top_vals, top_idx):
                 i = int(i)
-                node_id = f"feat_{lid}_{i}"
-                nodes.append(
+                token_idx, feat_idx = divmod(i, D_dict)
+                node_id = f"feat_{lid}_{feat_idx}"
+
+                clt_nodes.append(
                     {
-                        "id": node_id,
-                        "type": "feature",
-                        "layer": lid,
-                        "index": i,
-                        "value": float(v),
+                        "node_id": node_id,
+                        "feature": feat_idx,
+                        "layer": str(lid),
+                        "ctx_idx": token_idx,
+                        "feature_type": "feature",
+                        "token_prob": float(act.view(-1)[i]),
+                        "is_target_logit": False,
+                        "run_idx": 0,
+                        "reverse_ctx_idx": 0,
+                        "jsNodeId": node_id,
+                        "streamIdx": stream_idx,
+                        "clerp": f"Feature {feat_idx} ({lid})",
+                        "influence": float(v),
                     }
                 )
-                feature_nodes.append((node_id, lid, i, v))
-                edges.append(
-                    {"source": node_id, "target": "logit_0", "weight": float(v)}
-                )
-
-        # E. Link Inputs to Features (Hierarchical Circuit)
-        for node_id, lid, feat_idx, feat_val in feature_nodes:
-            tc = self.transcoders.get(lid)
-            if tc is None:
-                continue
-
-            # Find which tokens contribute to this feature's activation
-            weights = tc.encoder.weight[feat_idx].abs()
-            top_weights = torch.topk(weights, k=3)
-
-            for w_val, w_idx in zip(top_weights.values, top_weights.indices):
-                w_idx = int(w_idx)
-
-                if w_idx == 0:
-                    # CLS Token link
-                    source_id = "cls_token"
-                    if not any(n["id"] == source_id for n in nodes):
-                        nodes.append({"id": source_id, "type": "input", "label": "CLS"})
-                elif 1 <= w_idx <= 256:
-                    # Visual Patch link (Adjusted for CLS offset)
-                    patch_idx = w_idx - 1
-                    source_id = f"patch_{patch_idx}"
-                    # Ensure patch node exists (might not be in top saliency but relevant to this feature)
-                    if not any(n["id"] == source_id for n in nodes):
-                        r, c = divmod(patch_idx, 16)
-                        nodes.append(
-                            {
-                                "id": source_id,
-                                "type": "patch",
-                                "label": f"Patch[{r},{c}]",
-                                "metadata": {"row": r, "col": c},
-                            }
-                        )
-                else:
-                    # Proprioception or other
-                    source_id = f"state_{w_idx - 257}"
-
-                edges.append(
-                    {
-                        "source": source_id,
-                        "target": node_id,
-                        "weight": float(w_val * feat_val),
-                    }
+                clt_links.append(
+                    {"source": node_id, "target": logit_id, "weight": float(v)}
                 )
 
         # Cleanup hooks
         self._cleanup_hooks()
-        return {"nodes": nodes, "edges": edges}
+
+        # E. Final Graph structure
+        graph_data = {
+            "metadata": {
+                "slug": f"sample_{target_logit_idx}",
+                "scan": "lewm-robot",
+                "prompt_tokens": ["Robotic", "Frame"],
+                "prompt": f"Sample {target_logit_idx}",
+                "title_prefix": "Robotic Circuit",
+                "schema_version": 1,
+                "neuronpedia_internal_model": {
+                    "id": "lewm-robot",
+                    "displayName": "LeWM Robotic Model",
+                    "layers": total_layers,
+                },
+            },
+            "qParams": {
+                "linkType": "both",
+                "pinnedIds": [],
+                "clickedId": "",
+                "supernodes": [],
+                "sg_pos": "",
+            },
+            "nodes": clt_nodes,
+            "links": clt_links,
+        }
+        return graph_data
 
     def _aggregate_spatial_grad(self, pixel_grad):
         # pixel_grad: [1, 3, 224, 224]

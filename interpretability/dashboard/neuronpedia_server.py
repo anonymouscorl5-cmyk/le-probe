@@ -3,6 +3,8 @@ import argparse
 import requests
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 load_dotenv()  # Load variables from .env
@@ -16,6 +18,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- STATIC FILE SERVING ---
+# Serve pre-computed graphs directly
+GRAPH_DIR = os.path.abspath("repos/neuronpedia/apps/webapp/public/graphs/lewm-robot")
+if not os.path.exists(GRAPH_DIR):
+    os.makedirs(GRAPH_DIR, exist_ok=True)
+
+
+@app.get("/static/graphs/{filename}")
+async def get_static_graph(filename: str):
+    file_path = os.path.join(GRAPH_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Graph file not found")
+    return FileResponse(file_path)
+
+
+# ---------------------------
 
 # Global configuration
 CONFIG = {
