@@ -255,20 +255,22 @@ class LeWMAttributor:
 
         # A. Add Logit Node
         logit_id = "logit_0"
+        logit_prob = float(torch.sigmoid(target))
         clt_nodes.append(
             {
                 "node_id": logit_id,
                 "feature": target_logit_idx,
-                "layer": "Lgt",
+                "layer": str(total_layers + 1),
                 "ctx_idx": 0,
                 "feature_type": "logit",
-                "token_prob": float(torch.sigmoid(target)),
+                "token_prob": logit_prob,
+                "logitPct": logit_prob,
                 "is_target_logit": True,
                 "run_idx": 0,
                 "reverse_ctx_idx": 0,
                 "jsNodeId": logit_id,
                 "streamIdx": total_layers + 1,
-                "clerp": f"Action {target_logit_idx}",
+                "clerp": f"Action {target_logit_idx} (p={logit_prob:.3f})",
                 "influence": float(target),
             }
         )
@@ -284,7 +286,7 @@ class LeWMAttributor:
                 {
                     "node_id": node_id,
                     "feature": idx,
-                    "layer": "Emb",
+                    "layer": "0",
                     "ctx_idx": 0,
                     "feature_type": "patch",
                     "token_prob": 1.0,
@@ -308,7 +310,7 @@ class LeWMAttributor:
                 {
                     "node_id": node_id,
                     "feature": idx,
-                    "layer": "Emb",
+                    "layer": "0",
                     "ctx_idx": 0,
                     "feature_type": "state",
                     "token_prob": 1.0,
@@ -334,10 +336,13 @@ class LeWMAttributor:
                 l_idx = int(l_idx)
                 if comp == "encoder":
                     stream_idx = l_idx + 1
+                    layer_val = str(l_idx + 1)
                 else:  # predictor
                     stream_idx = l_idx + 1 + num_enc
+                    layer_val = str(l_idx + 1 + num_enc)
             except:
                 stream_idx = 1
+                layer_val = "1"
 
             with torch.no_grad():
                 W_dec = self.transcoders[lid].decoder.weight.data
@@ -356,7 +361,7 @@ class LeWMAttributor:
                     {
                         "node_id": node_id,
                         "feature": feat_idx,
-                        "layer": str(lid),
+                        "layer": layer_val,
                         "ctx_idx": token_idx,
                         "feature_type": "feature",
                         "token_prob": float(act.view(-1)[i]),
@@ -384,7 +389,8 @@ class LeWMAttributor:
                 "prompt_tokens": ["Robotic", "Frame"],
                 "prompt": f"Sample {target_logit_idx}",
                 "title_prefix": "Robotic Circuit",
-                "schema_version": 1,
+                "schema_version": 0,
+                "node_threshold": 99999,
                 "neuronpedia_internal_model": {
                     "id": "lewm-robot",
                     "displayName": "LeWM Robotic Model",

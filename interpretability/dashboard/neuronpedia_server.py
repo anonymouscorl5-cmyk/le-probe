@@ -17,7 +17,18 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_cors_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
 
 # --- STATIC FILE SERVING ---
 # Serve pre-computed graphs directly
@@ -25,13 +36,11 @@ GRAPH_DIR = os.path.abspath("repos/neuronpedia/apps/webapp/public/graphs/lewm-ro
 if not os.path.exists(GRAPH_DIR):
     os.makedirs(GRAPH_DIR, exist_ok=True)
 
+# Use StaticFiles mount to handle HEAD, OPTIONS, etc. automatically
+app.mount("/static/graphs", StaticFiles(directory=GRAPH_DIR), name="static")
 
-@app.get("/static/graphs/{filename}")
-async def get_static_graph(filename: str):
-    file_path = os.path.join(GRAPH_DIR, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Graph file not found")
-    return FileResponse(file_path)
+
+# ---------------------------
 
 
 # ---------------------------
