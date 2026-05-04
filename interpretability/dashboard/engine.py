@@ -5,8 +5,11 @@ import torch
 import numpy as np
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 import uvicorn
+import time
+import torch.nn as nn
 
 # LeWM / LeRobot Imports
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -14,6 +17,15 @@ from lewm.goal_mapper import GoalMapper
 from interpretability.transcoders.universal_transcoder import Transcoder
 
 app = FastAPI(title="LeWM Interpretability Engine")
+
+# Add CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Global Engine State ---
 STATE = {
@@ -157,30 +169,36 @@ class LeWMAttributor:
 
     def attribute(self, sample, target_logit_idx, steps=20):
         """
-        Runs Integrated Gradients to find feature importance.
-        Returns a dictionary of nodes and edges for Neuronpedia.
+        Runs attribution to find feature and input importance.
         """
         self.activations.clear()
         self.gradients.clear()
         self._register_hooks()
 
-        # 1. Setup Input (Standard LeRobot format)
-        pixels = sample["pixels"].to(self.device).requires_grad_(True)
-        actions = sample["action"].to(self.device)
+        # 1. Setup Inputs with Gradient Tracking
+        pixels = sample["pixels"].to(self.device).detach().requires_grad_(True)
+        # Ensure state is float and has grad
+        state = sample["action"].to(self.device).detach().requires_grad_(True)
 
-        # 2. Forward & Backward
-        # For simplicity, we'll use direct attribution (Act x Grad) for the MVP
-        info = self.model.encode({"pixels": pixels, "action": actions})
+        # 2. Forward Pass
+        info = self.model.encode({"pixels": pixels, "action": state})
         logits = self.model.predict(info["emb"], info["act_emb"])
 
-        target = logits[0, -1, target_logit_idx]  # Final step, target joint/action
+        # Target: Final action step, specific logit
+        target = logits[0, -1, target_logit_idx]
+
+        # 3. Backward Pass (Causal Trace)
         target.backward()
 
-        # 3. Build Graph
+        # Capture Input Saliency
+        pixel_grad = pixels.grad.detach().cpu()
+        state_grad = state.grad.detach().cpu()
+
+        # 4. Build Multi-Modal Graph
         nodes = []
         edges = []
 
-        # Add Logit Node (Root)
+        # A. Add Logit Node (Root)
         nodes.append(
             {
                 "id": "logit_0",
@@ -190,45 +208,141 @@ class LeWMAttributor:
             }
         )
 
-        # Add Transcoder Features
+        # B. Add Input Layer: Visual Patches (Top Saliency)
+        patch_saliency = self._aggregate_spatial_grad(pixel_grad)
+        top_patches = torch.topk(patch_saliency.view(-1), k=15)
+        for v, idx in zip(top_patches.values, top_patches.indices):
+            row, col = divmod(int(idx), 16)
+            nodes.append(
+                {
+                    "id": f"patch_{idx}",
+                    "type": "patch",
+                    "label": f"Patch[{row},{col}]",
+                    "value": float(v),
+                    "metadata": {"row": row, "col": col},
+                }
+            )
+
+        # C. Add Input Layer: Proprioception (State)
+        state_saliency = state_grad.abs().view(-1)
+        top_states = torch.topk(state_saliency, k=5)
+        for v, idx in zip(top_states.values, top_states.indices):
+            idx = int(idx)
+            nodes.append(
+                {
+                    "id": f"state_{idx}",
+                    "type": "state",
+                    "label": self._get_state_label(idx),
+                    "value": float(v),
+                }
+            )
+
+        # D. Add Transcoder Features and link to Logit
+        feature_nodes = []
         for lid, act in self.activations.items():
             grad = self.gradients.get(lid)
             if grad is None:
                 continue
 
-            # Decompose influence: Latent * (dLogit/dLatent)
-            # We approximate dLogit/dLatent using the chain rule: dLogit/dAct * dAct/dLatent
-            # For Linear Decoders: dAct/dLatent = Decoder.Weight
-            # attr = act * (grad @ tc.decoder.weight.T)
+            # Attribution = Activation * Gradient
+            influence = (act * grad).view(-1)
+            top_vals, top_idx = torch.topk(influence.abs(), k=10)
 
-            # Simple version: Top-K active features in this layer
-            top_vals, top_idx = torch.topk(act.view(-1), k=20)
             for v, i in zip(top_vals, top_idx):
+                i = int(i)
+                node_id = f"feat_{lid}_{i}"
                 nodes.append(
                     {
-                        "id": f"feat_{lid}_{i}",
+                        "id": node_id,
                         "type": "feature",
                         "layer": lid,
-                        "index": int(i),
+                        "index": i,
                         "value": float(v),
                     }
                 )
-                # Add edge to root (for now)
+                feature_nodes.append((node_id, lid, i, v))
+                edges.append(
+                    {"source": node_id, "target": "logit_0", "weight": float(v)}
+                )
+
+        # E. Link Inputs to Features (Hierarchical Circuit)
+        for node_id, lid, feat_idx, feat_val in feature_nodes:
+            tc = self.transcoders.get(lid)
+            if tc is None:
+                continue
+
+            # Find which tokens contribute to this feature's activation
+            weights = tc.encoder.weight[feat_idx].abs()
+            top_weights = torch.topk(weights, k=3)
+
+            for w_val, w_idx in zip(top_weights.values, top_weights.indices):
+                w_idx = int(w_idx)
+
+                if w_idx == 0:
+                    # CLS Token link
+                    source_id = "cls_token"
+                    if not any(n["id"] == source_id for n in nodes):
+                        nodes.append({"id": source_id, "type": "input", "label": "CLS"})
+                elif 1 <= w_idx <= 256:
+                    # Visual Patch link (Adjusted for CLS offset)
+                    patch_idx = w_idx - 1
+                    source_id = f"patch_{patch_idx}"
+                    # Ensure patch node exists (might not be in top saliency but relevant to this feature)
+                    if not any(n["id"] == source_id for n in nodes):
+                        r, c = divmod(patch_idx, 16)
+                        nodes.append(
+                            {
+                                "id": source_id,
+                                "type": "patch",
+                                "label": f"Patch[{r},{c}]",
+                                "metadata": {"row": r, "col": c},
+                            }
+                        )
+                else:
+                    # Proprioception or other
+                    source_id = f"state_{w_idx - 257}"
+
                 edges.append(
                     {
-                        "source": f"feat_{lid}_{i}",
-                        "target": "logit_0",
-                        "weight": float(v),
+                        "source": source_id,
+                        "target": node_id,
+                        "weight": float(w_val * feat_val),
                     }
                 )
 
-        # Cleanup
+        # Cleanup hooks
+        self._cleanup_hooks()
+        return {"nodes": nodes, "edges": edges}
+
+    def _aggregate_spatial_grad(self, pixel_grad):
+        # pixel_grad: [1, 3, 224, 224]
+        # Aggregate across color channels and take absolute value
+        saliency = pixel_grad.abs().sum(dim=1)[0]
+        # Downsample to 16x16 patches using area pooling
+        saliency = saliency.unsqueeze(0).unsqueeze(0)
+        patch_grad = torch.nn.functional.avg_pool2d(saliency, kernel_size=14, stride=14)
+        return patch_grad.view(16, 16)
+
+    def _get_state_label(self, idx):
+        # Basic mapping for GR-1 / LeRobot standard
+        labels = {
+            0: "joint_0",
+            1: "joint_1",
+            2: "joint_2",
+            3: "joint_3",
+            4: "joint_4",
+            5: "joint_5",
+            6: "joint_6",
+            7: "gripper_pos",
+            8: "gripper_vel",
+        }
+        return labels.get(idx, f"dim_{idx}")
+
+    def _cleanup_hooks(self):
         for h_f, h_b in self.hooks.values():
             h_f.remove()
             h_b.remove()
         self.hooks.clear()
-
-        return {"nodes": nodes, "edges": edges}
 
 
 # --- FastAPI Endpoints ---
@@ -295,24 +409,39 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
     tc_path = Path(transcoder_dir)
     if tc_path.exists():
         print(f"🔍 Discovering Transcoders in {transcoder_dir}...")
+
         for path in tc_path.glob("*.pt"):
-            # Expected format: encoder_L3_clt.pt or predictor_L1_clt.pt
             layer_id = path.stem.split("_clt")[0].split("_sae")[0]
 
+            t0 = time.time()
+            # 1. Load checkpoint
             checkpoint = torch.load(path, map_location="cpu")
-            config = checkpoint["config"]
+            state_dict = checkpoint["state_dict"]
+            t_load = time.time() - t0
 
-            # Initialize Transcoder with correct dims
-            tc = Transcoder(
-                config["dict_size"], config["dict_size"]
-            )  # Placeholder for real dims
-            # Use state dict dims to be safe
-            d_model = checkpoint["state_dict"]["encoder.weight"].shape[1]
-            tc = Transcoder(d_model, config["dict_size"]).to(device)
+            # 2. Extract dimensions
+            d_dict, d_model = state_dict["encoder.weight"].shape
 
-            tc.load_state_dict(checkpoint["state_dict"])
+            # 3. Initialize Transcoder
+            t1 = time.time()
+            tc = Transcoder(d_model, d_dict)
+            t_init = time.time() - t1
+
+            # 4. Move to Device
+            t2 = time.time()
+            tc = tc.to(device)
+            t_dev = time.time() - t2
+
+            # 5. Load weights
+            t3 = time.time()
+            tc.load_state_dict(state_dict)
             STATE["transcoders"][layer_id] = tc.eval()
-            print(f"  ✅ Linked: {layer_id}")
+            t_sd = time.time() - t3
+
+            total = time.time() - t0
+            print(
+                f"  ✅ Linked: {layer_id:15} | Total: {total:.2f}s (Load: {t_load:.2f}s, Init: {t_init:.2f}s, Dev: {t_dev:.2f}s, SD: {t_sd:.2f}s)"
+            )
     else:
         print(f"⚠️ Warning: Transcoder directory {transcoder_dir} not found.")
 
