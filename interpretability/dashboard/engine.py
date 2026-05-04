@@ -125,13 +125,15 @@ class LeWMAttributor:
     Traces influence from Action Logits -> Predictor Features -> Encoder Features -> Visual Tokens.
     """
 
-    def __init__(self, model, transcoders, device="cuda"):
+    def __init__(self, model, transcoders, transform, device="cuda"):
         self.model = model
         self.transcoders = transcoders
+        self.transform = transform
         self.device = device
         self.hooks = {}
         self.activations = {}
         self.gradients = {}
+
 
     def _register_hooks(self):
         """Registers forward and backward hooks to capture SAE latents and their gradients."""
@@ -177,10 +179,12 @@ class LeWMAttributor:
         self._register_hooks()
 
         # 1. Setup Inputs with Gradient Tracking
-        pixel_key = (
-            "pixels" if "pixels" in sample else "observation.images.world_center"
-        )
-        pixels = sample[pixel_key].to(self.device).float().detach()
+        pixel_key = "pixels" if "pixels" in sample else "observation.images.world_center"
+        raw_pixels = sample[pixel_key]
+        
+        # Apply official preprocessor (handles resize to 224 and normalization)
+        processed = self.transform({"pixels": raw_pixels})
+        pixels = processed["pixels"].to(self.device).float().detach()
         if pixels.ndim == 4:
             pixels = pixels.unsqueeze(0)
         pixels.requires_grad_(True)
@@ -190,6 +194,7 @@ class LeWMAttributor:
         if state.ndim == 2:
             state = state.unsqueeze(0)
         state.requires_grad_(True)
+
 
         # 2. Forward Pass
         info = self.model.encode({"pixels": pixels, "action": state})
@@ -396,7 +401,11 @@ async def generate_graph(request: Dict[str, Any]):
         target_logit_idx = 7
 
     try:
-        attributor = LeWMAttributor(model, transcoders)
+        model = STATE["model"]
+        transcoders = STATE["transcoders"]
+        transform = STATE["transform"]
+        attributor = LeWMAttributor(model, transcoders, transform)
+
         sample = dataset[sample_idx]
 
         # Ensure batch dimension
@@ -429,6 +438,8 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
     print(f"🧠 Loading LeWM Model: {model_path}")
     mapper = GoalMapper(model_path=model_path, dataset_root=".")
     STATE["model"] = mapper.model.to(device).eval()
+    STATE["transform"] = mapper.transform
+
 
     # 3. Transcoders (Auto-Discovery)
     tc_path = Path(transcoder_dir)
