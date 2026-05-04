@@ -62,7 +62,12 @@ def train_transcoder(
 
     # 1. Initialize Datasets
     src_ds = StreamingActivationsDataset(src_bin, src_json)
-    tgt_ds = StreamingActivationsDataset(tgt_bin, tgt_json)
+    if source_layer == target_layer:
+        print(f"🔄 SAE Mode: Training identity reconstruction for {source_layer}")
+        tgt_ds = src_ds
+    else:
+        print(f"🔀 Transcoder Mode: {source_layer} ⮕ {target_layer}")
+        tgt_ds = StreamingActivationsDataset(tgt_bin, tgt_json)
 
     # 2. Normalization Pass (Streaming)
     print("📈 Calculating Normalization Stats...")
@@ -70,23 +75,6 @@ def train_transcoder(
     indices = np.random.choice(len(src_ds), sample_size, replace=False)
 
     src_subset = torch.from_numpy(src_ds.data[indices].copy()).float()
-
-    # For Transcoder: We need target subset too
-    if source_layer != target_layer:
-        # If tokens_per_sample differs (Funnel Effect), we align indices
-        # This assumes the first tokens are the ones we care about (Summary tokens)
-        if src_ds.tokens_per_sample != tgt_ds.tokens_per_sample:
-            print(
-                f"🗜️ Handling Funnel Effect: {src_ds.tokens_per_sample} -> {tgt_ds.tokens_per_sample}"
-            )
-            # We assume training happens on the Summary tokens (CLS)
-            # In LeWM, summary tokens are at indices 0, 257, 514... for Encoder (771 tokens)
-            # And 0, 1, 2... for Predictor (3 tokens)
-            # But for simplicity in the subset, we'll just pull the same raw indices if they match 1-to-1 in samples
-            # Wait, if we use np.random.choice on indices, we might break temporal alignment.
-            pass
-
-    # Simplified Normalization for now:
     mean_s, std_s = src_subset.mean(dim=0), src_subset.std(dim=0) + 1e-6
 
     # 3. Model Setup
@@ -95,18 +83,15 @@ def train_transcoder(
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     # 4. Training Loop
-    # We use a custom DataLoader approach to sync Source and Target
     print(f"🏋️ Training: {source_layer} ⮕ {target_layer}")
 
     for epoch in range(epochs):
         model.train()
 
-        # We'll use a direct index loop for perfect synchronization across files
         num_tokens = len(src_ds)
         indices = np.arange(num_tokens)
         np.random.shuffle(indices)
 
-        # Determine if we need to handle the Funnel
         is_funnel = src_ds.tokens_per_sample != tgt_ds.tokens_per_sample
 
         pbar = tqdm(range(0, num_tokens, batch_size), desc=f"Epoch {epoch+1}/{epochs}")
@@ -114,6 +99,7 @@ def train_transcoder(
             batch_idx = indices[i : i + batch_size]
 
             s_batch = torch.from_numpy(src_ds.data[batch_idx].copy()).float().to(device)
+            # Center and scale to unit variance for stable SAE training
             s_batch_norm = (s_batch - mean_s.to(device)) / std_s.to(device)
 
             if source_layer == target_layer:
@@ -149,8 +135,8 @@ def train_transcoder(
                         .to(device)
                     )
 
-                # Note: We don't normalize target for transcoders in standard Anthropic methodology
-                # but we can if the scales are wild. For now, we'll use raw target.
+                # Transcoder target is normalized the same way as source if layers differ but represent same manifold
+                # but for simplicity we'll use raw for now unless source==target
                 t_batch_norm = t_batch
 
             optimizer.zero_grad()

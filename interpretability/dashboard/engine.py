@@ -253,84 +253,92 @@ class LeWMAttributor:
         num_pred = 6
         total_layers = num_enc + num_pred
 
+        # Helper to track nodes for linking
+        layer_to_nodes = {}  # layer_idx -> [node_data, ...]
+
         # A. Add Logit Node
         logit_id = "logit_0"
         logit_prob = float(torch.sigmoid(target))
-        clt_nodes.append(
-            {
-                "node_id": logit_id,
-                "feature": target_logit_idx,
-                "layer": str(total_layers + 1),
-                "ctx_idx": 0,
-                "feature_type": "logit",
-                "token_prob": logit_prob,
-                "logitPct": logit_prob,
-                "is_target_logit": True,
-                "run_idx": 0,
-                "reverse_ctx_idx": 0,
-                "jsNodeId": logit_id,
-                "streamIdx": total_layers + 1,
-                "clerp": f"Action {target_logit_idx} (p={logit_prob:.3f})",
-                "influence": float(target),
-            }
-        )
+        logit_node = {
+            "node_id": logit_id,
+            "feature": target_logit_idx,
+            "layer": str(total_layers + 1),
+            "ctx_idx": 0,
+            "feature_type": "logit",
+            "token_prob": logit_prob,
+            "logitPct": logit_prob,
+            "is_target_logit": True,
+            "run_idx": 0,
+            "reverse_ctx_idx": 0,
+            "jsNodeId": logit_id,
+            "streamIdx": total_layers + 1,
+            "clerp": f"Action {target_logit_idx} (p={logit_prob:.3f})",
+            "influence": float(target),
+        }
+        clt_nodes.append(logit_node)
+        layer_to_nodes[total_layers + 1] = [logit_node]
 
-        # B. Add Input Layer: Visual Patches
+        # B. Add Input Layer Nodes (Layer 0)
+        layer_to_nodes[0] = []
         patch_saliency = self._aggregate_spatial_grad(pixel_grad)
         top_patches = torch.topk(patch_saliency.view(-1), k=15)
         for v, idx in zip(top_patches.values, top_patches.indices):
             idx = int(idx)
             row, col = divmod(idx, 16)
             node_id = f"patch_{idx}"
-            clt_nodes.append(
-                {
-                    "node_id": node_id,
-                    "feature": idx,
-                    "layer": "0",
-                    "ctx_idx": 0,
-                    "feature_type": "patch",
-                    "token_prob": 1.0,
-                    "is_target_logit": False,
-                    "run_idx": 0,
-                    "reverse_ctx_idx": 0,
-                    "jsNodeId": node_id,
-                    "streamIdx": 0,
-                    "clerp": f"Patch[{row},{col}]",
-                    "influence": float(v),
-                }
-            )
+            node = {
+                "node_id": node_id,
+                "feature": idx,
+                "layer": "0",
+                "ctx_idx": 0,
+                "feature_type": "patch",
+                "token_prob": 1.0,
+                "is_target_logit": False,
+                "run_idx": 0,
+                "reverse_ctx_idx": 0,
+                "jsNodeId": node_id,
+                "streamIdx": 0,
+                "clerp": f"Patch[{row},{col}]",
+                "influence": float(v),
+            }
+            clt_nodes.append(node)
+            layer_to_nodes[0].append(node)
 
-        # C. Add Input Layer: Proprioception
         state_saliency = state_grad.abs().view(-1)
         top_states = torch.topk(state_saliency, k=5)
         for v, idx in zip(top_states.values, top_states.indices):
             idx = int(idx)
             node_id = f"state_{idx}"
-            clt_nodes.append(
-                {
-                    "node_id": node_id,
-                    "feature": idx,
-                    "layer": "0",
-                    "ctx_idx": 0,
-                    "feature_type": "state",
-                    "token_prob": 1.0,
-                    "is_target_logit": False,
-                    "run_idx": 0,
-                    "reverse_ctx_idx": 0,
-                    "jsNodeId": node_id,
-                    "streamIdx": 0,
-                    "clerp": self._get_state_label(idx),
-                    "influence": float(v),
-                }
-            )
+            node = {
+                "node_id": node_id,
+                "feature": idx,
+                "layer": "0",
+                "ctx_idx": 0,
+                "feature_type": "state",
+                "token_prob": 1.0,
+                "is_target_logit": False,
+                "run_idx": 0,
+                "reverse_ctx_idx": 0,
+                "jsNodeId": node_id,
+                "streamIdx": 0,
+                "clerp": self._get_state_label(idx),
+                "influence": float(v),
+            }
+            clt_nodes.append(node)
+            layer_to_nodes[0].append(node)
 
-        # D. Add Transcoder Features
-        for lid, act in self.activations.items():
+        # C. Process Transcoder Features
+        # Order the layers properly
+        layer_order = [f"encoder_L{i}" for i in range(num_enc)] + [
+            f"predictor_L{i}" for i in range(num_pred)
+        ]
+
+        for lid in layer_order:
+            act = self.activations.get(lid)
             grad = self.gradients.get(lid)
-            if grad is None:
+            if act is None or grad is None:
                 continue
 
-            # lid example: "encoder_L3"
             try:
                 comp, l_idx = lid.split("_L")
                 l_idx = int(l_idx)
@@ -344,9 +352,11 @@ class LeWMAttributor:
                 stream_idx = 1
                 layer_val = "1"
 
+            layer_to_nodes[stream_idx] = []
+
             with torch.no_grad():
-                W_dec = self.transcoders[lid].decoder.weight.data
-                feat_grad = torch.matmul(grad, W_dec)
+                W_dec = self.transcoders[lid].decoder.weight.data  # [D_dict, D_model]
+                feat_grad = torch.matmul(grad, W_dec)  # [T, D_dict]
 
             D_dict = act.shape[-1]
             influence = (act * feat_grad).view(-1)
@@ -356,27 +366,102 @@ class LeWMAttributor:
                 i = int(i)
                 token_idx, feat_idx = divmod(i, D_dict)
                 node_id = f"feat_{lid}_{feat_idx}"
+                act_val = float(act.view(-1)[i])
 
-                clt_nodes.append(
-                    {
-                        "node_id": node_id,
-                        "feature": feat_idx,
-                        "layer": layer_val,
-                        "ctx_idx": token_idx,
-                        "feature_type": "feature",
-                        "token_prob": float(act.view(-1)[i]),
-                        "is_target_logit": False,
-                        "run_idx": 0,
-                        "reverse_ctx_idx": 0,
-                        "jsNodeId": node_id,
-                        "streamIdx": stream_idx,
-                        "clerp": f"Feature {feat_idx} ({lid})",
-                        "influence": float(v),
-                    }
-                )
-                clt_links.append(
-                    {"source": node_id, "target": logit_id, "weight": float(v)}
-                )
+                node = {
+                    "node_id": node_id,
+                    "feature": feat_idx,
+                    "layer": layer_val,
+                    "ctx_idx": token_idx,
+                    "feature_type": "feature",
+                    "token_prob": act_val,
+                    "is_target_logit": False,
+                    "run_idx": 0,
+                    "reverse_ctx_idx": 0,
+                    "jsNodeId": node_id,
+                    "streamIdx": stream_idx,
+                    "clerp": f"F{feat_idx} ({lid})",
+                    "influence": float(v),
+                    "_raw_act": act_val,
+                }
+                clt_nodes.append(node)
+                layer_to_nodes[stream_idx].append(node)
+
+        # D. Build Causal Links (Path Tracing)
+        for s_idx in range(total_layers + 1):
+            curr_nodes = layer_to_nodes.get(s_idx + 1)
+            prev_nodes = layer_to_nodes.get(s_idx)
+            if not curr_nodes or not prev_nodes:
+                continue
+
+            # Simple heuristic for Inputs -> Layer 1
+            if s_idx == 0:
+                for pn in prev_nodes:
+                    for cn in curr_nodes[:5]:  # Link to top 5 features
+                        clt_links.append(
+                            {
+                                "source": pn["node_id"],
+                                "target": cn["node_id"],
+                                "weight": pn["influence"] * cn["influence"],
+                            }
+                        )
+                continue
+
+            # Feature-to-Feature or Feature-to-Logit
+            for cn in curr_nodes:
+                for pn in prev_nodes:
+                    # If cn is logit, link from top features of last predictor layer
+                    if cn["feature_type"] == "logit":
+                        if cn["layer"] == str(total_layers + 1) and pn.get(
+                            "layer"
+                        ) == str(total_layers):
+                            # We already have global influence, use it
+                            clt_links.append(
+                                {
+                                    "source": pn["node_id"],
+                                    "target": cn["node_id"],
+                                    "weight": pn["influence"],
+                                }
+                            )
+                    else:
+                        # Pairwise attribution using weight product
+                        # pn is feature at lid_prev, cn is feature at lid_curr
+                        try:
+                            lid_curr = cn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
+                            lid_prev = pn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
+
+                            f_idx_curr = int(cn["feature"])
+                            f_idx_prev = int(pn["feature"])
+
+                            W_dec_prev = self.transcoders[lid_prev].decoder.weight.data[
+                                f_idx_prev
+                            ]
+                            W_enc_curr = self.transcoders[lid_curr].encoder.weight.data[
+                                f_idx_curr
+                            ]
+
+                            cos_sim = torch.dot(W_dec_prev, W_enc_curr)
+                            link_w = float(
+                                abs(cos_sim) * cn["_raw_act"] * pn["_raw_act"]
+                            )
+
+                            if link_w > 0.01:  # Threshold for clutter
+                                clt_links.append(
+                                    {
+                                        "source": pn["node_id"],
+                                        "target": cn["node_id"],
+                                        "weight": link_w,
+                                    }
+                                )
+                        except:
+                            # Fallback to simple link if parsing fails
+                            clt_links.append(
+                                {
+                                    "source": pn["node_id"],
+                                    "target": cn["node_id"],
+                                    "weight": 0.1,
+                                }
+                            )
 
         # Cleanup hooks
         self._cleanup_hooks()
