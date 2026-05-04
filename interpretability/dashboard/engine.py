@@ -134,7 +134,6 @@ class LeWMAttributor:
         self.activations = {}
         self.gradients = {}
 
-
     def _register_hooks(self):
         """Registers forward and backward hooks to capture SAE latents and their gradients."""
         for layer_id, tc in self.transcoders.items():
@@ -179,26 +178,40 @@ class LeWMAttributor:
         self._register_hooks()
 
         # 1. Setup Inputs with Gradient Tracking
-        pixel_key = "pixels" if "pixels" in sample else "observation.images.world_center"
-        raw_pixels = sample[pixel_key]
-        
-        # Apply official preprocessor (handles resize to 224 and normalization)
+        pixel_key = (
+            "pixels" if "pixels" in sample else "observation.images.world_center"
+        )
+        raw_pixels = sample[pixel_key]  # [T, C, H, W]
+
+        # Apply official preprocessor
         processed = self.transform({"pixels": raw_pixels})
         pixels = processed["pixels"].to(self.device).float().detach()
-        if pixels.ndim == 4:
+
+        # Ensure 5D: [B, T, C, H, W]
+        if pixels.ndim == 3:  # [C, H, W]
+            pixels = pixels.unsqueeze(0).unsqueeze(0)
+        elif pixels.ndim == 4:  # [T, C, H, W]
             pixels = pixels.unsqueeze(0)
         pixels.requires_grad_(True)
 
         state_key = "action" if "action" in sample else "observation.state"
         state = sample[state_key].to(self.device).float().detach()
-        if state.ndim == 2:
+        # Ensure 3D: [B, T, D]
+        if state.ndim == 1:
+            state = state.unsqueeze(0).unsqueeze(0)
+        elif state.ndim == 2:
             state = state.unsqueeze(0)
         state.requires_grad_(True)
 
-
         # 2. Forward Pass
+        print(f"DEBUG: Input Pixels Shape: {pixels.shape}")
+        print(f"DEBUG: Input State Shape: {state.shape}")
+
         info = self.model.encode({"pixels": pixels, "action": state})
+        print(f"DEBUG: Encoded Emb Shape: {info['emb'].shape}")
+
         logits = self.model.predict(info["emb"], info["act_emb"])
+        print(f"DEBUG: Logits Shape: {logits.shape}")
 
         # Target: Final action step, specific logit
         target = logits[0, -1, target_logit_idx]
@@ -439,7 +452,6 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
     mapper = GoalMapper(model_path=model_path, dataset_root=".")
     STATE["model"] = mapper.model.to(device).eval()
     STATE["transform"] = mapper.transform
-
 
     # 3. Transcoders (Auto-Discovery)
     tc_path = Path(transcoder_dir)
