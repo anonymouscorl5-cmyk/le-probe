@@ -176,9 +176,19 @@ class LeWMAttributor:
         self._register_hooks()
 
         # 1. Setup Inputs with Gradient Tracking
-        pixels = sample["pixels"].to(self.device).detach().requires_grad_(True)
-        # Ensure state is float and has grad
-        state = sample["action"].to(self.device).detach().requires_grad_(True)
+        pixel_key = (
+            "pixels" if "pixels" in sample else "observation.images.world_center"
+        )
+        pixels = sample[pixel_key].to(self.device).float().detach()
+        if pixels.ndim == 4:
+            pixels = pixels.unsqueeze(0)
+        pixels.requires_grad_(True)
+
+        state_key = "action" if "action" in sample else "observation.state"
+        state = sample[state_key].to(self.device).float().detach()
+        if state.ndim == 2:
+            state = state.unsqueeze(0)
+        state.requires_grad_(True)
 
         # 2. Forward Pass
         info = self.model.encode({"pixels": pixels, "action": state})
@@ -363,8 +373,21 @@ async def generate_graph(request: Dict[str, Any]):
             status_code=500, detail="Engine resources (model/transcoders) not loaded"
         )
 
-    sample_idx = request.get("sample_idx", 0)
-    target_logit_idx = request.get("target_logit_idx", 0)
+    # Neuronpedia sends 'prompt'. We treat it as 'index' or 'index:joint'
+    prompt = request.get("prompt", "0")
+    try:
+        clean_prompt = str(prompt).replace("<bos>", "").strip()
+        if ":" in clean_prompt:
+            parts = clean_prompt.split(":")
+            sample_idx = int(parts[0])
+            target_logit_idx = int(parts[1])
+        else:
+            sample_idx = int(clean_prompt)
+            target_logit_idx = 7  # Default to Joint 7
+    except Exception as e:
+        print(f"Error parsing prompt '{prompt}': {e}")
+        sample_idx = 0
+        target_logit_idx = 7
 
     try:
         attributor = LeWMAttributor(model, transcoders)

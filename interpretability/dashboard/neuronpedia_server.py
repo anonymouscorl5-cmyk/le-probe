@@ -58,6 +58,34 @@ async def get_frame(idx: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/attribution/generate-graph")
+async def generate_graph(request_data: dict):
+    """
+    Proxies a graph generation request to the Colab/Pinggy bridge.
+    """
+    if not CONFIG["remote_url"]:
+        raise HTTPException(
+            status_code=501,
+            detail="Cloud bridge URL not configured.",
+        )
+
+    url = f"{CONFIG['remote_url'].rstrip('/')}/api/attribution/generate-graph"
+    try:
+        print(f"📡 Proxying graph request for prompt: {request_data.get('prompt')}")
+        resp = requests.post(
+            url, json=request_data, timeout=60
+        )  # Attribution can take time
+        if resp.status_code != 200:
+            print(f"❌ Remote error: {resp.text[:200]}")
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        return resp.json()
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Connection error: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "remote_url": CONFIG["remote_url"]}
