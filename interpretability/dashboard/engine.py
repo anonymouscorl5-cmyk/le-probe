@@ -12,7 +12,7 @@ import time
 import torch.nn as nn
 
 # LeWM / LeRobot Imports
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lewm.lewm_data_plugin import LEWMDataPlugin
 from lewm.goal_mapper import GoalMapper
 from interpretability.transcoders.universal_transcoder import Transcoder
 
@@ -141,8 +141,9 @@ class LeWMAttributor:
                 # We need the underlying activation to feed into the transcoder
                 val = output[0] if isinstance(output, tuple) else output
                 # Transcode and capture latents
-                with torch.no_grad():
-                    self.activations[lid] = self.transcoders[lid].encode(val)
+                # Use 'forward' as Transcoder doesn't have 'encode'
+                res = self.transcoders[lid](val)
+                self.activations[lid] = res["activations"].detach()
 
             def backward_hook(module, grad_input, grad_output, lid=layer_id):
                 # Captured gradient of the layer activation
@@ -251,12 +252,17 @@ class LeWMAttributor:
         feature_nodes = []
         for lid, act in self.activations.items():
             grad = self.gradients.get(lid)
-            if grad is None:
-                continue
+            # Project layer gradient to feature space using decoder weights
+            # grad: [B, T, D_model], decoder.weight: [D_model, D_dict]
+            # act: [B, T, D_dict]
+            with torch.no_grad():
+                W_dec = self.transcoders[lid].decoder.weight.data
+                # Projects D_model grad to D_dict space
+                feat_grad = torch.matmul(grad, W_dec)
 
-            # Attribution = Activation * Gradient
-            influence = (act * grad).view(-1)
-            top_vals, top_idx = torch.topk(influence.abs(), k=10)
+            # Attribution = Activation * Feature Gradient
+            influence = (act * feat_grad).view(-1)
+            top_vals, top_idx = torch.topk(influence.abs(), k=15)
 
             for v, i in zip(top_vals, top_idx):
                 i = int(i)
@@ -411,17 +417,13 @@ async def generate_graph(request: Dict[str, Any]):
 def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda"):
     print(f"🚀 Initializing Engine Resources | Device: {device}")
 
-    # 1. Dataset (Logic to prevent redownload)
-    repo_name = dataset_repo.split("/")[-1]
-    local_root = Path("dataset") / repo_name
-
-    if local_root.exists():
-        print(f"📦 Loading Dataset from local cache: {local_root}")
-        # LeRobotDataset expects the parent of the actual repo folder as 'root'
-        STATE["dataset"] = LeRobotDataset(dataset_repo, root=local_root.parent)
-    else:
-        print(f"📡 Local cache not found, downloading: {dataset_repo}")
-        STATE["dataset"] = LeRobotDataset(dataset_repo)
+    # 1. Dataset (High-Performance Direct Bypass)
+    print(f"🚀 Initializing LEWM Data Plugin for {dataset_repo}")
+    STATE["dataset"] = LEWMDataPlugin(
+        repo_id=dataset_repo,
+        keys_to_load=["pixels", "state", "action"],
+        num_steps=1,
+    )
 
     # 2. Model
     print(f"🧠 Loading LeWM Model: {model_path}")
