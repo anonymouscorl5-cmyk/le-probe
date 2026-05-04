@@ -274,9 +274,17 @@ async def generate_graph(request: Dict[str, Any]):
 def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda"):
     print(f"🚀 Initializing Engine Resources | Device: {device}")
 
-    # 1. Dataset
-    print(f"📦 Loading Dataset: {dataset_repo}")
-    STATE["dataset"] = LeRobotDataset(dataset_repo)
+    # 1. Dataset (Logic to prevent redownload)
+    repo_name = dataset_repo.split("/")[-1]
+    local_root = Path("dataset") / repo_name
+
+    if local_root.exists():
+        print(f"📦 Loading Dataset from local cache: {local_root}")
+        # LeRobotDataset expects the parent of the actual repo folder as 'root'
+        STATE["dataset"] = LeRobotDataset(dataset_repo, root=local_root.parent)
+    else:
+        print(f"📡 Local cache not found, downloading: {dataset_repo}")
+        STATE["dataset"] = LeRobotDataset(dataset_repo)
 
     # 2. Model
     print(f"🧠 Loading LeWM Model: {model_path}")
