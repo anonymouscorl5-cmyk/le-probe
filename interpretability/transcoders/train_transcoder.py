@@ -32,6 +32,7 @@ class StreamingActivationsDataset(Dataset):
 
         self.shape = tuple(self.meta["shape"])
         self.tokens_per_sample = self.meta.get("tokens_per_sample", 1)
+        # Load as float16 to save RAM and speed up transfer
         self.data = np.memmap(bin_path, dtype=np.float16, mode="r", shape=self.shape)
 
     def __len__(self):
@@ -45,7 +46,6 @@ class StreamingActivationsDataset(Dataset):
 class MultiLayerStreamingDataset(Dataset):
     """
     Synchronized dataset for multiple .bin activation files.
-    Concatenates layers along the feature dimension using vectorized indexing.
 
     Optimized for Crosscoder mode: Handles multiple file pointers and de-duplicates
     disk reads for overlapping source/target layers.
@@ -57,7 +57,8 @@ class MultiLayerStreamingDataset(Dataset):
         for i, layer in enumerate(layers):
             bin_path = os.path.join(source_dir, f"{layer}.bin")
             json_path = os.path.join(source_dir, f"{layer}.json")
-            self.datasets.append(StreamingActivationsDataset(bin_path, json_path))
+            ds = StreamingActivationsDataset(bin_path, json_path)
+            self.datasets.append(ds)
             self.layer_to_idx[layer] = i
 
         self.total_samples = len(self.datasets[0])
@@ -67,24 +68,13 @@ class MultiLayerStreamingDataset(Dataset):
     def __len__(self):
         return self.total_samples
 
-    def get_batch(self, indices, layers_to_extract=None):
+    def get_batch_raw(self, indices):
         """
-        Vectorized batch loading. If layers_to_extract is provided,
-        it only pulls and concatenates those specific layers.
-
-        Note: NumPy advanced indexing is significantly faster than Python loops.
+        Pull raw float16 tensors. ZERO COPY on CPU.
         """
-        acts = []
-        target_datasets = self.datasets
-        if layers_to_extract:
-            target_datasets = [
-                self.datasets[self.layer_to_idx[l]] for l in layers_to_extract
-            ]
-
-        for ds in target_datasets:
-            batch = torch.from_numpy(ds.data[indices].copy()).float()
-            acts.append(batch)
-        return torch.cat(acts, dim=-1)
+        # We don't use .copy() here to avoid CPU overhead.
+        # torch.from_numpy on a memmap is extremely fast.
+        return [torch.from_numpy(ds.data[indices]) for ds in self.datasets]
 
 
 def train_transcoder(
@@ -100,36 +90,39 @@ def train_transcoder(
 ):
     """
     Core training loop for SAEs and Crosscoders.
-
-    Arguments:
-        source_layers_str: Comma-separated list of layers for the input (e.g. 'L1')
-        target_layers_str: Comma-separated list of layers for reconstruction (e.g. 'L0,L1,L2')
+    Optimized for maximum GPU utilization and minimal CPU-to-GPU latency.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Master-Dataset Optimized Training | Device: {device}")
+    print(f"🚀 Bare-Metal Optimized Training | Device: {device}")
 
-    # Parse layer lists for multi-layer support
+    # Parse layer lists
     src_list = [s.strip() for s in source_layers_str.split(",")]
     tgt_list = [t.strip() for t in target_layers_str.split(",")]
 
-    # IDENTIFY ALL UNIQUE LAYERS TO AVOID REDUNDANT READS
-    unique_layers = []
-    for l in src_list + tgt_list:
-        if l not in unique_layers:
-            unique_layers.append(l)
+    # Identify unique layers to avoid redundant disk reads
+    # We sort them to ensure contiguous memory slices later
+    unique_layers = sorted(list(set(src_list + tgt_list)))
+    layer_to_pos = {l: i for i, l in enumerate(unique_layers)}
 
-    print(f"📦 Unique Layers in play: {unique_layers}")
-    print(f"🔗 Source: {src_list} ⮕ Target: {tgt_list}")
+    print(f"📦 Unique Layers: {unique_layers}")
+    print(f"🔗 {source_layers_str} ⮕ {target_layers_str}")
 
     # 1. Initialize Master Dataset
     master_ds = MultiLayerStreamingDataset(source_dir, unique_layers)
 
     # 2. Normalization Pass (Vectorized)
-    # Calculate running stats on a large subset to ensure stable training
     print("📈 Calculating Normalization Stats...")
     sample_size = min(len(master_ds), 500_000)
     indices = np.random.choice(len(master_ds), sample_size, replace=False)
-    src_subset = master_ds.get_batch(indices, layers_to_extract=src_list)
+
+    # Pull raw, move to GPU, then cast and mean
+    src_data = []
+    for l in src_list:
+        raw = torch.from_numpy(
+            master_ds.datasets[master_ds.layer_to_idx[l]].data[indices]
+        )
+        src_data.append(raw.to(device).float())
+    src_subset = torch.cat(src_data, dim=-1)
     mean_s, std_s = src_subset.mean(dim=0), src_subset.std(dim=0) + 1e-6
 
     # 3. Model Setup
@@ -148,7 +141,7 @@ def train_transcoder(
         indices = np.arange(num_tokens)
         np.random.shuffle(indices)
 
-        # Funnel check: Ensures we map Encoder Summary tokens to Predictor tokens correctly
+        # Funnel check for Encoder/Predictor alignment
         src_tokens = master_ds.datasets[
             master_ds.layer_to_idx[src_list[0]]
         ].tokens_per_sample
@@ -161,44 +154,46 @@ def train_transcoder(
         for i in pbar:
             batch_idx = indices[i : i + batch_size]
 
-            # Load only the unique layers once (The core I/O optimization)
-            full_batch = master_ds.get_batch(batch_idx).to(device)
+            # STEP 1: Pull float16 raw tensors from disk (Fastest I/O)
+            raw_tensors = master_ds.get_batch_raw(batch_idx)
 
-            # Slicing from the Master Batch instead of re-reading from disk
-            src_indices = []
-            for l in src_list:
-                idx = unique_layers.index(l)
-                start = idx * master_ds.d_model_per_layer
-                src_indices.append(
-                    torch.arange(start, start + master_ds.d_model_per_layer)
-                )
-            src_batch = full_batch[:, torch.cat(src_indices)]
+            # STEP 2: Move to GPU in float16 (Saves 50% PCIe bandwidth)
+            # STEP 3: Cast to float32 on the GPU (Saves massive CPU cycles)
+            gpu_tensors = [t.to(device, non_blocking=True).float() for t in raw_tensors]
 
-            # Center and scale to unit variance for stable training
-            s_batch_norm = (src_batch - mean_s.to(device)) / std_s.to(device)
+            # STEP 4: Construct batches using GPU-side slicing/cat
+            s_batch = torch.cat(
+                [gpu_tensors[layer_to_pos[l]] for l in src_list], dim=-1
+            )
+
+            # Center and scale
+            s_batch_norm = (s_batch - mean_s) / std_s
 
             if source_layers_str == target_layers_str:
                 t_batch_norm = s_batch_norm
             else:
                 if not is_funnel:
-                    # Optimized slice for target layers
-                    tgt_indices = []
-                    for l in tgt_list:
-                        idx = unique_layers.index(l)
-                        start = idx * master_ds.d_model_per_layer
-                        tgt_indices.append(
-                            torch.arange(start, start + master_ds.d_model_per_layer)
-                        )
-                    t_batch = full_batch[:, torch.cat(tgt_indices)]
+                    t_batch = torch.cat(
+                        [gpu_tensors[layer_to_pos[l]] for l in tgt_list], dim=-1
+                    )
                 else:
-                    # Funnel Logic (Requires a separate read for target due to index mapping)
-                    # We assume summary tokens (CLS) are at index 0 of every 257-token block
+                    # Funnel Logic (Summary token mapping)
                     src_idx_start = batch_idx // src_tokens
                     token_offset = batch_idx % src_tokens
                     tgt_batch_idx = src_idx_start * tgt_tokens + (token_offset // 257)
-                    t_batch = master_ds.get_batch(
-                        tgt_batch_idx, layers_to_extract=tgt_list
-                    ).to(device)
+
+                    # Targeted pull for non-aligned indices
+                    t_raw = [
+                        torch.from_numpy(
+                            master_ds.datasets[master_ds.layer_to_idx[l]].data[
+                                tgt_batch_idx
+                            ]
+                        )
+                        for l in tgt_list
+                    ]
+                    t_batch = torch.cat(
+                        [t.to(device, non_blocking=True).float() for t in t_raw], dim=-1
+                    )
 
                 t_batch_norm = t_batch
 
@@ -207,7 +202,7 @@ def train_transcoder(
             loss = res["loss"]
             loss.backward()
 
-            # Normalize decoder weights to unit norm (Critical for dictionary stability)
+            # Unit norm normalization
             model.normalize_decoder()
             optimizer.step()
 
@@ -220,7 +215,7 @@ def train_transcoder(
     print(f"💾 Saving to {output_path}")
     save_dict = {
         "state_dict": model.state_dict(),
-        "norm_stats": {"mean": mean_s, "std": std_s},
+        "norm_stats": {"mean": mean_s.cpu(), "std": std_s.cpu()},
         "meta": {
             "d_model": d_in,
             "d_output": d_out,
