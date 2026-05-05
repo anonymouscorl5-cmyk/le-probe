@@ -167,118 +167,123 @@ def train_transcoder(
         is_funnel = src_tokens != tgt_tokens
 
         # --- 🔥 BUFFERED TRAINING LOOP (SSD OPTIMIZED) ---
-        buffer_size = 512_000  # Load 512k tokens sequentially at a time
+        buffer_size = 512_000
         num_batches = (num_tokens + batch_size - 1) // batch_size
-        pbar = tqdm(total=num_batches, desc=f"Epoch {epoch+1}/{epochs}")
 
-        # We process the data in "Super-Blocks" to maintain sequential I/O
-        # Shuffle the super-blocks so epochs aren't identical
-        num_blocks = (num_tokens + buffer_size - 1) // buffer_size
-        block_starts = [i * buffer_size for i in range(num_blocks)]
-        np.random.shuffle(block_starts)
+        with tqdm(total=num_batches, desc=f"Epoch {epoch+1}/{epochs}") as pbar:
+            # Shuffle the super-blocks so epochs aren't identical
+            num_blocks = (num_tokens + buffer_size - 1) // buffer_size
+            block_starts = [j * buffer_size for j in range(num_blocks)]
+            np.random.shuffle(block_starts)
 
-        for block_start in block_starts:
-            block_end = min(block_start + buffer_size, num_tokens)
-            block_indices = np.arange(block_start, block_end)
+            for block_start in block_starts:
+                block_end = min(block_start + buffer_size, num_tokens)
+                block_indices = np.arange(block_start, block_end)
 
-            # 1. Sequential Read (FAST on SSD)
-            block_raw = master_ds.get_batch_raw(block_indices)
+                # 1. Sequential Read (FAST on SSD)
+                block_raw = master_ds.get_batch_raw(block_indices)
 
-            # 2. Local Shuffle in RAM
-            local_indices = np.arange(len(block_indices))
-            np.random.shuffle(local_indices)
+                # 2. Local Shuffle in RAM
+                local_indices = np.arange(len(block_indices))
+                np.random.shuffle(local_indices)
 
-            # 3. Yield batches from the shuffled buffer
-            for i in range(0, len(local_indices), batch_size):
-                batch_local_idx = local_indices[i : i + batch_size]
-                if len(batch_local_idx) < batch_size:
-                    continue
+                # 3. Yield batches from the shuffled buffer
+                for i in range(0, len(local_indices), batch_size):
+                    batch_local_idx = local_indices[i : i + batch_size]
+                    if len(batch_local_idx) < batch_size:
+                        continue
 
-                # Move to GPU and cast
-                gpu_tensors = [
-                    t[batch_local_idx].to(device, non_blocking=True).float()
-                    for t in block_raw
-                ]
+                    # Move to GPU and cast
+                    gpu_tensors = [
+                        t[batch_local_idx].to(device, non_blocking=True).float()
+                        for t in block_raw
+                    ]
 
-                # Source Batch
-                s_batch = torch.cat(
-                    [gpu_tensors[layer_to_pos[l]] for l in src_list], dim=-1
-                )
-                s_batch_norm = (s_batch - mean_s) / std_s
+                    # Source & Target Construction
+                    s_batch = torch.cat(
+                        [gpu_tensors[layer_to_pos[l]] for l in src_list], dim=-1
+                    )
+                    s_batch_norm = (s_batch - mean_s) / std_s
 
-                # Target Batch
-                if source_layers_str == target_layers_str:
-                    t_batch_norm = s_batch_norm
-                else:
-                    if not is_funnel:
-                        t_batch = torch.cat(
-                            [gpu_tensors[layer_to_pos[l]] for l in tgt_list], dim=-1
-                        )
-                        t_batch_norm = (t_batch - mean_t) / std_t
+                    if source_layers_str == target_layers_str:
+                        t_batch_norm = s_batch_norm
                     else:
-                        # Funnel Logic (Summary token mapping)
-                        global_idx = block_indices[batch_local_idx]
-                        src_idx_start = global_idx // src_tokens
-                        token_offset = global_idx % src_tokens
-                        tgt_batch_idx = src_idx_start * tgt_tokens + (
-                            token_offset // 257
-                        )
-
-                        t_raw = [
-                            torch.from_numpy(
-                                master_ds.datasets[master_ds.layer_to_idx[l]].data[
-                                    tgt_batch_idx
-                                ]
+                        if not is_funnel:
+                            t_batch = torch.cat(
+                                [gpu_tensors[layer_to_pos[l]] for l in tgt_list], dim=-1
                             )
-                            for l in tgt_list
-                        ]
-                        t_batch = torch.cat(
-                            [t.to(device, non_blocking=True).float() for t in t_raw],
-                            dim=-1,
-                        )
-                        t_batch_norm = (t_batch - mean_t) / std_t
+                            t_batch_norm = (t_batch - mean_t) / std_t
+                        else:
+                            # Funnel Logic
+                            global_idx = block_indices[batch_local_idx]
+                            src_idx_start = global_idx // src_tokens
+                            token_offset = global_idx % src_tokens
+                            tgt_batch_idx = src_idx_start * tgt_tokens + (
+                                token_offset // 257
+                            )
+                            t_raw = [
+                                torch.from_numpy(
+                                    master_ds.datasets[master_ds.layer_to_idx[l]].data[
+                                        tgt_batch_idx
+                                    ]
+                                )
+                                for l in tgt_list
+                            ]
+                            t_batch = torch.cat(
+                                [
+                                    t.to(device, non_blocking=True).float()
+                                    for t in t_raw
+                                ],
+                                dim=-1,
+                            )
+                            t_batch_norm = (t_batch - mean_t) / std_t
 
-                # Forward pass
-                optimizer.zero_grad()
-                res = model(s_batch_norm, t_batch_norm)
-                loss = res["loss"]
+                    # Forward/Backward
+                    optimizer.zero_grad()
+                    res = model(s_batch_norm, t_batch_norm)
+                    loss = res["loss"]
+                    loss.backward()
+                    optimizer.step()
+                    model.normalize_decoder()
 
-                loss.backward()
-                optimizer.step()
-                model.normalize_decoder()
+                    # Metrics (Original 100-batch throttle)
+                    pbar.update(1)
+                    if pbar.n % 100 == 0:
+                        with torch.no_grad():
+                            if "activations" in res:
+                                has_activated |= res["activations"].sum(dim=0) > 0
 
-                # Metrics update (Throttle logging to save console bandwidth)
-                if i % (batch_size * 2) == 0:
-                    with torch.no_grad():
-                        if "activations" in res:
-                            has_activated |= res["activations"].sum(dim=0) > 0
+                            mse_total = res["l2_loss"].item()
+                            ev_total = 1 - (mse_total / 1.0)
+                            l0 = (
+                                (res["activations"] > 0)
+                                .float()
+                                .sum(dim=1)
+                                .mean()
+                                .item()
+                                if "activations" in res
+                                else 0
+                            )
 
-                        mse_total = res["l2_loss"].item()
-                        ev_total = 1 - (mse_total / 1.0)
-                        l0 = (
-                            (res["activations"] > 0).float().sum(dim=1).mean().item()
-                            if "activations" in res
-                            else 0
-                        )
+                            audit_str = ""
+                            for j, layer_name in enumerate(tgt_list):
+                                start = j * master_ds.d_model_per_layer
+                                end = (j + 1) * master_ds.d_model_per_layer
+                                l_hat = res["output"][:, start:end]
+                                l_target = t_batch_norm[:, start:end]
+                                l_mse = torch.nn.functional.mse_loss(
+                                    l_hat, l_target
+                                ).item()
+                                audit_str += f"{layer_name.split('_')[-1]}:{l_mse:.3f} "
 
-                        audit_str = ""
-                        for j, layer_name in enumerate(tgt_list):
-                            start = j * master_ds.d_model_per_layer
-                            end = (j + 1) * master_ds.d_model_per_layer
-                            l_hat = res["output"][:, start:end]
-                            l_target = t_batch_norm[:, start:end]
-                            l_mse = torch.nn.functional.mse_loss(l_hat, l_target).item()
-                            audit_str += f"{layer_name.split('_')[-1]}:{l_mse:.3f} "
-
-                        pbar.set_postfix(
-                            {
-                                "ev": f"{ev_total*100:.1f}%",
-                                "l0": f"{l0:.1f}",
-                                "dead": f"{(~has_activated).sum().item()}",
-                                "audit": f"[{audit_str.strip()}]",
-                            }
-                        )
-                pbar.update(1)
+                            pbar.set_postfix(
+                                {
+                                    "ev": f"{ev_total*100:.1f}%",
+                                    "l0": f"{l0:.1f}",
+                                    "dead": f"{(~has_activated).sum().item()}",
+                                    "audit": f"[{audit_str.strip()}]",
+                                }
+                            )
 
     # 5. Save Model
     print(f"💾 Saving to {output_path}")
