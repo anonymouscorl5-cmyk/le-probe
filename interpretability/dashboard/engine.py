@@ -114,6 +114,7 @@ async def get_frame(idx: int):
         return Response(content=buffer.tobytes(), media_type="image/jpeg")
 
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -391,6 +392,7 @@ class LeWMAttributor:
                 with torch.no_grad():
                     # 1. Multi-Layer Gradient Aggregation (Crosscoder Support)
                     num_target_layers = tc.d_output // tc.d_model
+                    start_idx = -1
                     if num_target_layers > 1:
                         # Find window of layers predicted by this crosscoder
                         curr_idx = layer_order.index(lid)
@@ -459,6 +461,7 @@ class LeWMAttributor:
                         "clerp": f"F{feat_idx} ({lid})",
                         "influence": float(v),
                         "_raw_act": act_val,
+                        "_start_idx": start_idx if num_target_layers > 1 else -1,
                     }
                     clt_nodes.append(node)
                     layer_to_nodes[stream_idx].append(node)
@@ -513,6 +516,32 @@ class LeWMAttributor:
                                     W_enc_curr = self.transcoders[lid_curr][
                                         "model"
                                     ].encoder.weight.data[f_idx_curr]
+
+                                    # Multi-Layer Alignment: Extract correct slice
+                                    if W_dec_prev.shape[0] > W_enc_curr.shape[0]:
+                                        s_idx_prev = pn.get("_start_idx", -1)
+                                        if s_idx_prev != -1:
+                                            # Relative offset of target layer within source's prediction window
+                                            rel_idx = next_idx - (s_idx_prev + 1)
+                                            d_model = W_enc_curr.shape[0]
+                                            if (
+                                                0
+                                                <= rel_idx
+                                                < (W_dec_prev.shape[0] // d_model)
+                                            ):
+                                                W_dec_prev = W_dec_prev[
+                                                    rel_idx
+                                                    * d_model : (rel_idx + 1)
+                                                    * d_model
+                                                ]
+                                            else:
+                                                # Outside window
+                                                continue
+                                        else:
+                                            # Fallback: take first slice
+                                            W_dec_prev = W_dec_prev[
+                                                : W_enc_curr.shape[0]
+                                            ]
 
                                     cos_sim = torch.dot(W_dec_prev, W_enc_curr)
                                     link_w = float(
