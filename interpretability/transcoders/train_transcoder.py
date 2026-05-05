@@ -157,7 +157,6 @@ def train_transcoder(
         num_tokens = len(master_ds)
 
         # Funnel check for Encoder/Predictor alignment
-
         src_tokens = master_ds.datasets[
             master_ds.layer_to_idx[src_list[0]]
         ].tokens_per_sample
@@ -166,40 +165,54 @@ def train_transcoder(
         ].tokens_per_sample
         is_funnel = src_tokens != tgt_tokens
 
-        # --- 🔥 BUFFERED TRAINING LOOP (SSD OPTIMIZED) ---
-        buffer_size = 512_000
+        # --- 🚀 ASYNCHRONOUS PREFETCHER (MAX THROUGHPUT) ---
+        import threading
+        import queue
+
+        buffer_size = 1_000_000
         num_batches = (num_tokens + batch_size - 1) // batch_size
+        num_blocks = (num_tokens + buffer_size - 1) // buffer_size
+        prefetch_queue = queue.Queue(maxsize=1)
+
+        def prefetch_worker(starts):
+            for b_start in starts:
+                b_end = min(b_start + buffer_size, num_tokens)
+                b_indices = np.arange(b_start, b_end)
+                # 1. Sequential Disk Read (Fast on SSD)
+                b_raw = master_ds.get_batch_raw(b_indices)
+
+                # 2. Local RAM Shuffle (IID Quality)
+                l_indices = np.arange(len(b_indices))
+                np.random.shuffle(l_indices)
+
+                # 3. Buffer the block for the GPU
+                prefetch_queue.put((b_raw, l_indices, b_indices))
+            prefetch_queue.put(None)
 
         with tqdm(total=num_batches, desc=f"Epoch {epoch+1}/{epochs}") as pbar:
-            # Shuffle the super-blocks so epochs aren't identical
-            num_blocks = (num_tokens + buffer_size - 1) // buffer_size
             block_starts = [j * buffer_size for j in range(num_blocks)]
             np.random.shuffle(block_starts)
+            threading.Thread(
+                target=prefetch_worker, args=(block_starts,), daemon=True
+            ).start()
 
-            for block_start in block_starts:
-                block_end = min(block_start + buffer_size, num_tokens)
-                block_indices = np.arange(block_start, block_end)
+            while True:
+                data = prefetch_queue.get()
+                if data is None:
+                    break
+                block_raw, local_indices, block_indices = data
 
-                # 1. Sequential Read (FAST on SSD)
-                block_raw = master_ds.get_batch_raw(block_indices)
-
-                # 2. Local Shuffle in RAM
-                local_indices = np.arange(len(block_indices))
-                np.random.shuffle(local_indices)
-
-                # 3. Yield batches from the shuffled buffer
+                # Inner training loop: Process the shuffled buffer in GPU batches
                 for i in range(0, len(local_indices), batch_size):
                     batch_local_idx = local_indices[i : i + batch_size]
                     if len(batch_local_idx) < batch_size:
                         continue
 
-                    # Move to GPU and cast
+                    # Move batch to GPU and cast to float32
                     gpu_tensors = [
                         t[batch_local_idx].to(device, non_blocking=True).float()
                         for t in block_raw
                     ]
-
-                    # Source & Target Construction
                     s_batch = torch.cat(
                         [gpu_tensors[layer_to_pos[l]] for l in src_list], dim=-1
                     )
@@ -214,7 +227,6 @@ def train_transcoder(
                             )
                             t_batch_norm = (t_batch - mean_t) / std_t
                         else:
-                            # Funnel Logic
                             global_idx = block_indices[batch_local_idx]
                             src_idx_start = global_idx // src_tokens
                             token_offset = global_idx % src_tokens
@@ -238,21 +250,17 @@ def train_transcoder(
                             )
                             t_batch_norm = (t_batch - mean_t) / std_t
 
-                    # Forward/Backward
                     optimizer.zero_grad()
                     res = model(s_batch_norm, t_batch_norm)
-                    loss = res["loss"]
-                    loss.backward()
+                    res["loss"].backward()
                     optimizer.step()
                     model.normalize_decoder()
 
-                    # Metrics (Original 100-batch throttle)
                     pbar.update(1)
                     if pbar.n % 100 == 0:
                         with torch.no_grad():
                             if "activations" in res:
                                 has_activated |= res["activations"].sum(dim=0) > 0
-
                             mse_total = res["l2_loss"].item()
                             ev_total = 1 - (mse_total / 1.0)
                             l0 = (
@@ -264,15 +272,13 @@ def train_transcoder(
                                 if "activations" in res
                                 else 0
                             )
-
                             audit_str = ""
                             for j, layer_name in enumerate(tgt_list):
                                 start = j * master_ds.d_model_per_layer
                                 end = (j + 1) * master_ds.d_model_per_layer
-                                l_hat = res["output"][:, start:end]
-                                l_target = t_batch_norm[:, start:end]
                                 l_mse = torch.nn.functional.mse_loss(
-                                    l_hat, l_target
+                                    res["output"][:, start:end],
+                                    t_batch_norm[:, start:end],
                                 ).item()
                                 audit_str += f"{layer_name.split('_')[-1]}:{l_mse:.3f} "
 
