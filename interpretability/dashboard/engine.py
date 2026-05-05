@@ -136,14 +136,23 @@ class LeWMAttributor:
 
     def _register_hooks(self):
         """Registers forward and backward hooks to capture SAE latents and their gradients."""
-        for layer_id, tc in self.transcoders.items():
+        for layer_id, tc_data in self.transcoders.items():
+            tc = tc_data["model"]
+            stats = tc_data["stats"]
 
-            def forward_hook(module, input, output, lid=layer_id):
-                # We need the underlying activation to feed into the transcoder
+            def forward_hook(
+                module, input, output, lid=layer_id, model=tc, s_stats=stats
+            ):
+                # 1. Capture raw layer activation
                 val = output[0] if isinstance(output, tuple) else output
-                # Transcode and capture latents
-                # Use 'forward' as Transcoder doesn't have 'encode'
-                res = self.transcoders[lid](val)
+
+                # 2. Apply Source Normalization (Matching train_transcoder.py)
+                mean_s = s_stats["mean"].to(val.device)
+                std_s = s_stats["std"].to(val.device)
+                val_norm = (val - mean_s) / std_s
+
+                # 3. Transcode and capture latents
+                res = model(val_norm, val_norm)  # t_batch not used in forward/encode
                 self.activations[lid] = res["activations"].detach()
 
             def backward_hook(module, grad_input, grad_output, lid=layer_id):
@@ -152,7 +161,6 @@ class LeWMAttributor:
                 self.gradients[lid] = g
 
             # Find the actual module in LeWM (Encoder/Predictor)
-            # This logic must match harvest_activations.py's discovery
             target_module = self._find_module(layer_id)
             if target_module:
                 h_f = target_module.register_forward_hook(forward_hook)
@@ -336,8 +344,12 @@ class LeWMAttributor:
         for lid in layer_order:
             act = self.activations.get(lid)
             grad = self.gradients.get(lid)
-            if act is None or grad is None:
+            tc_data = self.transcoders.get(lid)
+            if act is None or grad is None or tc_data is None:
                 continue
+
+            tc = tc_data["model"]
+            stats = tc_data["stats"]
 
             try:
                 comp, l_idx = lid.split("_L")
@@ -355,13 +367,16 @@ class LeWMAttributor:
             layer_to_nodes[stream_idx] = []
 
             with torch.no_grad():
-                W_dec = self.transcoders[lid].decoder.weight.data  # [D_dict, D_model]
-                feat_grad = torch.matmul(grad, W_dec)  # [T, D_dict]
+                # Decoder weights reconstruct the NORMALIZED target
+                W_dec = tc.decoder.weight.data  # [D_dict, D_model]
+                # Calculate feature influence: Grad * Act
+                # We need to account for the normalization scale in the gradient
+                # Since target_norm = (target - mean) / std, then d_loss/d_target_norm = d_loss/d_target * std
+                std_t = stats["tgt_std"].to(grad.device)
+                scaled_grad = grad * std_t  # Chain rule for normalization
+                feat_grad = torch.matmul(scaled_grad, W_dec.T)  # [T, D_dict]
 
-            # act: [1, T, D_dict] where T is patches (encoder) or tokens (predictor)
-            # Aggregate influence over the entire spatial/temporal dimension
             influence_per_feat = (act * feat_grad).sum(dim=1).view(-1)
-            # Take max activation across tokens for the raw activation value
             max_act_per_feat = act.max(dim=1).values.view(-1)
 
             top_vals, top_idx = torch.topk(influence_per_feat.abs(), k=15)
@@ -600,9 +615,10 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
             layer_id = path.stem.split("_clt")[0].split("_sae")[0]
 
             t0 = time.time()
-            # 1. Load checkpoint
+            # 1. Load checkpoint (Include Norm Stats)
             checkpoint = torch.load(path, map_location="cpu")
             state_dict = checkpoint["state_dict"]
+            norm_stats = checkpoint.get("norm_stats", {})
             t_load = time.time() - t0
 
             # 2. Extract dimensions
@@ -622,7 +638,9 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
             # 5. Load weights
             t3 = time.time()
             tc.load_state_dict(state_dict)
-            STATE["transcoders"][layer_id] = tc.eval()
+
+            # Store Model + Stats for Normalization-Aware Attribution
+            STATE["transcoders"][layer_id] = {"model": tc.eval(), "stats": norm_stats}
             t_sd = time.time() - t3
 
             if d_output > d_model:
@@ -632,7 +650,7 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
 
             total = time.time() - t0
             print(
-                f"  ✅ Linked: {layer_id:15} | Total: {total:.2f}s (Load: {t_load:.2f}s, Init: {t_init:.2f}s, Dev: {t_dev:.2f}s, SD: {t_sd:.2f}s)"
+                f"  ✅ Linked: {layer_id:15} | Total: {total:.2f}s (Stats: {'Yes' if 'mean' in norm_stats else 'No'})"
             )
     else:
         print(f"⚠️ Warning: Transcoder directory {transcoder_dir} not found.")
