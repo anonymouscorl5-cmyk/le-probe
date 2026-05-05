@@ -289,7 +289,7 @@ class LeWMAttributor:
             node = {
                 "node_id": node_id,
                 "feature": idx,
-                "layer": "0",
+                "layer": "E",
                 "ctx_idx": 0,
                 "feature_type": "patch",
                 "token_prob": 1.0,
@@ -312,7 +312,7 @@ class LeWMAttributor:
             node = {
                 "node_id": node_id,
                 "feature": idx,
-                "layer": "0",
+                "layer": "E",
                 "ctx_idx": 0,
                 "feature_type": "state",
                 "token_prob": 1.0,
@@ -344,10 +344,10 @@ class LeWMAttributor:
                 l_idx = int(l_idx)
                 if comp == "encoder":
                     stream_idx = l_idx + 1
-                    layer_val = str(l_idx + 1)
+                    layer_val = str(l_idx)
                 else:  # predictor
                     stream_idx = l_idx + 1 + num_enc
-                    layer_val = str(l_idx + 1 + num_enc)
+                    layer_val = str(l_idx + num_enc)
             except:
                 stream_idx = 1
                 layer_val = "1"
@@ -358,15 +358,20 @@ class LeWMAttributor:
                 W_dec = self.transcoders[lid].decoder.weight.data  # [D_dict, D_model]
                 feat_grad = torch.matmul(grad, W_dec)  # [T, D_dict]
 
-            D_dict = act.shape[-1]
-            influence = (act * feat_grad).view(-1)
-            top_vals, top_idx = torch.topk(influence.abs(), k=15)
+            # act: [1, T, D_dict] where T is patches (encoder) or tokens (predictor)
+            # Aggregate influence over the entire spatial/temporal dimension
+            influence_per_feat = (act * feat_grad).sum(dim=1).view(-1)
+            # Take max activation across tokens for the raw activation value
+            max_act_per_feat = act.max(dim=1).values.view(-1)
 
-            for v, i in zip(top_vals, top_idx):
-                i = int(i)
-                token_idx, feat_idx = divmod(i, D_dict)
+            top_vals, top_idx = torch.topk(influence_per_feat.abs(), k=15)
+
+            for v, feat_idx in zip(top_vals, top_idx):
+                feat_idx = int(feat_idx)
+                # Force ctx_idx to 0 to cluster all features vertically on the left
+                token_idx = 0
                 node_id = f"feat_{lid}_{feat_idx}"
-                act_val = float(act.view(-1)[i])
+                act_val = float(max_act_per_feat[feat_idx])
 
                 node = {
                     "node_id": node_id,
@@ -394,58 +399,52 @@ class LeWMAttributor:
             if not curr_nodes or not prev_nodes:
                 continue
 
-            # Simple heuristic for Inputs -> Layer 1
-            if s_idx == 0:
-                for pn in prev_nodes:
-                    for cn in curr_nodes[:5]:  # Link to top 5 features
-                        clt_links.append(
-                            {
-                                "source": pn["node_id"],
-                                "target": cn["node_id"],
-                                "weight": pn["influence"] * cn["influence"],
-                            }
-                        )
-                continue
-
-            # Feature-to-Feature or Feature-to-Logit
             for cn in curr_nodes:
                 for pn in prev_nodes:
-                    # If cn is logit, link from top features of last predictor layer
                     if cn["feature_type"] == "logit":
                         if cn["layer"] == str(total_layers + 1) and pn.get(
                             "layer"
                         ) == str(total_layers):
-                            # We already have global influence, use it
+                            # Global influence for final action
                             clt_links.append(
                                 {
                                     "source": pn["node_id"],
                                     "target": cn["node_id"],
-                                    "weight": pn["influence"],
+                                    "weight": abs(pn["influence"]),
                                 }
                             )
                     else:
-                        # Pairwise attribution using weight product
-                        # pn is feature at lid_prev, cn is feature at lid_curr
                         try:
-                            lid_curr = cn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
-                            lid_prev = pn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
+                            # 1. Handle Input -> Feature links
+                            if pn["feature_type"] in ["patch", "state"]:
+                                # Heuristic: combine raw influence
+                                link_w = abs(pn["influence"] * cn["influence"])
+                            else:
+                                # 2. Handle Feature -> Feature links
+                                lid_curr = (
+                                    cn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
+                                )
+                                lid_prev = (
+                                    pn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
+                                )
 
-                            f_idx_curr = int(cn["feature"])
-                            f_idx_prev = int(pn["feature"])
+                                f_idx_curr = int(cn["feature"])
+                                f_idx_prev = int(pn["feature"])
 
-                            W_dec_prev = self.transcoders[lid_prev].decoder.weight.data[
-                                f_idx_prev
-                            ]
-                            W_enc_curr = self.transcoders[lid_curr].encoder.weight.data[
-                                f_idx_curr
-                            ]
+                                W_dec_prev = self.transcoders[
+                                    lid_prev
+                                ].decoder.weight.data[:, f_idx_prev]
+                                W_enc_curr = self.transcoders[
+                                    lid_curr
+                                ].encoder.weight.data[f_idx_curr]
 
-                            cos_sim = torch.dot(W_dec_prev, W_enc_curr)
-                            link_w = float(
-                                abs(cos_sim) * cn["_raw_act"] * pn["_raw_act"]
-                            )
+                                # Connectivity * Source Activation * Target Influence (Grad)
+                                cos_sim = torch.dot(W_dec_prev, W_enc_curr)
+                                link_w = float(
+                                    abs(cos_sim) * pn["_raw_act"] * abs(cn["influence"])
+                                )
 
-                            if link_w > 0.01:  # Threshold for clutter
+                            if link_w > 0.001:
                                 clt_links.append(
                                     {
                                         "source": pn["node_id"],
@@ -454,14 +453,7 @@ class LeWMAttributor:
                                     }
                                 )
                         except:
-                            # Fallback to simple link if parsing fails
-                            clt_links.append(
-                                {
-                                    "source": pn["node_id"],
-                                    "target": cn["node_id"],
-                                    "weight": 0.1,
-                                }
-                            )
+                            continue
 
         # Cleanup hooks
         self._cleanup_hooks()
@@ -615,10 +607,11 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
 
             # 2. Extract dimensions
             d_dict, d_model = state_dict["encoder.weight"].shape
+            d_output = state_dict["decoder.weight"].shape[0]
 
             # 3. Initialize Transcoder
             t1 = time.time()
-            tc = Transcoder(d_model, d_dict)
+            tc = Transcoder(d_model, d_dict, d_output=d_output)
             t_init = time.time() - t1
 
             # 4. Move to Device
@@ -631,6 +624,11 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
             tc.load_state_dict(state_dict)
             STATE["transcoders"][layer_id] = tc.eval()
             t_sd = time.time() - t3
+
+            if d_output > d_model:
+                print(
+                    f"  🔗 Info: {layer_id} is a Multi-Layer Crosscoder (d_output={d_output})"
+                )
 
             total = time.time() - t0
             print(
