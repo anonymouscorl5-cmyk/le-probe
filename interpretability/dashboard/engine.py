@@ -217,37 +217,56 @@ class LeWMAttributor:
             state = state_base.unsqueeze(0)
         state.requires_grad_(True)
 
-        # 2. Forward Pass
-        # Pixels are already 4D [B*T, C, H, W]
-        # State is already 2D [B*T, D]
-        print(f"DEBUG: Input Pixels Shape: {pixels.shape}")
+        # 3. Integrated Gradients Pass (Path Integral)
+        print(f"📈 Computing Integrated Gradients ({steps} steps)...")
 
-        # 1. Vision Encoding (Directly on 4D)
-        output = self.model.encoder(pixels, interpolate_pos_encoding=True)
-        pixels_emb = output.last_hidden_state[:, 0]  # CLS token
-        emb_flat = self.model.projector(pixels_emb)
+        total_pixel_grad = torch.zeros_like(pixels)
+        total_state_grad = torch.zeros_like(state)
 
-        # 2. Unfold to [1, T, D] for the sequence-aware Predictor
-        # We assume Batch=1 for attribution
-        T_seq = pixels.shape[0]
-        emb = emb_flat.view(1, T_seq, -1)
+        # Accumulators for transcoder gradients
+        total_trans_grads = {lid: 0 for lid in self.transcoders.keys()}
 
-        # 3. Action Encoding
-        # action_encoder expects [B, T, D]
-        state_3d = state.view(1, T_seq, -1)
-        act_emb = self.model.action_encoder(state_3d)
+        for step in range(steps):
+            # Linearly interpolate between baseline (zeros) and input
+            alpha = (step + 1) / steps
+            curr_pixels = pixels * alpha
+            curr_state = state * alpha
 
-        print(f"DEBUG: Manually Encoded Emb Shape: {emb.shape}")
+            curr_pixels.requires_grad_(True)
+            curr_state.requires_grad_(True)
 
-        # 4. Predict next state logits
-        logits = self.model.predict(emb, act_emb)
-        print(f"DEBUG: Logits Shape: {logits.shape}")
+            # --- Forward Pass ---
+            output = self.model.encoder(curr_pixels, interpolate_pos_encoding=True)
+            pixels_emb = output.last_hidden_state[:, 0]
+            emb_flat = self.model.projector(pixels_emb)
 
-        # Target: Final action step, specific logit
-        target = logits[0, -1, target_logit_idx]
+            T_seq = curr_pixels.shape[0]
+            emb = emb_flat.view(1, T_seq, -1)
+            state_3d = curr_state.view(1, T_seq, -1)
+            act_emb = self.model.action_encoder(state_3d)
 
-        # 3. Backward Pass (Causal Trace)
-        target.backward()
+            logits = self.model.predict(emb, act_emb)
+            target = logits[0, -1, target_logit_idx]
+
+            # --- Backward Pass ---
+            self.model.zero_grad()
+            target.backward()
+
+            # Accumulate gradients
+            total_pixel_grad += curr_pixels.grad.detach()
+            total_state_grad += curr_state.grad.detach()
+
+            for lid in self.transcoders.keys():
+                if lid in self.gradients:
+                    total_trans_grads[lid] += self.gradients[lid].detach()
+
+        # Final IG: (Input - Baseline) * Average Gradient
+        pixel_grad = (total_pixel_grad / steps) * pixels
+        state_grad = (total_state_grad / steps) * state
+
+        # Update self.gradients with the averaged path gradients for features
+        for lid in self.transcoders.keys():
+            self.gradients[lid] = total_trans_grads[lid] / steps
 
         # Capture Input Saliency
         pixel_grad = pixels.grad.detach().cpu()
@@ -407,35 +426,35 @@ class LeWMAttributor:
                 clt_nodes.append(node)
                 layer_to_nodes[stream_idx].append(node)
 
-        # D. Build Causal Links (Path Tracing)
-        for s_idx in range(total_layers + 1):
-            curr_nodes = layer_to_nodes.get(s_idx + 1)
-            prev_nodes = layer_to_nodes.get(s_idx)
-            if not curr_nodes or not prev_nodes:
+        # D. Build Causal Links (Global Jump Connections)
+        print("🔗 Tracing Global Jump Connections...")
+        # We compare every layer to every FUTURE layer to find skip connections
+        for s_idx in range(total_layers + 2):
+            curr_nodes = layer_to_nodes.get(s_idx)
+            if not curr_nodes:
                 continue
 
-            for cn in curr_nodes:
-                for pn in prev_nodes:
-                    if cn["feature_type"] == "logit":
-                        if cn["layer"] == str(total_layers + 1) and pn.get(
-                            "layer"
-                        ) == str(total_layers):
-                            # Global influence for final action
-                            clt_links.append(
-                                {
-                                    "source": pn["node_id"],
-                                    "target": cn["node_id"],
-                                    "weight": abs(pn["influence"]),
-                                }
-                            )
-                    else:
+            # Look at every future layer
+            for next_idx in range(s_idx + 1, total_layers + 2):
+                next_nodes = layer_to_nodes.get(next_idx)
+                if not next_nodes:
+                    continue
+
+                for cn in next_nodes:
+                    for pn in curr_nodes:
                         try:
-                            # 1. Handle Input -> Feature links
+                            # 1. Input -> Feature links
                             if pn["feature_type"] in ["patch", "state"]:
                                 # Heuristic: combine raw influence
                                 link_w = abs(pn["influence"] * cn["influence"])
+
+                            # 2. Feature -> Logit links
+                            elif cn["feature_type"] == "logit":
+                                # Global influence for final action
+                                link_w = abs(pn["influence"])
+
+                            # 3. Feature -> Feature links (THE JUMP MECHANISM)
                             else:
-                                # 2. Handle Feature -> Feature links
                                 lid_curr = (
                                     cn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
                                 )
@@ -446,20 +465,21 @@ class LeWMAttributor:
                                 f_idx_curr = int(cn["feature"])
                                 f_idx_prev = int(pn["feature"])
 
-                                W_dec_prev = self.transcoders[
-                                    lid_prev
+                                # Connectivity * Source Activation * Target Influence (Grad)
+                                W_dec_prev = self.transcoders[lid_prev][
+                                    "model"
                                 ].decoder.weight.data[:, f_idx_prev]
-                                W_enc_curr = self.transcoders[
-                                    lid_curr
+                                W_enc_curr = self.transcoders[lid_curr][
+                                    "model"
                                 ].encoder.weight.data[f_idx_curr]
 
-                                # Connectivity * Source Activation * Target Influence (Grad)
                                 cos_sim = torch.dot(W_dec_prev, W_enc_curr)
                                 link_w = float(
                                     abs(cos_sim) * pn["_raw_act"] * abs(cn["influence"])
                                 )
 
-                            if link_w > 0.001:
+                            # Threshold for visual clarity
+                            if link_w > 0.005:
                                 clt_links.append(
                                     {
                                         "source": pn["node_id"],
