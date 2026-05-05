@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 import uvicorn
 import time
 import torch.nn as nn
+import traceback
 
 # LeWM / LeRobot Imports
 from lewm.lewm_data_plugin import LEWMDataPlugin
@@ -147,12 +148,16 @@ class LeWMAttributor:
                 val = output[0] if isinstance(output, tuple) else output
 
                 # 2. Apply Source Normalization (Matching train_transcoder.py)
-                mean_s = s_stats["mean"].to(val.device)
-                std_s = s_stats["std"].to(val.device)
-                val_norm = (val - mean_s) / std_s
+                mean_s = s_stats.get(
+                    "src_mean", s_stats.get("mean", torch.zeros(1))
+                ).to(val.device)
+                std_s = s_stats.get("src_std", s_stats.get("std", torch.ones(1))).to(
+                    val.device
+                )
+                val_norm = (val - mean_s) / (std_s + 1e-6)
 
                 # 3. Transcode and capture latents
-                res = model(val_norm, val_norm)  # t_batch not used in forward/encode
+                res = model(val_norm)
                 self.activations[lid] = res["activations"].detach()
 
             def backward_hook(module, grad_input, grad_output, lid=layer_id):
@@ -181,344 +186,386 @@ class LeWMAttributor:
         """
         Runs attribution to find feature and input importance.
         """
-        self.activations.clear()
-        self.gradients.clear()
-        self._register_hooks()
+        try:
+            self.activations.clear()
+            self.gradients.clear()
+            self._register_hooks()
 
-        # 1. Setup Inputs with Gradient Tracking
-        pixel_key = (
-            "pixels" if "pixels" in sample else "observation.images.world_center"
-        )
-        raw_pixels = sample[pixel_key]  # [T, C, H, W]
+            # 1. Setup Inputs with Gradient Tracking
+            pixel_key = (
+                "pixels" if "pixels" in sample else "observation.images.world_center"
+            )
+            raw_pixels = sample[pixel_key]  # [T, C, H, W]
 
-        # Apply official preprocessor
-        processed = self.transform({"pixels": raw_pixels})
-        pixels_base = processed["pixels"].to(self.device).float().detach()
+            # Apply official preprocessor
+            processed = self.transform({"pixels": raw_pixels})
+            pixels_base = processed["pixels"].to(self.device).float().detach()
 
-        # FORCE 4D: [B*T, C, H, W]
-        # This is the key: we NEVER let the autograd graph see 5D
-        if pixels_base.ndim == 5:
-            pixels = pixels_base.view(-1, *pixels_base.shape[2:])
-        elif pixels_base.ndim == 4:
-            pixels = pixels_base
-        else:  # 3D
-            pixels = pixels_base.unsqueeze(0)
+            # FORCE 4D: [B*T, C, H, W]
+            # This is the key: we NEVER let the autograd graph see 5D
+            if pixels_base.ndim == 5:
+                pixels = pixels_base.view(-1, *pixels_base.shape[2:])
+            elif pixels_base.ndim == 4:
+                pixels = pixels_base
+            else:  # 3D
+                pixels = pixels_base.unsqueeze(0)
 
-        pixels.requires_grad_(True)
+            pixels.requires_grad_(True)
 
-        state_key = "action" if "action" in sample else "observation.state"
-        state_base = sample[state_key].to(self.device).float().detach()
-        # Ensure 2D: [B*T, D] for consistency
-        if state_base.ndim == 3:
-            state = state_base.view(-1, state_base.shape[-1])
-        elif state_base.ndim == 2:
-            state = state_base
-        else:
-            state = state_base.unsqueeze(0)
-        state.requires_grad_(True)
+            state_key = "action" if "action" in sample else "observation.state"
+            state_base = sample[state_key].to(self.device).float().detach()
+            # Ensure 2D: [B*T, D] for consistency
+            if state_base.ndim == 3:
+                state = state_base.view(-1, state_base.shape[-1])
+            elif state_base.ndim == 2:
+                state = state_base
+            else:
+                state = state_base.unsqueeze(0)
+            state.requires_grad_(True)
 
-        # 3. Integrated Gradients Pass (Path Integral)
-        print(f"📈 Computing Integrated Gradients ({steps} steps)...")
+            # 3. Integrated Gradients Pass (Path Integral)
+            print(f"📈 Computing Integrated Gradients ({steps} steps)...")
 
-        total_pixel_grad = torch.zeros_like(pixels)
-        total_state_grad = torch.zeros_like(state)
+            total_pixel_grad = torch.zeros_like(pixels)
+            total_state_grad = torch.zeros_like(state)
 
-        # Accumulators for transcoder gradients
-        total_trans_grads = {lid: 0 for lid in self.transcoders.keys()}
+            # Accumulators for transcoder gradients
+            total_trans_grads = {lid: 0 for lid in self.transcoders.keys()}
 
-        for step in range(steps):
-            # Linearly interpolate between baseline (zeros) and input
-            alpha = (step + 1) / steps
-            curr_pixels = pixels * alpha
-            curr_state = state * alpha
+            for step in range(steps):
+                # Linearly interpolate between baseline (zeros) and input
+                alpha = (step + 1) / steps
+                curr_pixels = (pixels.detach() * alpha).requires_grad_(True)
+                curr_state = (state.detach() * alpha).requires_grad_(True)
 
-            curr_pixels.requires_grad_(True)
-            curr_state.requires_grad_(True)
+                # --- Forward Pass ---
+                output = self.model.encoder(curr_pixels, interpolate_pos_encoding=True)
+                pixels_emb = output.last_hidden_state[:, 0]
+                emb_flat = self.model.projector(pixels_emb)
 
-            # --- Forward Pass ---
-            output = self.model.encoder(curr_pixels, interpolate_pos_encoding=True)
-            pixels_emb = output.last_hidden_state[:, 0]
-            emb_flat = self.model.projector(pixels_emb)
+                T_seq = curr_pixels.shape[0]
+                emb = emb_flat.view(1, T_seq, -1)
+                state_3d = curr_state.view(1, T_seq, -1)
+                act_emb = self.model.action_encoder(state_3d)
 
-            T_seq = curr_pixels.shape[0]
-            emb = emb_flat.view(1, T_seq, -1)
-            state_3d = curr_state.view(1, T_seq, -1)
-            act_emb = self.model.action_encoder(state_3d)
+                logits = self.model.predict(emb, act_emb)
+                target = logits[0, -1, target_logit_idx]
 
-            logits = self.model.predict(emb, act_emb)
-            target = logits[0, -1, target_logit_idx]
+                # --- Backward Pass ---
+                self.model.zero_grad()
+                target.backward()
 
-            # --- Backward Pass ---
-            self.model.zero_grad()
-            target.backward()
+                # Accumulate gradients
+                total_pixel_grad += curr_pixels.grad.detach()
+                total_state_grad += curr_state.grad.detach()
 
-            # Accumulate gradients
-            total_pixel_grad += curr_pixels.grad.detach()
-            total_state_grad += curr_state.grad.detach()
+                for lid in self.transcoders.keys():
+                    if lid in self.gradients:
+                        total_trans_grads[lid] += self.gradients[lid].detach()
 
+            # Final IG: (Input - Baseline) * Average Gradient
+            pixel_grad = (total_pixel_grad / steps) * pixels
+            state_grad = (total_state_grad / steps) * state
+
+            # Update self.gradients with the averaged path gradients for features
             for lid in self.transcoders.keys():
-                if lid in self.gradients:
-                    total_trans_grads[lid] += self.gradients[lid].detach()
+                self.gradients[lid] = total_trans_grads[lid] / steps
 
-        # Final IG: (Input - Baseline) * Average Gradient
-        pixel_grad = (total_pixel_grad / steps) * pixels
-        state_grad = (total_state_grad / steps) * state
+            # Capture Input Saliency
+            pixel_grad = pixel_grad.detach().cpu()
+            state_grad = state_grad.detach().cpu()
 
-        # Update self.gradients with the averaged path gradients for features
-        for lid in self.transcoders.keys():
-            self.gradients[lid] = total_trans_grads[lid] / steps
+            # 4. Build compliant CLTGraph structure
+            clt_nodes = []
+            clt_links = []
 
-        # Capture Input Saliency
-        pixel_grad = pixels.grad.detach().cpu()
-        state_grad = state.grad.detach().cpu()
+            num_enc = 12
+            num_pred = 6
+            total_layers = num_enc + num_pred
 
-        # 4. Build compliant CLTGraph structure
-        clt_nodes = []
-        clt_links = []
+            # Helper to track nodes for linking
+            layer_to_nodes = {}  # layer_idx -> [node_data, ...]
 
-        num_enc = 12
-        num_pred = 6
-        total_layers = num_enc + num_pred
-
-        # Helper to track nodes for linking
-        layer_to_nodes = {}  # layer_idx -> [node_data, ...]
-
-        # A. Add Logit Node
-        logit_id = "logit_0"
-        logit_prob = float(torch.sigmoid(target))
-        logit_node = {
-            "node_id": logit_id,
-            "feature": target_logit_idx,
-            "layer": str(total_layers + 1),
-            "ctx_idx": 0,
-            "feature_type": "logit",
-            "token_prob": logit_prob,
-            "logitPct": logit_prob,
-            "is_target_logit": True,
-            "run_idx": 0,
-            "reverse_ctx_idx": 0,
-            "jsNodeId": logit_id,
-            "streamIdx": total_layers + 1,
-            "clerp": f"Action {target_logit_idx} (p={logit_prob:.3f})",
-            "influence": float(target),
-        }
-        clt_nodes.append(logit_node)
-        layer_to_nodes[total_layers + 1] = [logit_node]
-
-        # B. Add Input Layer Nodes (Layer 0)
-        layer_to_nodes[0] = []
-        patch_saliency = self._aggregate_spatial_grad(pixel_grad)
-        top_patches = torch.topk(patch_saliency.view(-1), k=15)
-        for v, idx in zip(top_patches.values, top_patches.indices):
-            idx = int(idx)
-            row, col = divmod(idx, 16)
-            node_id = f"patch_{idx}"
-            node = {
-                "node_id": node_id,
-                "feature": idx,
-                "layer": "E",
+            # A. Add Logit Node
+            logit_id = "logit_0"
+            logit_prob = float(torch.sigmoid(target))
+            logit_node = {
+                "node_id": logit_id,
+                "feature": target_logit_idx,
+                "layer": str(total_layers + 1),
                 "ctx_idx": 0,
-                "feature_type": "patch",
-                "token_prob": 1.0,
-                "is_target_logit": False,
+                "feature_type": "logit",
+                "token_prob": logit_prob,
+                "logitPct": logit_prob,
+                "is_target_logit": True,
                 "run_idx": 0,
                 "reverse_ctx_idx": 0,
-                "jsNodeId": node_id,
-                "streamIdx": 0,
-                "clerp": f"Patch[{row},{col}]",
-                "influence": float(v),
+                "jsNodeId": logit_id,
+                "streamIdx": total_layers + 1,
+                "clerp": f"Action {target_logit_idx} (p={logit_prob:.3f})",
+                "influence": float(target),
             }
-            clt_nodes.append(node)
-            layer_to_nodes[0].append(node)
+            clt_nodes.append(logit_node)
+            layer_to_nodes[total_layers + 1] = [logit_node]
 
-        state_saliency = state_grad.abs().view(-1)
-        top_states = torch.topk(state_saliency, k=5)
-        for v, idx in zip(top_states.values, top_states.indices):
-            idx = int(idx)
-            node_id = f"state_{idx}"
-            node = {
-                "node_id": node_id,
-                "feature": idx,
-                "layer": "E",
-                "ctx_idx": 0,
-                "feature_type": "state",
-                "token_prob": 1.0,
-                "is_target_logit": False,
-                "run_idx": 0,
-                "reverse_ctx_idx": 0,
-                "jsNodeId": node_id,
-                "streamIdx": 0,
-                "clerp": self._get_state_label(idx),
-                "influence": float(v),
-            }
-            clt_nodes.append(node)
-            layer_to_nodes[0].append(node)
-
-        # C. Process Transcoder Features
-        # Order the layers properly
-        layer_order = [f"encoder_L{i}" for i in range(num_enc)] + [
-            f"predictor_L{i}" for i in range(num_pred)
-        ]
-
-        for lid in layer_order:
-            act = self.activations.get(lid)
-            grad = self.gradients.get(lid)
-            tc_data = self.transcoders.get(lid)
-            if act is None or grad is None or tc_data is None:
-                continue
-
-            tc = tc_data["model"]
-            stats = tc_data["stats"]
-
-            try:
-                comp, l_idx = lid.split("_L")
-                l_idx = int(l_idx)
-                if comp == "encoder":
-                    stream_idx = l_idx + 1
-                    layer_val = str(l_idx)
-                else:  # predictor
-                    stream_idx = l_idx + 1 + num_enc
-                    layer_val = str(l_idx + num_enc)
-            except:
-                stream_idx = 1
-                layer_val = "1"
-
-            layer_to_nodes[stream_idx] = []
-
-            with torch.no_grad():
-                # Decoder weights reconstruct the NORMALIZED target
-                W_dec = tc.decoder.weight.data  # [D_dict, D_model]
-                # Calculate feature influence: Grad * Act
-                # We need to account for the normalization scale in the gradient
-                # Since target_norm = (target - mean) / std, then d_loss/d_target_norm = d_loss/d_target * std
-                std_t = stats["tgt_std"].to(grad.device)
-                scaled_grad = grad * std_t  # Chain rule for normalization
-                feat_grad = torch.matmul(scaled_grad, W_dec.T)  # [T, D_dict]
-
-            influence_per_feat = (act * feat_grad).sum(dim=1).view(-1)
-            max_act_per_feat = act.max(dim=1).values.view(-1)
-
-            top_vals, top_idx = torch.topk(influence_per_feat.abs(), k=15)
-
-            for v, feat_idx in zip(top_vals, top_idx):
-                feat_idx = int(feat_idx)
-                # Force ctx_idx to 0 to cluster all features vertically on the left
-                token_idx = 0
-                node_id = f"feat_{lid}_{feat_idx}"
-                act_val = float(max_act_per_feat[feat_idx])
-
+            # B. Add Input Layer Nodes (Layer 0)
+            layer_to_nodes[0] = []
+            patch_saliency = self._aggregate_spatial_grad(pixel_grad)
+            top_patches = torch.topk(patch_saliency.view(-1), k=15)
+            for v, idx in zip(top_patches.values, top_patches.indices):
+                idx = int(idx)
+                row, col = divmod(idx, 16)
+                node_id = f"patch_{idx}"
                 node = {
                     "node_id": node_id,
-                    "feature": feat_idx,
-                    "layer": layer_val,
-                    "ctx_idx": token_idx,
-                    "feature_type": "feature",
-                    "token_prob": act_val,
+                    "feature": idx,
+                    "layer": "E",
+                    "ctx_idx": idx,
+                    "feature_type": "patch",
+                    "token_prob": 1.0,
                     "is_target_logit": False,
                     "run_idx": 0,
                     "reverse_ctx_idx": 0,
                     "jsNodeId": node_id,
-                    "streamIdx": stream_idx,
-                    "clerp": f"F{feat_idx} ({lid})",
+                    "streamIdx": 0,
+                    "clerp": f"Patch[{row},{col}]",
                     "influence": float(v),
-                    "_raw_act": act_val,
                 }
                 clt_nodes.append(node)
-                layer_to_nodes[stream_idx].append(node)
+                layer_to_nodes[0].append(node)
 
-        # D. Build Causal Links (Global Jump Connections)
-        print("🔗 Tracing Global Jump Connections...")
-        # We compare every layer to every FUTURE layer to find skip connections
-        for s_idx in range(total_layers + 2):
-            curr_nodes = layer_to_nodes.get(s_idx)
-            if not curr_nodes:
-                continue
+            state_saliency = state_grad.abs().view(-1)
+            top_states = torch.topk(state_saliency, k=5)
+            for v, idx in zip(top_states.values, top_states.indices):
+                idx = int(idx)
+                node_id = f"state_{idx}"
+                node = {
+                    "node_id": node_id,
+                    "feature": idx,
+                    "layer": "E",
+                    "ctx_idx": idx + 256,
+                    "feature_type": "state",
+                    "token_prob": 1.0,
+                    "is_target_logit": False,
+                    "run_idx": 0,
+                    "reverse_ctx_idx": 0,
+                    "jsNodeId": node_id,
+                    "streamIdx": 0,
+                    "clerp": self._get_state_label(idx),
+                    "influence": float(v),
+                }
+                clt_nodes.append(node)
+                layer_to_nodes[0].append(node)
 
-            # Look at every future layer
-            for next_idx in range(s_idx + 1, total_layers + 2):
-                next_nodes = layer_to_nodes.get(next_idx)
-                if not next_nodes:
+            # C. Process Transcoder Features
+            # Order the layers properly
+            layer_order = [f"encoder_L{i}" for i in range(num_enc)] + [
+                f"predictor_L{i}" for i in range(num_pred)
+            ]
+
+            for lid in layer_order:
+                act = self.activations.get(lid)
+                grad = self.gradients.get(lid)
+                tc_data = self.transcoders.get(lid)
+                if act is None or grad is None or tc_data is None:
                     continue
 
-                for cn in next_nodes:
-                    for pn in curr_nodes:
-                        try:
-                            # 1. Input -> Feature links
-                            if pn["feature_type"] in ["patch", "state"]:
-                                # Heuristic: combine raw influence
-                                link_w = abs(pn["influence"] * cn["influence"])
+                tc = tc_data["model"]
+                stats = tc_data["stats"]
 
-                            # 2. Feature -> Logit links
-                            elif cn["feature_type"] == "logit":
-                                # Global influence for final action
-                                link_w = abs(pn["influence"])
+                try:
+                    comp, l_idx_str = lid.split("_L")
+                    l_idx = int(l_idx_str.split("_")[0])
+                    if comp == "encoder":
+                        stream_idx = l_idx + 1
+                        layer_val = str(l_idx)
+                    else:  # predictor
+                        stream_idx = l_idx + 1 + num_enc
+                        layer_val = str(l_idx + num_enc)
+                except:
+                    stream_idx = 1
+                    layer_val = "1"
 
-                            # 3. Feature -> Feature links (THE JUMP MECHANISM)
+                layer_to_nodes[stream_idx] = []
+
+                with torch.no_grad():
+                    # 1. Multi-Layer Gradient Aggregation (Crosscoder Support)
+                    num_target_layers = tc.d_output // tc.d_model
+                    if num_target_layers > 1:
+                        # Find window of layers predicted by this crosscoder
+                        curr_idx = layer_order.index(lid)
+                        # Heuristic for residual window: L-1, L, L+1
+                        start_idx = max(0, curr_idx - 1)
+                        if curr_idx == 0:
+                            start_idx = 0
+
+                        window_ids = layer_order[
+                            start_idx : start_idx + num_target_layers
+                        ]
+                        grads_to_cat = []
+                        for wid in window_ids:
+                            g = self.gradients.get(wid)
+                            if g is not None:
+                                grads_to_cat.append(g)
                             else:
-                                lid_curr = (
-                                    cn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
-                                )
-                                lid_prev = (
-                                    pn["node_id"].split("feat_")[1].rsplit("_", 1)[0]
-                                )
+                                # Pad with zeros if gradient missing (e.g. at end of model)
+                                grads_to_cat.append(torch.zeros_like(grad))
 
-                                f_idx_curr = int(cn["feature"])
-                                f_idx_prev = int(pn["feature"])
+                        agg_grad = torch.cat(grads_to_cat, dim=-1)
+                    else:
+                        agg_grad = grad
 
-                                # Connectivity * Source Activation * Target Influence (Grad)
-                                W_dec_prev = self.transcoders[lid_prev][
-                                    "model"
-                                ].decoder.weight.data[:, f_idx_prev]
-                                W_enc_curr = self.transcoders[lid_curr][
-                                    "model"
-                                ].encoder.weight.data[f_idx_curr]
+                    # 2. Calculate feature influence: Grad * Act
+                    W_dec = tc.decoder.weight.data  # [D_dict, D_output]
+                    std_t = stats.get("tgt_std", stats.get("std", torch.ones(1))).to(
+                        agg_grad.device
+                    )
 
-                                cos_sim = torch.dot(W_dec_prev, W_enc_curr)
-                                link_w = float(
-                                    abs(cos_sim) * pn["_raw_act"] * abs(cn["influence"])
-                                )
+                    scaled_grad = agg_grad * std_t  # Chain rule for normalization
+                    feat_grad = torch.matmul(scaled_grad, W_dec)  # [T, D_dict]
 
-                            # Threshold for visual clarity
-                            if link_w > 0.005:
-                                clt_links.append(
-                                    {
-                                        "source": pn["node_id"],
-                                        "target": cn["node_id"],
-                                        "weight": link_w,
-                                    }
-                                )
-                        except:
-                            continue
+                    # 3. Use Transcoder Sparse Activations (already captured in forward_hook)
+                    sparse_acts = act
+                    if sparse_acts.ndim > 2:
+                        sparse_acts = sparse_acts.squeeze(0)
 
-        # Cleanup hooks
-        self._cleanup_hooks()
+                # Calculate total influence of each feature across all tokens
+                # sparse_acts: [T, D], feat_grad: [1, T, D]
+                influence_per_feat = (sparse_acts * feat_grad.squeeze(0)).sum(dim=0)
+                # Max activation across tokens for visual scaling
+                max_act_per_feat = sparse_acts.max(dim=0).values.view(-1)
 
-        # E. Final Graph structure
-        graph_data = {
-            "metadata": {
-                "slug": f"sample_{target_logit_idx}",
-                "scan": "lewm-robot",
-                "prompt_tokens": ["Robotic", "Frame"],
-                "prompt": f"Sample {target_logit_idx}",
-                "title_prefix": "Robotic Circuit",
-                "schema_version": 0,
-                "node_threshold": 99999,
-                "neuronpedia_internal_model": {
-                    "id": "lewm-robot",
-                    "displayName": "LeWM Robotic Model",
-                    "layers": total_layers,
+                top_vals, top_idx = torch.topk(influence_per_feat.abs(), k=15)
+
+                for i, (v, feat_idx) in enumerate(zip(top_vals, top_idx)):
+                    feat_idx = int(feat_idx)
+                    # Spread features horizontally across the X-axis
+                    token_idx = i
+                    node_id = f"feat_{lid}_{feat_idx}"
+                    act_val = float(max_act_per_feat[feat_idx])
+
+                    node = {
+                        "node_id": node_id,
+                        "feature": feat_idx,
+                        "layer": layer_val,
+                        "ctx_idx": token_idx,
+                        "feature_type": "feature",
+                        "token_prob": act_val,
+                        "is_target_logit": False,
+                        "run_idx": 0,
+                        "reverse_ctx_idx": 0,
+                        "jsNodeId": node_id,
+                        "streamIdx": stream_idx,
+                        "clerp": f"F{feat_idx} ({lid})",
+                        "influence": float(v),
+                        "_raw_act": act_val,
+                    }
+                    clt_nodes.append(node)
+                    layer_to_nodes[stream_idx].append(node)
+
+            # D. Build Causal Links (Global Jump Connections)
+            print("🔗 Tracing Global Jump Connections...")
+            # We compare every layer to every FUTURE layer to find skip connections
+            for s_idx in range(total_layers + 2):
+                curr_nodes = layer_to_nodes.get(s_idx)
+                if not curr_nodes:
+                    continue
+
+                # Look at every future layer
+                for next_idx in range(s_idx + 1, total_layers + 2):
+                    next_nodes = layer_to_nodes.get(next_idx)
+                    if not next_nodes:
+                        continue
+
+                    for cn in next_nodes:
+                        for pn in curr_nodes:
+                            try:
+                                # 1. Input -> Feature links
+                                if pn["feature_type"] in ["patch", "state"]:
+                                    # Heuristic: combine raw influence
+                                    link_w = abs(pn["influence"] * cn["influence"])
+
+                                # 2. Feature -> Logit links
+                                elif cn["feature_type"] == "logit":
+                                    # Global influence for final action
+                                    link_w = abs(pn["influence"])
+
+                                # 3. Feature -> Feature links (THE JUMP MECHANISM)
+                                else:
+                                    lid_curr = (
+                                        cn["node_id"]
+                                        .split("feat_")[1]
+                                        .rsplit("_", 1)[0]
+                                    )
+                                    lid_prev = (
+                                        pn["node_id"]
+                                        .split("feat_")[1]
+                                        .rsplit("_", 1)[0]
+                                    )
+
+                                    f_idx_curr = int(cn["feature"])
+                                    f_idx_prev = int(pn["feature"])
+
+                                    # Connectivity * Source Activation * Target Influence (Grad)
+                                    W_dec_prev = self.transcoders[lid_prev][
+                                        "model"
+                                    ].decoder.weight.data[:, f_idx_prev]
+                                    W_enc_curr = self.transcoders[lid_curr][
+                                        "model"
+                                    ].encoder.weight.data[f_idx_curr]
+
+                                    cos_sim = torch.dot(W_dec_prev, W_enc_curr)
+                                    link_w = float(
+                                        abs(cos_sim)
+                                        * pn["_raw_act"]
+                                        * abs(cn["influence"])
+                                    )
+
+                                # Threshold for visual clarity
+                                if link_w > 0.005:
+                                    clt_links.append(
+                                        {
+                                            "source": pn["node_id"],
+                                            "target": cn["node_id"],
+                                            "weight": link_w,
+                                        }
+                                    )
+                            except:
+                                continue
+
+            # Cleanup hooks
+            self._cleanup_hooks()
+
+            # E. Final Graph structure
+            graph_data = {
+                "metadata": {
+                    "slug": f"sample_{target_logit_idx}",
+                    "scan": "lewm-robot",
+                    "prompt_tokens": ["Robotic", "Frame"],
+                    "prompt": f"Sample {target_logit_idx}",
+                    "title_prefix": "Robotic Circuit",
+                    "schema_version": 0,
+                    "node_threshold": 99999,
+                    "neuronpedia_internal_model": {
+                        "id": "lewm-robot",
+                        "displayName": "LeWM Robotic Model",
+                        "layers": total_layers,
+                    },
                 },
-            },
-            "qParams": {
-                "linkType": "both",
-                "pinnedIds": [],
-                "clickedId": "",
-                "supernodes": [],
-                "sg_pos": "",
-            },
-            "nodes": clt_nodes,
-            "links": clt_links,
-        }
+                "qParams": {
+                    "linkType": "both",
+                    "pinnedIds": [],
+                    "clickedId": "",
+                    "supernodes": [],
+                    "sg_pos": "",
+                },
+                "nodes": clt_nodes,
+                "links": clt_links,
+            }
+        except Exception as e:
+            print(f"❌ Error processing layer: {e}")
+            traceback.print_exc()
+            raise e
         return graph_data
 
     def _aggregate_spatial_grad(self, pixel_grad):
@@ -632,7 +679,7 @@ def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda
         print(f"🔍 Discovering Transcoders in {transcoder_dir}...")
 
         for path in tc_path.glob("*.pt"):
-            layer_id = path.stem.split("_clt")[0].split("_sae")[0]
+            layer_id = path.stem.split("_clt")[0].split("_sae")[0].split("_residual")[0]
 
             t0 = time.time()
             # 1. Load checkpoint (Include Norm Stats)

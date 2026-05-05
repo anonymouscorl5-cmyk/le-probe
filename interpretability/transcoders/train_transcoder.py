@@ -256,8 +256,9 @@ def train_transcoder(
                     optimizer.step()
                     model.normalize_decoder()
 
+                    # Metrics Update (Every 2nd batch)
                     pbar.update(1)
-                    if pbar.n % 100 == 0:
+                    if pbar.n % 2 == 0:
                         with torch.no_grad():
                             if "activations" in res:
                                 has_activated |= res["activations"].sum(dim=0) > 0
@@ -284,6 +285,8 @@ def train_transcoder(
 
                             pbar.set_postfix(
                                 {
+                                    "l2": f"{mse_total:.4f}",
+                                    "l1": f"{res['l1_loss'].item():.4f}",
                                     "ev": f"{ev_total*100:.1f}%",
                                     "l0": f"{l0:.1f}",
                                     "dead": f"{(~has_activated).sum().item()}",
