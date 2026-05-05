@@ -44,7 +44,7 @@ class StreamingActivationsDataset(Dataset):
 class MultiLayerStreamingDataset(Dataset):
     """
     Synchronized dataset for multiple .bin activation files.
-    Concatenates layers along the feature dimension.
+    Concatenates layers along the feature dimension using vectorized indexing.
     """
 
     def __init__(self, source_dir, layers):
@@ -68,6 +68,19 @@ class MultiLayerStreamingDataset(Dataset):
         acts = [ds[idx] for ds in self.datasets]
         return torch.cat(acts, dim=-1)
 
+    def get_batch(self, indices):
+        """
+        Vectorized batch loading for multiple layers.
+        Significantly faster than Python loops.
+        """
+        acts = []
+        for ds in self.datasets:
+            # Use NumPy advanced indexing directly on the memmap
+            # This is done in C and is much faster than a Python loop
+            batch = torch.from_numpy(ds.data[indices].copy()).float()
+            acts.append(batch)
+        return torch.cat(acts, dim=-1)
+
 
 def train_transcoder(
     source_dir,
@@ -81,7 +94,7 @@ def train_transcoder(
     lr=1e-4,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Multi-Layer Streaming Training | Device: {device}")
+    print(f"🚀 Optimized Multi-Layer Training | Device: {device}")
 
     # Parse layer lists
     src_list = [s.strip() for s in source_layers_str.split(",")]
@@ -99,16 +112,12 @@ def train_transcoder(
         print(f"🔀 Crosscoder Mode")
         tgt_ds = MultiLayerStreamingDataset(source_dir, tgt_list)
 
-    # 2. Normalization Pass (Sample-based)
+    # 2. Normalization Pass (Vectorized)
     print("📈 Calculating Normalization Stats...")
     sample_size = min(len(src_ds), 500_000)
     indices = np.random.choice(len(src_ds), sample_size, replace=False)
 
-    src_samples = []
-    for idx in tqdm(indices, desc="Sampling"):
-        src_samples.append(src_ds[idx].unsqueeze(0))
-    src_subset = torch.cat(src_samples, dim=0)
-
+    src_subset = src_ds.get_batch(indices)
     mean_s, std_s = src_subset.mean(dim=0), src_subset.std(dim=0) + 1e-6
 
     # 3. Model Setup
@@ -135,21 +144,18 @@ def train_transcoder(
         for i in pbar:
             batch_idx = indices[i : i + batch_size]
 
-            # Load batches (Concatenated)
-            s_batch = torch.stack([src_ds[idx] for idx in batch_idx]).to(device)
+            # Load batches (Vectorized)
+            s_batch = src_ds.get_batch(batch_idx).to(device)
             s_batch_norm = (s_batch - mean_s.to(device)) / std_s.to(device)
 
             if source_layers_str == target_layers_str:
                 t_batch_norm = s_batch_norm
             else:
-                # Load Target Batch
+                # Load Target Batch (Vectorized)
                 if not is_funnel:
-                    t_batch = torch.stack([tgt_ds[idx] for idx in batch_idx]).to(device)
+                    t_batch = tgt_ds.get_batch(batch_idx).to(device)
                 else:
                     # Funnel Logic: Map large token count to small token count
-                    # We assume summary tokens (e.g. CLS) are at index 0 of each patch-grid
-                    # In LeWM Encoder (771 tokens), CLS is every 257 tokens.
-                    # In Predictor (3 tokens), every token is a summary token.
                     src_idx_start = batch_idx // src_ds.tokens_per_sample
                     token_offset = batch_idx % src_ds.tokens_per_sample
 
@@ -157,9 +163,7 @@ def train_transcoder(
                     tgt_batch_idx = src_idx_start * tgt_ds.tokens_per_sample + (
                         token_offset // 257
                     )
-                    t_batch = torch.stack([tgt_ds[idx] for idx in tgt_batch_idx]).to(
-                        device
-                    )
+                    t_batch = tgt_ds.get_batch(tgt_batch_idx).to(device)
 
                 t_batch_norm = t_batch
 
