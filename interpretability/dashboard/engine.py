@@ -1,5 +1,6 @@
 import json
 import cv2
+import io
 import argparse
 import torch
 import numpy as np
@@ -66,31 +67,23 @@ async def get_frame(idx: int):
 
         sample = dataset[target_sample_idx]
 
-        # 3. Extract Modality (STRICT: world_center)
-        img_key = next((k for k in sample.keys() if "world_center" in k), None)
-        if not img_key:
-            raise HTTPException(
-                status_code=404, detail="Modality 'world_center' not found"
-            )
-
-        img_tensor = sample[img_key]
+        # 3. Extract Modality
+        img_tensor = sample["pixels"][0]
         img_np = (
             img_tensor.permute(1, 2, 0).cpu().numpy()
             if hasattr(img_tensor, "permute")
             else img_tensor.transpose(1, 2, 0)
         )
+        img_bgr = img_np[:, :, ::-1]
+        print(
+            f"🖼️ Frame Request: {idx} | Shape: {img_bgr.shape} | "
+            f"Max: {img_bgr.max().item()} | Dtype: {img_bgr.dtype}"
+        )
 
-        if img_np.max() <= 1.0:
-            img_np = (img_np * 255).astype("uint8")
-        img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-
-        display_size = 480
-        img_bgr = cv2.resize(img_bgr, (display_size, display_size))
-
-        # 4. Draw Spatial Highlighting (Green)
+        # 4. Draw Spatial Highlighting
         if patch_token_idx > 0:
             p = patch_token_idx - 1
-            grid_size, patch_px = 16, display_size // 16
+            grid_size, patch_px = 16, 30
             row, col = p // grid_size, p % grid_size
             x1, y1, x2, y2 = (
                 col * patch_px,
@@ -98,7 +91,6 @@ async def get_frame(idx: int):
                 (col + 1) * patch_px,
                 (row + 1) * patch_px,
             )
-
             cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 3)
             cv2.putText(
                 img_bgr,
