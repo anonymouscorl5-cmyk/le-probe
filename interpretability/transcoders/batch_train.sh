@@ -4,63 +4,55 @@
 
 # 1. Configuration
 ACTIVATIONS_DIR="activations_granular"
-OUTPUT_DIR="transcoder_weights_granular"
+OUTPUT_DIR="transcoder_weights_residual"
 DICT_SIZE=12288
 EPOCHS=10
-
-# 🚀 MODULE CONTROL (Set to false to skip sections)
-TRAIN_ENCODER=true
-TRAIN_BRIDGE=true
-TRAIN_PREDICTOR=true
+WINDOW_SIZE=1 # Target current layer + 1 before + 1 after
 
 mkdir -p $OUTPUT_DIR
 
-echo "🔥 Starting Layered SAE Sweep..."
+echo "🔥 Starting Residual Crosscoder Sweep..."
 
-# --- ENCODER SWEEP ---
-if [ "$TRAIN_ENCODER" = true ]; then
-    for i in {0..11}; do
-        LAYER="encoder_L$i"
-        echo "⚙️ Training Identity SAE for $LAYER..."
-        python train_transcoder.py \
-            --dir $ACTIVATIONS_DIR \
-            --source_layer $LAYER \
-            --target_layer $LAYER \
-            --output "$OUTPUT_DIR/${LAYER}_sae.pt" \
-            --dict_size $DICT_SIZE \
-            --epochs $EPOCHS
+# Define the full hierarchical sequence
+LAYERS=(
+    "encoder_L0" "encoder_L1" "encoder_L2" "encoder_L3" "encoder_L4" "encoder_L5"
+    "encoder_L6" "encoder_L7" "encoder_L8" "encoder_L9" "encoder_L10" "encoder_L11"
+    "predictor_L0" "predictor_L1" "predictor_L2" "predictor_L3" "predictor_L4" "predictor_L5"
+)
+
+NUM_LAYERS=${#LAYERS[@]}
+
+for i in $(seq 0 $((NUM_LAYERS - 1))); do
+    SRC=${LAYERS[$i]}
+    
+    # Construct Target Window (L-k to L+k)
+    TGT_LIST=""
+    for j in $(seq $((i - WINDOW_SIZE)) $((i + WINDOW_SIZE))); do
+        if [ $j -ge 0 ] && [ $j -lt $NUM_LAYERS ]; then
+            if [ -z "$TGT_LIST" ]; then
+                TGT_LIST="${LAYERS[$j]}"
+            else
+                TGT_LIST="$TGT_LIST,${LAYERS[$j]}"
+            fi
+        fi
     done
-fi
 
-# --- THE BRIDGE: Predictor Entry ---
-# In Residual SAE mode, we just train predictor_L0 as its own SAE
-if [ "$TRAIN_BRIDGE" = true ]; then
-    echo "⚙️ Training Predictor Entry SAE: predictor_L0..."
+    echo "⚙️ Training Residual Crosscoder for $SRC ⮕ {$TGT_LIST}..."
+    
+    # Use smaller batch size for predictor-involved transcoders to ensure updates
+    BATCH_SIZE=4096
+    if [[ "$SRC" == *"predictor"* ]]; then
+        BATCH_SIZE=512
+    fi
+
     python train_transcoder.py \
         --dir $ACTIVATIONS_DIR \
-        --source_layer predictor_L0 \
-        --target_layer predictor_L0 \
-        --output "$OUTPUT_DIR/predictor_L0_sae.pt" \
+        --source_layer "$SRC" \
+        --target_layer "$TGT_LIST" \
+        --output "$OUTPUT_DIR/${SRC}_residual_clt.pt" \
         --dict_size $DICT_SIZE \
+        --batch_size $BATCH_SIZE \
         --epochs $EPOCHS
-fi
-
-# --- PREDICTOR SWEEP (High-Fidelity) ---
-if [ "$TRAIN_PREDICTOR" = true ]; then
-    # The Predictor has 257x fewer tokens than the Encoder.
-    # We use a smaller batch size (512) to ensure enough gradient updates per epoch.
-    for i in {1..5}; do
-        LAYER="predictor_L$i"
-        echo "⚙️ Training High-Fidelity Identity SAE for $LAYER..."
-        python train_transcoder.py \
-            --dir $ACTIVATIONS_DIR \
-            --source_layer $LAYER \
-            --target_layer $LAYER \
-            --output "$OUTPUT_DIR/${LAYER}_sae.pt" \
-            --dict_size $DICT_SIZE \
-            --batch_size 512 \
-            --epochs $EPOCHS
-    done
-fi
+done
 
 echo "✨ Sweep Complete! Weights stored in $OUTPUT_DIR"

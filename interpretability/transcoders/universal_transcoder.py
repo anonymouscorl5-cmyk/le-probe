@@ -5,15 +5,26 @@ import torch.nn.functional as F
 
 class Transcoder(nn.Module):
     """
-    Universal Transcoder Architecture.
-    Can operate as an SAE (Identity: Layer L -> Layer L)
-    or a CLT (Transition: Layer L -> Layer L+1).
+    Universal Transcoder / Crosscoder Architecture.
+
+    Modes:
+    - SAE: Identity mapping (Layer L -> Layer L). d_model == d_output.
+    - Transcoder: Transition mapping (Layer L -> Layer L+1). d_model == d_output.
+    - Crosscoder: Multi-layer mapping (Layer L -> Layers L, L+1, ... L+N).
+      In this mode, d_output = d_model * num_target_layers.
     """
 
-    def __init__(self, d_model: int, d_dict: int, l1_coeff: float = 0.001):
+    def __init__(
+        self,
+        d_model: int,
+        d_dict: int,
+        d_output: int | None = None,
+        l1_coeff: float = 0.001,
+    ):
         super().__init__()
         self.d_model = d_model
         self.d_dict = d_dict
+        self.d_output = d_output if d_output is not None else d_model
         self.l1_coeff = l1_coeff
 
         # Encoder: Linear + Bias + ReLU
@@ -22,9 +33,9 @@ class Transcoder(nn.Module):
         self.b_enc = nn.Parameter(torch.zeros(d_dict))
 
         # Decoder: Linear
-        # Projects back into the output space (Target Layer)
-        self.decoder = nn.Linear(d_dict, d_model, bias=False)
-        self.b_dec = nn.Parameter(torch.zeros(d_model))
+        # Projects back into the output space (Single or Multiple Layers)
+        self.decoder = nn.Linear(d_dict, self.d_output, bias=False)
+        self.b_dec = nn.Parameter(torch.zeros(self.d_output))
 
         # Orthogonal initialization for stability
         nn.init.orthogonal_(self.decoder.weight)
@@ -32,15 +43,17 @@ class Transcoder(nn.Module):
     def forward(self, x, target=None):
         """
         x: Input activations (Batch, d_model)
-        target: Target activations for training (Optional)
+        target: Target activations for training (Optional, Batch, d_output)
         """
-        # Centering (Standard SAE/CLT practice)
-        x_centered = x - self.b_dec
+        # Centering
+        x_centered = (
+            x - self.b_dec[: self.d_model] if self.d_output == self.d_model else x
+        )
 
         # Encode: Map to sparse latent space
         acts = F.relu(self.encoder(x_centered) + self.b_enc)
 
-        # Decode: Map to target space (Layer L or Layer L+1)
+        # Decode: Map to target space
         x_hat = self.decoder(acts) + self.b_dec
 
         if target is not None:
