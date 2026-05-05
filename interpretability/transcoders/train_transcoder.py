@@ -1,4 +1,5 @@
 # --- Path Stabilization ---
+# Ensures that 'le-probe' is in the python path for absolute imports
 import os
 import sys
 from pathlib import Path
@@ -37,7 +38,7 @@ class StreamingActivationsDataset(Dataset):
         return self.shape[0]
 
     def __getitem__(self, idx):
-        # Return as float32 for training
+        # Return as float32 for training to avoid precision issues
         return torch.from_numpy(self.data[idx].copy()).float()
 
 
@@ -45,38 +46,42 @@ class MultiLayerStreamingDataset(Dataset):
     """
     Synchronized dataset for multiple .bin activation files.
     Concatenates layers along the feature dimension using vectorized indexing.
+
+    Optimized for Crosscoder mode: Handles multiple file pointers and de-duplicates
+    disk reads for overlapping source/target layers.
     """
 
     def __init__(self, source_dir, layers):
         self.datasets = []
-        for layer in layers:
+        self.layer_to_idx = {}
+        for i, layer in enumerate(layers):
             bin_path = os.path.join(source_dir, f"{layer}.bin")
             json_path = os.path.join(source_dir, f"{layer}.json")
             self.datasets.append(StreamingActivationsDataset(bin_path, json_path))
+            self.layer_to_idx[layer] = i
 
-        # We assume all layers have the same number of samples (aligned by harvest_activations)
         self.total_samples = len(self.datasets[0])
         self.d_model_per_layer = self.datasets[0].shape[1]
         self.tokens_per_sample = self.datasets[0].tokens_per_sample
-        self.total_d_model = self.d_model_per_layer * len(layers)
 
     def __len__(self):
         return self.total_samples
 
-    def __getitem__(self, idx):
-        # Concatenate all layers for this index
-        acts = [ds[idx] for ds in self.datasets]
-        return torch.cat(acts, dim=-1)
-
-    def get_batch(self, indices):
+    def get_batch(self, indices, layers_to_extract=None):
         """
-        Vectorized batch loading for multiple layers.
-        Significantly faster than Python loops.
+        Vectorized batch loading. If layers_to_extract is provided,
+        it only pulls and concatenates those specific layers.
+
+        Note: NumPy advanced indexing is significantly faster than Python loops.
         """
         acts = []
-        for ds in self.datasets:
-            # Use NumPy advanced indexing directly on the memmap
-            # This is done in C and is much faster than a Python loop
+        target_datasets = self.datasets
+        if layers_to_extract:
+            target_datasets = [
+                self.datasets[self.layer_to_idx[l]] for l in layers_to_extract
+            ]
+
+        for ds in target_datasets:
             batch = torch.from_numpy(ds.data[indices].copy()).float()
             acts.append(batch)
         return torch.cat(acts, dim=-1)
@@ -93,77 +98,107 @@ def train_transcoder(
     batch_size=4096,
     lr=1e-4,
 ):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Optimized Multi-Layer Training | Device: {device}")
+    """
+    Core training loop for SAEs and Crosscoders.
 
-    # Parse layer lists
+    Arguments:
+        source_layers_str: Comma-separated list of layers for the input (e.g. 'L1')
+        target_layers_str: Comma-separated list of layers for reconstruction (e.g. 'L0,L1,L2')
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"🚀 Master-Dataset Optimized Training | Device: {device}")
+
+    # Parse layer lists for multi-layer support
     src_list = [s.strip() for s in source_layers_str.split(",")]
     tgt_list = [t.strip() for t in target_layers_str.split(",")]
 
-    print(f"📦 Source Layers: {src_list}")
-    print(f"🎯 Target Layers: {tgt_list}")
+    # IDENTIFY ALL UNIQUE LAYERS TO AVOID REDUNDANT READS
+    unique_layers = []
+    for l in src_list + tgt_list:
+        if l not in unique_layers:
+            unique_layers.append(l)
 
-    # 1. Initialize Datasets
-    src_ds = MultiLayerStreamingDataset(source_dir, src_list)
-    if source_layers_str == target_layers_str:
-        print(f"🔄 SAE Mode: Identity reconstruction")
-        tgt_ds = src_ds
-    else:
-        print(f"🔀 Crosscoder Mode")
-        tgt_ds = MultiLayerStreamingDataset(source_dir, tgt_list)
+    print(f"📦 Unique Layers in play: {unique_layers}")
+    print(f"🔗 Source: {src_list} ⮕ Target: {tgt_list}")
+
+    # 1. Initialize Master Dataset
+    master_ds = MultiLayerStreamingDataset(source_dir, unique_layers)
 
     # 2. Normalization Pass (Vectorized)
+    # Calculate running stats on a large subset to ensure stable training
     print("📈 Calculating Normalization Stats...")
-    sample_size = min(len(src_ds), 500_000)
-    indices = np.random.choice(len(src_ds), sample_size, replace=False)
-
-    src_subset = src_ds.get_batch(indices)
+    sample_size = min(len(master_ds), 500_000)
+    indices = np.random.choice(len(master_ds), sample_size, replace=False)
+    src_subset = master_ds.get_batch(indices, layers_to_extract=src_list)
     mean_s, std_s = src_subset.mean(dim=0), src_subset.std(dim=0) + 1e-6
 
     # 3. Model Setup
+    d_in = len(src_list) * master_ds.d_model_per_layer
+    d_out = len(tgt_list) * master_ds.d_model_per_layer
+
     model = Transcoder(
-        d_model=src_ds.total_d_model,
-        d_dict=dict_size,
-        d_output=tgt_ds.total_d_model,
-        l1_coeff=l1_coeff,
+        d_model=d_in, d_dict=dict_size, d_output=d_out, l1_coeff=l1_coeff
     ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     # 4. Training Loop
-    print(f"🏋️ Training: {source_layers_str} ⮕ {target_layers_str}")
-
     for epoch in range(epochs):
         model.train()
-        num_tokens = len(src_ds)
+        num_tokens = len(master_ds)
         indices = np.arange(num_tokens)
         np.random.shuffle(indices)
 
-        is_funnel = src_ds.tokens_per_sample != tgt_ds.tokens_per_sample
+        # Funnel check: Ensures we map Encoder Summary tokens to Predictor tokens correctly
+        src_tokens = master_ds.datasets[
+            master_ds.layer_to_idx[src_list[0]]
+        ].tokens_per_sample
+        tgt_tokens = master_ds.datasets[
+            master_ds.layer_to_idx[tgt_list[0]]
+        ].tokens_per_sample
+        is_funnel = src_tokens != tgt_tokens
 
         pbar = tqdm(range(0, num_tokens, batch_size), desc=f"Epoch {epoch+1}/{epochs}")
         for i in pbar:
             batch_idx = indices[i : i + batch_size]
 
-            # Load batches (Vectorized)
-            s_batch = src_ds.get_batch(batch_idx).to(device)
-            s_batch_norm = (s_batch - mean_s.to(device)) / std_s.to(device)
+            # Load only the unique layers once (The core I/O optimization)
+            full_batch = master_ds.get_batch(batch_idx).to(device)
+
+            # Slicing from the Master Batch instead of re-reading from disk
+            src_indices = []
+            for l in src_list:
+                idx = unique_layers.index(l)
+                start = idx * master_ds.d_model_per_layer
+                src_indices.append(
+                    torch.arange(start, start + master_ds.d_model_per_layer)
+                )
+            src_batch = full_batch[:, torch.cat(src_indices)]
+
+            # Center and scale to unit variance for stable training
+            s_batch_norm = (src_batch - mean_s.to(device)) / std_s.to(device)
 
             if source_layers_str == target_layers_str:
                 t_batch_norm = s_batch_norm
             else:
-                # Load Target Batch (Vectorized)
                 if not is_funnel:
-                    t_batch = tgt_ds.get_batch(batch_idx).to(device)
+                    # Optimized slice for target layers
+                    tgt_indices = []
+                    for l in tgt_list:
+                        idx = unique_layers.index(l)
+                        start = idx * master_ds.d_model_per_layer
+                        tgt_indices.append(
+                            torch.arange(start, start + master_ds.d_model_per_layer)
+                        )
+                    t_batch = full_batch[:, torch.cat(tgt_indices)]
                 else:
-                    # Funnel Logic: Map large token count to small token count
-                    src_idx_start = batch_idx // src_ds.tokens_per_sample
-                    token_offset = batch_idx % src_ds.tokens_per_sample
-
-                    # Target index mapping
-                    tgt_batch_idx = src_idx_start * tgt_ds.tokens_per_sample + (
-                        token_offset // 257
-                    )
-                    t_batch = tgt_ds.get_batch(tgt_batch_idx).to(device)
+                    # Funnel Logic (Requires a separate read for target due to index mapping)
+                    # We assume summary tokens (CLS) are at index 0 of every 257-token block
+                    src_idx_start = batch_idx // src_tokens
+                    token_offset = batch_idx % src_tokens
+                    tgt_batch_idx = src_idx_start * tgt_tokens + (token_offset // 257)
+                    t_batch = master_ds.get_batch(
+                        tgt_batch_idx, layers_to_extract=tgt_list
+                    ).to(device)
 
                 t_batch_norm = t_batch
 
@@ -172,17 +207,13 @@ def train_transcoder(
             loss = res["loss"]
             loss.backward()
 
-            # Normalize decoder weights to unit norm
+            # Normalize decoder weights to unit norm (Critical for dictionary stability)
             model.normalize_decoder()
             optimizer.step()
 
             if i % 100 == 0:
                 pbar.set_postfix(
-                    {
-                        "loss": f"{loss.item():.4f}",
-                        "l2": f"{res['l2_loss'].item():.4f}",
-                        "l1": f"{res['l1_loss'].item():.4f}",
-                    }
+                    {"loss": f"{loss.item():.4f}", "l2": f"{res['l2_loss'].item():.4f}"}
                 )
 
     # 5. Save Model
@@ -191,8 +222,8 @@ def train_transcoder(
         "state_dict": model.state_dict(),
         "norm_stats": {"mean": mean_s, "std": std_s},
         "meta": {
-            "d_model": src_ds.total_d_model,
-            "d_output": tgt_ds.total_d_model,
+            "d_model": d_in,
+            "d_output": d_out,
             "d_dict": dict_size,
             "source_layers": src_list,
             "target_layers": tgt_list,
