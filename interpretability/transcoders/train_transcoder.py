@@ -168,7 +168,8 @@ def train_transcoder(
 
         # --- 🔥 BUFFERED TRAINING LOOP (SSD OPTIMIZED) ---
         buffer_size = 512_000  # Load 512k tokens sequentially at a time
-        pbar = tqdm(range(0, num_tokens, batch_size), desc=f"Epoch {epoch+1}/{epochs}")
+        num_batches = (num_tokens + batch_size - 1) // batch_size
+        pbar = tqdm(total=num_batches, desc=f"Epoch {epoch+1}/{epochs}")
 
         # We process the data in "Super-Blocks" to maintain sequential I/O
         # Shuffle the super-blocks so epochs aren't identical
@@ -277,7 +278,7 @@ def train_transcoder(
                                 "audit": f"[{audit_str.strip()}]",
                             }
                         )
-                pbar.update(batch_size)
+                pbar.update(1)
 
     # 5. Save Model
     print(f"💾 Saving to {output_path}")
