@@ -6,7 +6,7 @@
 ACTIVATIONS_DIR="activations_granular"
 OUTPUT_DIR="transcoder_weights_residual"
 DICT_SIZE=12288
-L1_COEFF=8e-3
+L1_COEFF=3e-3
 EPOCHS=10
 WINDOW_SIZE=1 # Target current layer + 1 before + 1 after
 

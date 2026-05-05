@@ -73,7 +73,6 @@ class MultiLayerStreamingDataset(Dataset):
     def get_batch_raw(self, indices):
         """
         Pull raw float16 tensors. ZERO COPY on CPU.
-        Returns a list of torch tensors directly from the memory map.
         """
         return [torch.from_numpy(ds.data[indices]) for ds in self.datasets]
 
@@ -92,10 +91,6 @@ def train_transcoder(
     """
     Core training loop for SAEs and Crosscoders.
     Optimized for maximum GPU utilization and minimal CPU-to-GPU latency.
-
-    Arguments:
-        source_layers_str: Comma-separated list of layers for the input (e.g. 'L1')
-        target_layers_str: Comma-separated list of layers for reconstruction (e.g. 'L0,L1,L2')
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 Bare-Metal Optimized Training | Device: {device}")
@@ -115,12 +110,12 @@ def train_transcoder(
     master_ds = MultiLayerStreamingDataset(source_dir, unique_layers)
 
     # 2. Normalization Pass (Vectorized)
-    # Calculate running stats on a large subset to ensure stable training
-    print("📈 Calculating Normalization Stats...")
+    # Calculate running stats for BOTH source and target to ensure balanced gradients
+    print("📈 Calculating Normalization Stats (Source & Target)...")
     sample_size = min(len(master_ds), 500_000)
     indices = np.random.choice(len(master_ds), sample_size, replace=False)
 
-    # Pull raw float16, move to GPU, then cast to float32 for mean/std
+    # Source Stats
     src_data = []
     for l in src_list:
         raw = torch.from_numpy(
@@ -129,6 +124,16 @@ def train_transcoder(
         src_data.append(raw.to(device).float())
     src_subset = torch.cat(src_data, dim=-1)
     mean_s, std_s = src_subset.mean(dim=0), src_subset.std(dim=0) + 1e-6
+
+    # Target Stats
+    tgt_data = []
+    for l in tgt_list:
+        raw = torch.from_numpy(
+            master_ds.datasets[master_ds.layer_to_idx[l]].data[indices]
+        )
+        tgt_data.append(raw.to(device).float())
+    tgt_subset = torch.cat(tgt_data, dim=-1)
+    mean_t, std_t = tgt_subset.mean(dim=0), tgt_subset.std(dim=0) + 1e-6
 
     # 3. Model Setup
     d_in = len(src_list) * master_ds.d_model_per_layer
@@ -149,7 +154,7 @@ def train_transcoder(
         indices = np.arange(num_tokens)
         np.random.shuffle(indices)
 
-        # Funnel check: Ensures we map Encoder Summary tokens to Predictor tokens correctly
+        # Funnel check for Encoder/Predictor alignment
         src_tokens = master_ds.datasets[
             master_ds.layer_to_idx[src_list[0]]
         ].tokens_per_sample
@@ -162,25 +167,23 @@ def train_transcoder(
         for i in pbar:
             batch_idx = indices[i : i + batch_size]
 
-            # STEP 1: Pull float16 raw tensors from disk (Fastest I/O)
+            # STEP 1: Pull float16 raw tensors from disk
             raw_tensors = master_ds.get_batch_raw(batch_idx)
 
-            # STEP 2 & 3: Move to GPU in float16 and cast to float32 (Massive CPU-offload)
+            # STEP 2 & 3: Move to GPU and cast
             gpu_tensors = [t.to(device, non_blocking=True).float() for t in raw_tensors]
 
-            # STEP 4: Construct batches using GPU-side slicing/cat
+            # STEP 4: Construct batches
             s_batch = torch.cat(
                 [gpu_tensors[layer_to_pos[l]] for l in src_list], dim=-1
             )
-
-            # Center and scale to unit variance for stable training
+            # Normalize Source
             s_batch_norm = (s_batch - mean_s) / std_s
 
             if source_layers_str == target_layers_str:
                 t_batch_norm = s_batch_norm
             else:
                 if not is_funnel:
-                    # Optimized slice for standard target layers
                     t_batch = torch.cat(
                         [gpu_tensors[layer_to_pos[l]] for l in tgt_list], dim=-1
                     )
@@ -202,14 +205,15 @@ def train_transcoder(
                         [t.to(device, non_blocking=True).float() for t in t_raw], dim=-1
                     )
 
-                t_batch_norm = t_batch
+                # Normalize Target (Ensures L1 penalty isn't drowned out by raw MSE scale)
+                t_batch_norm = (t_batch - mean_t) / std_t
 
             optimizer.zero_grad()
             res = model(s_batch_norm, t_batch_norm)
             loss = res["loss"]
             loss.backward()
 
-            # Normalize decoder weights to unit norm (Critical for dictionary stability)
+            # Normalize decoder weights
             model.normalize_decoder()
             optimizer.step()
 
@@ -219,12 +223,11 @@ def train_transcoder(
                     if "activations" in res:
                         has_activated |= res["activations"].sum(dim=0) > 0
 
-                # TOTAL EV (Explained Variance)
+                # TOTAL EV (Now based on normalized variance, which is 1.0)
                 mse_total = res["l2_loss"].item()
-                var_total = t_batch_norm.var(dim=0).sum().item() + 1e-6
-                ev_total = 1 - (mse_total / var_total)
+                ev_total = 1 - (mse_total / 1.0)  # Var is 1.0 after normalization
 
-                # PER-LAYER AUDIT: Confirms that every target in the residual window is learning
+                # PER-LAYER AUDIT: Shows normalized MSE per layer (Target < 0.1)
                 layer_mses = []
                 for j, layer_name in enumerate(tgt_list):
                     start = j * master_ds.d_model_per_layer
@@ -232,16 +235,14 @@ def train_transcoder(
                     l_hat = res["output"][:, start:end]
                     l_target = t_batch_norm[:, start:end]
                     l_mse = torch.nn.functional.mse_loss(l_hat, l_target).item()
-                    layer_mses.append(f"{layer_name}:{l_mse:.1f}")
+                    layer_mses.append(f"{layer_name}:{l_mse:.3f}")
 
                 audit_str = " ".join(layer_mses)
-                # L0: Average number of active features per token
                 l0 = (
                     (res["activations"] > 0).float().sum(dim=1).mean().item()
                     if "activations" in res
                     else 0
                 )
-                # Dead: Features that have never activated throughout the epoch
                 dead_cnt = (has_activated == 0).sum().item()
 
                 pbar.set_postfix(
@@ -257,7 +258,12 @@ def train_transcoder(
     print(f"💾 Saving to {output_path}")
     save_dict = {
         "state_dict": model.state_dict(),
-        "norm_stats": {"mean": mean_s.cpu(), "std": std_s.cpu()},
+        "norm_stats": {
+            "mean": mean_s.cpu(),
+            "std": std_s.cpu(),
+            "tgt_mean": mean_t.cpu(),
+            "tgt_std": std_t.cpu(),
+        },
         "meta": {
             "d_model": d_in,
             "d_output": d_out,
