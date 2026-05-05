@@ -6,6 +6,7 @@
 ACTIVATIONS_DIR="activations_granular"
 OUTPUT_DIR="transcoder_weights_residual"
 DICT_SIZE=12288
+L1_COEFF=8e-3
 EPOCHS=10
 WINDOW_SIZE=1 # Target current layer + 1 before + 1 after
 
@@ -52,6 +53,7 @@ for i in $(seq 0 $((NUM_LAYERS - 1))); do
         --output "$OUTPUT_DIR/${SRC}_residual_clt.pt" \
         --dict_size $DICT_SIZE \
         --batch_size $BATCH_SIZE \
+        --l1 $L1_COEFF \
         --epochs $EPOCHS
 done
 
