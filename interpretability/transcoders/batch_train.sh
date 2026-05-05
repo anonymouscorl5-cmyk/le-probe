@@ -40,6 +40,12 @@ for i in $(seq 0 $((NUM_LAYERS - 1))); do
 
     echo "⚙️ Training Residual Crosscoder for $SRC ⮕ {$TGT_LIST}..."
     
+    OUTPUT_FILE="$OUTPUT_DIR/${SRC}_residual_clt.pt"
+    if [ -f "$OUTPUT_FILE" ]; then
+        echo "⏭️  Weights already exist at $OUTPUT_FILE. Skipping..."
+        continue
+    fi
+
     # Use smaller batch size for predictor-involved transcoders to ensure updates
     BATCH_SIZE=4096
     if [[ "$SRC" == *"predictor"* ]]; then

@@ -17,6 +17,10 @@ import argparse
 import numpy as np
 from torch.utils.data import Dataset
 from tqdm import tqdm
+
+# 🔥 SPEED FIX: Prevent GPU stalls from tiny subnormal numbers in sparse gradients
+if torch.cuda.is_available():
+    torch.set_flush_denormal(True)
 from interpretability.transcoders.universal_transcoder import Transcoder
 
 

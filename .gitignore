@@ -2,6 +2,7 @@ __pycache__
 .DS_Store
 temp_images
 temp_repro
+activations
 brain_snapshots
 datasets
 scratch
