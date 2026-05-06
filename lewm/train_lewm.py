@@ -198,12 +198,12 @@ def run(cfg):
         raise RuntimeError(
             f"🚨 DATA CORRUPTION DETECTED: Pixel value {p_max} exceeds 255. Overflow fix is missing!"
         )
-    if p_means[0] < p_means[2]:
-        print(
-            "  ⚠️ NOTE: Blue channel is higher than Red. (Unexpected for this dataset, but check visual parity)."
-        )
+    if p_means[2] > p_means[0]:
+        print("  ✅ RGB Signature Confirmed (Cool-toned/Blue > Red).")
     else:
-        print("  ✅ RGB Signature Confirmed (Red > Blue).")
+        print(
+            "  ⚠️ NOTE: Red channel is higher than Blue. (Unexpected for this cool-toned dataset, verify visual parity)."
+        )
     print("-------------------------------------------\n")
 
     # Release file handles before forking workers
