@@ -177,7 +177,36 @@ def run(cfg):
         use_virtual_actions=cfg.data.get("use_virtual_actions", True),
     )
 
-    # 2. Rescale & Normalize Pixels
+    # 2. Data Integrity Guard (Sanity Check)
+    print("\n🔍 DATA INTEGRITY GUARD: Inspecting raw pixels...")
+    raw_sample = dataset[0]
+    raw_pixels = raw_sample["pixels"]  # (T, C, H, W)
+
+    p_max = raw_pixels.max().item()
+    p_min = raw_pixels.min().item()
+    p_dtype = raw_pixels.dtype
+    # Calculate channel means to verify RGB signature (R=104, B=90)
+    p_means = raw_pixels.float().mean(dim=(0, 2, 3))
+
+    print(f"  - Dtype: {p_dtype}")
+    print(f"  - Range: [{p_min}, {p_max}]")
+    print(
+        f"  - Channel Means (R,G,B): [{p_means[0]:.2f}, {p_means[1]:.2f}, {p_means[2]:.2f}]"
+    )
+
+    if p_max > 255:
+        raise RuntimeError(
+            f"🚨 DATA CORRUPTION DETECTED: Pixel value {p_max} exceeds 255. Overflow fix is missing!"
+        )
+    if p_means[0] < p_means[2]:
+        print(
+            "  ⚠️ NOTE: Blue channel is higher than Red. (Unexpected for this dataset, but check visual parity)."
+        )
+    else:
+        print("  ✅ RGB Signature Confirmed (Red > Blue).")
+    print("-------------------------------------------\n")
+
+    # 3. Rescale & Normalize Pixels
     transforms = []
     for col in keys_to_load:
         if "pixels" in col or "images" in col:
