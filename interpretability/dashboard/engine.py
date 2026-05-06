@@ -306,7 +306,7 @@ class LeWMAttributor:
             layer_to_nodes[0] = []
             patch_saliency = self._aggregate_spatial_grad(pixel_grad)
             top_patches = torch.topk(patch_saliency.view(-1), k=15)
-            for v, idx in zip(top_patches.values, top_patches.indices):
+            for i, (v, idx) in enumerate(zip(top_patches.values, top_patches.indices)):
                 idx = int(idx)
                 row, col = divmod(idx, 16)
                 node_id = f"patch_{idx}"
@@ -314,7 +314,7 @@ class LeWMAttributor:
                     "node_id": node_id,
                     "feature": idx,
                     "layer": "E",
-                    "ctx_idx": idx,
+                    "ctx_idx": i,  # Sequential for compact layout
                     "feature_type": "patch",
                     "token_prob": 1.0,
                     "is_target_logit": False,
@@ -330,14 +330,15 @@ class LeWMAttributor:
 
             state_saliency = state_grad.abs().view(-1)
             top_states = torch.topk(state_saliency, k=5)
-            for v, idx in zip(top_states.values, top_states.indices):
+            for i, (v, idx) in enumerate(zip(top_states.values, top_states.indices)):
                 idx = int(idx)
                 node_id = f"state_{idx}"
                 node = {
                     "node_id": node_id,
                     "feature": idx,
                     "layer": "E",
-                    "ctx_idx": idx + 256,
+                    "ctx_idx": i
+                    + 17,  # Offset to distinguish from patches but keep compact
                     "feature_type": "state",
                     "token_prob": 1.0,
                     "is_target_logit": False,
