@@ -90,12 +90,16 @@ def harvest_activations(
     data_plugin = LEWMDataPlugin(
         repo_id=dataset_repo, keys_to_load=["pixels", "action"], num_steps=3
     )
+
+    # 🧊 CACHE RESET: Prevent 'Invalid data' decoder contention across workers
+    data_plugin.clear_cache()
+
     dataloader = DataLoader(
         data_plugin,
         batch_size=32,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=True,  # Faster CPU to GPU transfer
+        pin_memory=True,
     )
 
     actual_total = num_episodes if num_episodes > 0 else len(dataloader)
@@ -141,22 +145,20 @@ def harvest_activations(
                 if num_episodes > 0 and i >= num_episodes:
                     break
 
-                pixels = batch["pixels"].to(device)
+                raw_pixels = batch["pixels"].to(device)
                 actions = batch["action"].to(device)
 
-                # --- NATIVE RESOLUTION RESIZE (480px -> 224px) ---
-                # This prevents the 146GB bloat by matching the model's target 224px resolution.
-                B, T, C, H, W = pixels.shape
-                if H != 224 or W != 224:
-                    pixels_flat = pixels.view(B * T, C, H, W).float() / 255.0
-                    pixels_resized = torch.nn.functional.interpolate(
-                        pixels_flat,
-                        size=(224, 224),
-                        mode="bilinear",
-                        align_corners=False,
-                    )
-                    pixels = (pixels_resized * 255.0).byte().view(B, T, C, 224, 224)
-                # -------------------------------------------------
+                # --- 🎯 OFFICIAL TRANSFORM (ImageNet + Resizing) ---
+                # This ensures the model sees EXACTLY what it saw during v8 training.
+                B, T, C, H, W = raw_pixels.shape
+                # Flatten B and T for the preprocessor
+                raw_pixels_flat = raw_pixels.view(B * T, C, H, W)
+                processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
+                    "pixels"
+                ]
+                # Unflatten back to (B, T, C, 224, 224)
+                pixels = processed_pixels.view(B, T, C, 224, 224)
+                # ---------------------------------------------------
 
                 if torch.isnan(actions).any():
                     actions = torch.nan_to_num(actions, 0.0)
