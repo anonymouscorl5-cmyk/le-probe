@@ -229,7 +229,7 @@ class GoalMapper:
             # Scaled by 10.0 so the ~7.0 delta of an episode translates to
             # a massive cost reduction, effectively drowning out the smoothness penalty.
             reward_pred = self.model.reward_head(all_preds).squeeze(-1)
-            reward_weight = 10.0
+            reward_weight = 50.0
             dist = (10.0 - reward_pred) * reward_weight
 
             # -----------------------------------------------------------------
@@ -287,8 +287,8 @@ class GoalMapper:
             else:
                 jump_internal = 0.0
 
-            # Smoothness Weight (300.0): Doubled to aggressively kill high-frequency flailing.
-            smoothness_weight = 300.0
+            # Smoothness Weight (10.0): Reduced from 300.0 to allow the solver to move the arm.
+            smoothness_weight = 10.0
             dist = dist + (jump_start + jump_internal) * smoothness_weight
 
         # 7. Unflatten back to (B, S) for the Solver

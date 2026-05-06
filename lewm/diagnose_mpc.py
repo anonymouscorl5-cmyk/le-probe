@@ -65,6 +65,10 @@ def run_diagnostic(model_path, gallery_path="goal_gallery.pth", batch_size=10):
 
     # 2. Setup Vectorized Agent & Solver
     mapper = GoalMapper(model_path, dataset_root=".")
+
+    # Initialize frozen_pose for manifold squashing (Offline diagnostic uses zero-pose)
+    mapper.frozen_pose = torch.zeros(32, device=device)
+
     solver = CEMSolver(
         model=mapper,
         num_samples=8000,
