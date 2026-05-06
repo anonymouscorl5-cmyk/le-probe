@@ -74,16 +74,17 @@ async def get_frame(idx: int):
             if hasattr(img_tensor, "permute")
             else img_tensor.transpose(1, 2, 0)
         )
-        img_bgr = img_np[:, :, ::-1]
-        print(
-            f"🖼️ Frame Request: {idx} | Shape: {img_bgr.shape} | "
-            f"Max: {img_bgr.max().item()} | Dtype: {img_bgr.dtype}"
-        )
+        if img_np.max() <= 1.0:
+            img_np = (img_np * 255).astype("uint8")
+        img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+
+        display_size = 480
+        img_bgr = cv2.resize(img_bgr, (display_size, display_size))
 
         # 4. Draw Spatial Highlighting
         if patch_token_idx > 0:
             p = patch_token_idx - 1
-            grid_size, patch_px = 16, 30
+            grid_size, patch_px = 16, display_size // 16
             row, col = p // grid_size, p % grid_size
             x1, y1, x2, y2 = (
                 col * patch_px,
