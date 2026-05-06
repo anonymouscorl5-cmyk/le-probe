@@ -138,6 +138,10 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
             / f"file-{episode_idx:03d}.mp4"
         )
 
+    def clear_cache(self):
+        """Clears cached decoders to release file handles before multi-process forks."""
+        self._decoders = {}
+
     def __len__(self):
         buffer = 1 if (self.use_virtual_actions and not self.has_native_actions) else 0
         return len(self.hf_dataset) - (self.num_steps + buffer)

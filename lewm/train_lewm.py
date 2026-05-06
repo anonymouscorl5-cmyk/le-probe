@@ -206,6 +206,9 @@ def run(cfg):
         print("  ✅ RGB Signature Confirmed (Red > Blue).")
     print("-------------------------------------------\n")
 
+    # Release file handles before forking workers
+    dataset.clear_cache()
+
     # 3. Rescale & Normalize Pixels
     transforms = []
     for col in keys_to_load:
