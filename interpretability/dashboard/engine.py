@@ -292,7 +292,8 @@ class LeWMAttributor:
             logit_node = {
                 "node_id": logit_id,
                 "feature": 0,
-                "layer": "SUCCESS",
+                "layer": "Lgt",
+                "probe_location_idx": -1,
                 "ctx_idx": 0,
                 "feature_type": "logit",
                 "token_prob": success_prob,
