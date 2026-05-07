@@ -35,6 +35,7 @@ STATE = {
     "dataset": None,
     "transcoders": {},
     "meta": None,
+    "top_k": 15,
 }
 
 # --- 1. VISUAL ENDPOINTS (Full Parity with colab_bridge.py) ---
@@ -120,11 +121,12 @@ class LeWMAttributor:
     Traces influence from Action Logits -> Predictor Features -> Encoder Features -> Visual Tokens.
     """
 
-    def __init__(self, model, transcoders, transform, device="cuda"):
+    def __init__(self, model, transcoders, transform, device="cuda", top_k=15):
         self.model = model
         self.transcoders = transcoders
         self.transform = transform
         self.device = device
+        self.top_k = top_k
         self.hooks = {}
         self.activations = {}
         self.gradients = {}
@@ -568,7 +570,7 @@ class LeWMAttributor:
             final_link_set = set()
             for nid, links in node_connections.items():
                 links.sort(key=lambda x: x["weight"], reverse=True)
-                for l in links[:20]:
+                for l in links[: self.top_k]:
                     final_link_set.add((l["source"], l["target"], l["weight"]))
 
             for s, t, w in final_link_set:
@@ -678,7 +680,7 @@ async def generate_graph(request: Dict[str, Any]):
         model = STATE["model"]
         transcoders = STATE["transcoders"]
         transform = STATE["transform"]
-        attributor = LeWMAttributor(model, transcoders, transform)
+        attributor = LeWMAttributor(model, transcoders, transform, top_k=STATE["top_k"])
 
         sample = dataset[sample_idx]
 
@@ -778,7 +780,12 @@ def main():
     parser.add_argument(
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
     )
+    parser.add_argument(
+        "--top-k", type=int, default=15, help="Top-K connections per node"
+    )
     args = parser.parse_args()
+
+    STATE["top_k"] = args.top_k
 
     # 1. Load Metadata
     with open(args.meta, "r") as f:
