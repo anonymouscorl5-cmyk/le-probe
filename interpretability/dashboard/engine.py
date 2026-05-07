@@ -402,6 +402,15 @@ class LeWMAttributor:
                         for wid in window_ids:
                             g = self.gradients.get(wid)
                             if g is not None:
+                                # Resolution Alignment (Funnel Fix)
+                                # If current layer (grad) is spatial (257) but window layer (g) is global (1)
+                                if g.shape[1] != grad.shape[1]:
+                                    if g.shape[1] == 1 and grad.shape[1] == 257:
+                                        # Broadcast global to spatial
+                                        g = g.expand(-1, grad.shape[1], -1)
+                                    elif g.shape[1] == 257 and grad.shape[1] == 1:
+                                        # Pool spatial to global
+                                        g = g.mean(dim=1, keepdim=True)
                                 grads_to_cat.append(g)
                             else:
                                 # Pad with zeros if gradient missing (e.g. at end of model)
@@ -518,6 +527,7 @@ class LeWMAttributor:
                                             # Relative offset of target layer within source's prediction window
                                             rel_idx = next_idx - (s_idx_prev + 1)
                                             d_model = W_enc_curr.shape[0]
+                                            # If target is within the local prediction window, use that specific slice
                                             if (
                                                 0
                                                 <= rel_idx
@@ -529,10 +539,10 @@ class LeWMAttributor:
                                                     * d_model
                                                 ]
                                             else:
-                                                # Outside window
-                                                continue
+                                                # GLOBAL JUMP FALLBACK: Target is far away.
+                                                # We use the FIRST slice (self-reconstruction) as a proxy for the feature's residual output.
+                                                W_dec_prev = W_dec_prev[:d_model]
                                         else:
-                                            # Fallback: take first slice
                                             W_dec_prev = W_dec_prev[
                                                 : W_enc_curr.shape[0]
                                             ]
