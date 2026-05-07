@@ -245,7 +245,10 @@ class LeWMAttributor:
                 act_emb = self.model.action_encoder(state_3d)
 
                 logits = self.model.predict(emb, act_emb)
-                target = logits[0, -1, target_logit_idx]
+                # Integrated Gradients Target: The Reward Head (Success Probability)
+                # We attribute the prediction for the FINAL step in the horizon
+                reward_out = self.model.reward_head(logits[:, -1, :])
+                target = reward_out.squeeze()
 
                 # --- Backward Pass ---
                 self.model.zero_grad()
@@ -279,32 +282,33 @@ class LeWMAttributor:
             num_pred = 6
             total_layers = num_enc + num_pred
 
-            # Helper to track nodes for linking
-            layer_to_nodes = {}  # layer_idx -> [node_data, ...]
+            # --- COMPRESSED JEPA LAYOUT ---
+            # 0: IMG, 1-12: Encoder, 12 (Stacked): JOINT, 13-18: Predictor, 19: SUCCESS
+            layer_to_nodes = {}
 
-            # A. Add Logit Node
-            logit_id = "logit_0"
-            logit_prob = float(torch.sigmoid(target))
+            # A. Add Target Node (Grasp Success)
+            logit_id = "logit_success"
+            success_prob = float(torch.sigmoid(target))
             logit_node = {
                 "node_id": logit_id,
-                "feature": target_logit_idx,
-                "layer": str(total_layers + 1),
+                "feature": 0,
+                "layer": "SUCCESS",
                 "ctx_idx": 0,
                 "feature_type": "logit",
-                "token_prob": logit_prob,
-                "logitPct": logit_prob,
+                "token_prob": success_prob,
+                "logitPct": success_prob,
                 "is_target_logit": True,
                 "run_idx": 0,
                 "reverse_ctx_idx": 0,
                 "jsNodeId": logit_id,
-                "streamIdx": total_layers + 1,
-                "clerp": f"Action {target_logit_idx} (p={logit_prob:.3f})",
+                "streamIdx": 19,
+                "clerp": f"Grasp Success (p={success_prob:.3f})",
                 "influence": float(target),
             }
             clt_nodes.append(logit_node)
-            layer_to_nodes[total_layers + 1] = [logit_node]
+            layer_to_nodes[19] = [logit_node]
 
-            # B. Add Input Layer Nodes (Layer 0)
+            # B. Add Visual Input Layer (Layer 0)
             layer_to_nodes[0] = []
             patch_saliency = self._aggregate_spatial_grad(pixel_grad)
             top_patches = torch.topk(patch_saliency.view(-1), k=15)
@@ -315,8 +319,8 @@ class LeWMAttributor:
                 node = {
                     "node_id": node_id,
                     "feature": idx,
-                    "layer": "E",
-                    "ctx_idx": i,  # Sequential for compact layout
+                    "layer": "IMG",
+                    "ctx_idx": i,
                     "feature_type": "patch",
                     "token_prob": 1.0,
                     "is_target_logit": False,
@@ -330,24 +334,26 @@ class LeWMAttributor:
                 clt_nodes.append(node)
                 layer_to_nodes[0].append(node)
 
+            # C. Add Action Input Layer (Stacked in Layer 12 - Encoder Boundary)
+            if 12 not in layer_to_nodes:
+                layer_to_nodes[12] = []
             state_saliency = state_grad.abs().view(-1)
-            top_states = torch.topk(state_saliency, k=5)
+            top_states = torch.topk(state_saliency, k=10)
             for i, (v, idx) in enumerate(zip(top_states.values, top_states.indices)):
                 idx = int(idx)
                 node_id = f"state_{idx}"
                 node = {
                     "node_id": node_id,
                     "feature": idx,
-                    "layer": "E",
-                    "ctx_idx": i
-                    + 17,  # Offset to distinguish from patches but keep compact
-                    "feature_type": "state",
+                    "layer": "IMG",  # Labeled as IMG/INPUT
+                    "ctx_idx": i + 17,  # Follows the 15-16 image patches
+                    "feature_type": "embedding",
                     "token_prob": 1.0,
                     "is_target_logit": False,
                     "run_idx": 0,
                     "reverse_ctx_idx": 0,
                     "jsNodeId": node_id,
-                    "streamIdx": 0,
+                    "streamIdx": 0,  # Back to Input Row
                     "clerp": self._get_state_label(idx),
                     "influence": float(v),
                 }
@@ -377,7 +383,8 @@ class LeWMAttributor:
                         stream_idx = l_idx + 1
                         layer_val = str(l_idx)
                     else:  # predictor
-                        stream_idx = l_idx + 1 + num_enc
+                        # Predictor starts at 13 (since L11/Joints are at 12)
+                        stream_idx = l_idx + 13
                         layer_val = str(l_idx + num_enc)
                 except:
                     stream_idx = 1
@@ -471,16 +478,16 @@ class LeWMAttributor:
                     clt_nodes.append(node)
                     layer_to_nodes[stream_idx].append(node)
 
-            # D. Build Causal Links (Global Jump Connections)
+            # Causal Links (Scan across all layers: 0-19)
             print(f"🔗 Tracing Global Jump Connections with Min-{self.min_k} Filter...")
             all_potential_links = []
 
-            for s_idx in range(total_layers + 2):
+            for s_idx in range(20):
                 curr_nodes = layer_to_nodes.get(s_idx)
                 if not curr_nodes:
                     continue
 
-                for next_idx in range(s_idx + 1, total_layers + 2):
+                for next_idx in range(s_idx + 1, 20):
                     next_nodes = layer_to_nodes.get(next_idx)
                     if not next_nodes:
                         continue
@@ -490,7 +497,11 @@ class LeWMAttributor:
                             try:
                                 link_w = 0.0
                                 # 1. Input -> Feature links
-                                if pn["feature_type"] in ["patch", "state"]:
+                                if pn["feature_type"] in [
+                                    "patch",
+                                    "state",
+                                    "embedding",
+                                ]:
                                     link_w = abs(pn["influence"] * cn["influence"])
                                 # 2. Feature -> Logit links
                                 elif cn["feature_type"] == "logit":
