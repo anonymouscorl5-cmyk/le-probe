@@ -67,18 +67,28 @@ class MultiLayerStreamingDataset(Dataset):
             self.layer_to_idx[layer] = i
             print(f"  - [{layer}] Linked to: {bin_path} | Shape: {ds.shape}")
 
-        self.total_samples = len(self.datasets[0])
+        # Calculate shared 'moments' (samples) count
+        # In JEPA, layers have different tokens but share the same number of time-moments.
+        self.total_moments = (
+            self.datasets[0].shape[0] // self.datasets[0].tokens_per_sample
+        )
         self.d_model_per_layer = self.datasets[0].shape[1]
-        self.tokens_per_sample = self.datasets[0].tokens_per_sample
 
     def __len__(self):
-        return self.total_samples
+        return self.total_moments
 
-    def get_batch_raw(self, indices):
+    def get_batch_raw(self, indices, layer_indices=None):
         """
         Pull raw float16 tensors. ZERO COPY on CPU.
+        layer_indices: Optional list of specific dataset indices to fetch.
         """
-        return [torch.from_numpy(ds.data[indices]) for ds in self.datasets]
+        if layer_indices is None:
+            layer_indices = range(len(self.datasets))
+
+        return {
+            idx: torch.from_numpy(self.datasets[idx].data[indices])
+            for idx in layer_indices
+        }
 
 
 def train_transcoder(
@@ -116,28 +126,45 @@ def train_transcoder(
     # 2. Normalization Pass (Vectorized)
     # Calculate running stats for BOTH source and target to ensure balanced gradients
     print("📈 Calculating Normalization Stats (Source & Target)...")
-    sample_size = min(len(master_ds), 500_000)
-    indices = np.random.choice(len(master_ds), sample_size, replace=False)
 
-    # Source Stats
-    src_data = []
-    for l in src_list:
-        raw = torch.from_numpy(
-            master_ds.datasets[master_ds.layer_to_idx[l]].data[indices]
-        )
-        src_data.append(raw.to(device).float())
-    src_subset = torch.cat(src_data, dim=-1)
-    mean_s, std_s = src_subset.mean(dim=0), src_subset.std(dim=0) + 1e-6
+    # Pick a random subset of MOMENTS to avoid indexing errors across layers
+    sample_moments = min(
+        master_ds.total_moments, 500
+    )  # 500 moments is enough for stats
+    moment_indices = np.random.choice(
+        master_ds.total_moments, sample_moments, replace=False
+    )
 
-    # Target Stats
-    tgt_data = []
-    for l in tgt_list:
-        raw = torch.from_numpy(
-            master_ds.datasets[master_ds.layer_to_idx[l]].data[indices]
-        )
-        tgt_data.append(raw.to(device).float())
-    tgt_subset = torch.cat(tgt_data, dim=-1)
-    mean_t, std_t = tgt_subset.mean(dim=0), tgt_subset.std(dim=0) + 1e-6
+    print(f"  - Sampling {sample_moments} moments for stats calibration.")
+
+    def get_layer_stats(layer_names):
+        means, stds = [], []
+        for l in layer_names:
+            ds_l = master_ds.datasets[master_ds.layer_to_idx[l]]
+            tps = ds_l.tokens_per_sample
+
+            # Vectorized expansion
+            token_indices = (moment_indices[:, None] * tps + np.arange(tps)).flatten()
+            raw = torch.from_numpy(ds_l.data[token_indices]).to(device).float()
+
+            l_mean = raw.mean(dim=0)
+            l_std = raw.std(dim=0) + 1e-6
+
+            print(
+                f"    🧠 [{l}] Tokens: {len(token_indices)} | Mean: {l_mean.mean().item():.3f} | Std: {l_std.mean().item():.3f}"
+            )
+            means.append(l_mean)
+            stds.append(l_std)
+
+        return torch.cat(means), torch.cat(stds)
+
+    # Calculate stats independently per layer and then join
+    mean_s, std_s = get_layer_stats(src_list)
+    mean_t, std_t = get_layer_stats(tgt_list)
+
+    print(
+        f"  ✅ Normalization Ready: Source Dim {mean_s.shape[0]} | Target Dim {mean_t.shape[0]}"
+    )
 
     # 3. Model Setup
     d_in = len(src_list) * master_ds.d_model_per_layer
@@ -154,16 +181,21 @@ def train_transcoder(
     # 4. Training Loop
     for epoch in range(epochs):
         model.train()
-        num_tokens = len(master_ds)
+        # The prefetcher must cover all TOKENS in the source layer
+        num_tokens = len(master_ds.datasets[master_ds.layer_to_idx[src_list[0]]])
 
-        # Funnel check for Encoder/Predictor alignment
+        # A block is a 'Funnel' if ANY target layer has a different resolution than the source
         src_tokens = master_ds.datasets[
             master_ds.layer_to_idx[src_list[0]]
         ].tokens_per_sample
-        tgt_tokens = master_ds.datasets[
-            master_ds.layer_to_idx[tgt_list[0]]
-        ].tokens_per_sample
-        is_funnel = src_tokens != tgt_tokens
+        is_funnel = False
+        for l in tgt_list:
+            if (
+                master_ds.datasets[master_ds.layer_to_idx[l]].tokens_per_sample
+                != src_tokens
+            ):
+                is_funnel = True
+                break
 
         # --- 🚀 ASYNCHRONOUS PREFETCHER (MAX THROUGHPUT) ---
         import threading
@@ -179,7 +211,16 @@ def train_transcoder(
                 b_end = min(b_start + buffer_size, num_tokens)
                 b_indices = np.arange(b_start, b_end)
                 # 1. Sequential Disk Read (Fast on SSD)
-                b_raw = master_ds.get_batch_raw(b_indices)
+                # 🔥 FIX: Only prefetch layers that MATCH the source resolution.
+                # Asymmetric layers are handled on-demand in the loop.
+                matching_layer_indices = [
+                    master_ds.layer_to_idx[l]
+                    for l in unique_layers
+                    if len(master_ds.datasets[master_ds.layer_to_idx[l]]) == num_tokens
+                ]
+                b_raw = master_ds.get_batch_raw(
+                    b_indices, layer_indices=matching_layer_indices
+                )
 
                 # 2. Local RAM Shuffle (IID Quality)
                 l_indices = np.arange(len(b_indices))
@@ -209,12 +250,13 @@ def train_transcoder(
                         continue
 
                     # Move batch to GPU and cast to float32
-                    gpu_tensors = [
-                        t[batch_local_idx].to(device, non_blocking=True).float()
-                        for t in block_raw
-                    ]
+                    gpu_tensors = {
+                        idx: t[batch_local_idx].to(device, non_blocking=True).float()
+                        for idx, t in block_raw.items()
+                    }
                     s_batch = torch.cat(
-                        [gpu_tensors[layer_to_pos[l]] for l in src_list], dim=-1
+                        [gpu_tensors[master_ds.layer_to_idx[l]] for l in src_list],
+                        dim=-1,
                     )
                     s_batch_norm = (s_batch - mean_s) / std_s
 
@@ -223,7 +265,11 @@ def train_transcoder(
                     else:
                         if not is_funnel:
                             t_batch = torch.cat(
-                                [gpu_tensors[layer_to_pos[l]] for l in tgt_list], dim=-1
+                                [
+                                    gpu_tensors[master_ds.layer_to_idx[l]]
+                                    for l in tgt_list
+                                ],
+                                dim=-1,
                             )
                             t_batch_norm = (t_batch - mean_t) / std_t
                         else:
