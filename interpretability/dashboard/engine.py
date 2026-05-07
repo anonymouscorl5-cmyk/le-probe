@@ -472,7 +472,7 @@ class LeWMAttributor:
                     layer_to_nodes[stream_idx].append(node)
 
             # D. Build Causal Links (Global Jump Connections)
-            print("🔗 Tracing Global Jump Connections with Top-20 Filter...")
+            print(f"🔗 Tracing Global Jump Connections with Top-{self.top_k} Filter...")
             all_potential_links = []
 
             for s_idx in range(total_layers + 2):
@@ -558,17 +558,29 @@ class LeWMAttributor:
                             except:
                                 continue
 
-            # Apply Top-20 per node constraint
-            node_connections = {}  # node_id -> list of links
+            # Apply Top-K per node constraint (Separate Incoming/Outgoing)
+            outgoing_map = {}  # node_id -> list of links where this is source
+            incoming_map = {}  # node_id -> list of links where this is target
+
             for link in all_potential_links:
-                for role in ["source", "target"]:
-                    nid = link[role]
-                    if nid not in node_connections:
-                        node_connections[nid] = []
-                    node_connections[nid].append(link)
+                s, t = link["source"], link["target"]
+                if s not in outgoing_map:
+                    outgoing_map[s] = []
+                if t not in incoming_map:
+                    incoming_map[t] = []
+                outgoing_map[s].append(link)
+                incoming_map[t].append(link)
 
             final_link_set = set()
-            for nid, links in node_connections.items():
+
+            # Keep Top-K Outgoing
+            for nid, links in outgoing_map.items():
+                links.sort(key=lambda x: x["weight"], reverse=True)
+                for l in links[: self.top_k]:
+                    final_link_set.add((l["source"], l["target"], l["weight"]))
+
+            # Keep Top-K Incoming
+            for nid, links in incoming_map.items():
                 links.sort(key=lambda x: x["weight"], reverse=True)
                 for l in links[: self.top_k]:
                     final_link_set.add((l["source"], l["target"], l["weight"]))
