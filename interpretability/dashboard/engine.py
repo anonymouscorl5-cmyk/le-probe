@@ -303,6 +303,7 @@ class LeWMAttributor:
                 "jsNodeId": logit_id,
                 "streamIdx": 19,
                 "clerp": f"Grasp Success (p={success_prob:.3f})",
+                "ppClerp": f"Grasp Success (p={success_prob:.3f})",
                 "influence": float(target),
             }
             clt_nodes.append(logit_node)
@@ -346,8 +347,8 @@ class LeWMAttributor:
                     "node_id": node_id,
                     "feature": idx,
                     "layer": "IMG",  # Labeled as IMG/INPUT
-                    "ctx_idx": i + 17,  # Follows the 15-16 image patches
-                    "feature_type": "embedding",
+                    "ctx_idx": i + 15,  # Follows the 15 image patches (0-14)
+                    "feature_type": "state",
                     "token_prob": 1.0,
                     "is_target_logit": False,
                     "run_idx": 0,
@@ -355,6 +356,7 @@ class LeWMAttributor:
                     "jsNodeId": node_id,
                     "streamIdx": 0,  # Back to Input Row
                     "clerp": self._get_state_label(idx),
+                    "ppClerp": self._get_state_label(idx),
                     "influence": float(v),
                 }
                 clt_nodes.append(node)
@@ -502,6 +504,10 @@ class LeWMAttributor:
                                     "state",
                                     "embedding",
                                 ]:
+                                    # CAUSAL CONSTRAINT: Actions only feed into Predictor (L13+) or Success (L19)
+                                    if pn["feature_type"] == "state" and next_idx < 13:
+                                        continue
+
                                     link_w = abs(pn["influence"] * cn["influence"])
                                 # 2. Feature -> Logit links
                                 elif cn["feature_type"] == "logit":
