@@ -470,14 +470,14 @@ class LeWMAttributor:
                     layer_to_nodes[stream_idx].append(node)
 
             # D. Build Causal Links (Global Jump Connections)
-            print("🔗 Tracing Global Jump Connections...")
-            # We compare every layer to every FUTURE layer to find skip connections
+            print("🔗 Tracing Global Jump Connections with Top-20 Filter...")
+            all_potential_links = []
+
             for s_idx in range(total_layers + 2):
                 curr_nodes = layer_to_nodes.get(s_idx)
                 if not curr_nodes:
                     continue
 
-                # Look at every future layer
                 for next_idx in range(s_idx + 1, total_layers + 2):
                     next_nodes = layer_to_nodes.get(next_idx)
                     if not next_nodes:
@@ -486,16 +486,13 @@ class LeWMAttributor:
                     for cn in next_nodes:
                         for pn in curr_nodes:
                             try:
+                                link_w = 0.0
                                 # 1. Input -> Feature links
                                 if pn["feature_type"] in ["patch", "state"]:
-                                    # Heuristic: combine raw influence
                                     link_w = abs(pn["influence"] * cn["influence"])
-
                                 # 2. Feature -> Logit links
                                 elif cn["feature_type"] == "logit":
-                                    # Global influence for final action
                                     link_w = abs(pn["influence"])
-
                                 # 3. Feature -> Feature links (THE JUMP MECHANISM)
                                 else:
                                     lid_curr = (
@@ -508,11 +505,10 @@ class LeWMAttributor:
                                         .split("feat_")[1]
                                         .rsplit("_", 1)[0]
                                     )
+                                    f_idx_curr, f_idx_prev = int(cn["feature"]), int(
+                                        pn["feature"]
+                                    )
 
-                                    f_idx_curr = int(cn["feature"])
-                                    f_idx_prev = int(pn["feature"])
-
-                                    # Connectivity * Source Activation * Target Influence (Grad)
                                     W_dec_prev = self.transcoders[lid_prev][
                                         "model"
                                     ].decoder.weight.data[:, f_idx_prev]
@@ -520,14 +516,11 @@ class LeWMAttributor:
                                         "model"
                                     ].encoder.weight.data[f_idx_curr]
 
-                                    # Multi-Layer Alignment: Extract correct slice
                                     if W_dec_prev.shape[0] > W_enc_curr.shape[0]:
                                         s_idx_prev = pn.get("_start_idx", -1)
                                         if s_idx_prev != -1:
-                                            # Relative offset of target layer within source's prediction window
                                             rel_idx = next_idx - (s_idx_prev + 1)
                                             d_model = W_enc_curr.shape[0]
-                                            # If target is within the local prediction window, use that specific slice
                                             if (
                                                 0
                                                 <= rel_idx
@@ -539,8 +532,6 @@ class LeWMAttributor:
                                                     * d_model
                                                 ]
                                             else:
-                                                # GLOBAL JUMP FALLBACK: Target is far away.
-                                                # We use the FIRST slice (self-reconstruction) as a proxy for the feature's residual output.
                                                 W_dec_prev = W_dec_prev[:d_model]
                                         else:
                                             W_dec_prev = W_dec_prev[
@@ -554,9 +545,8 @@ class LeWMAttributor:
                                         * abs(cn["influence"])
                                     )
 
-                                # Threshold for visual clarity
-                                if link_w > 0.005:
-                                    clt_links.append(
+                                if link_w > 1e-6:
+                                    all_potential_links.append(
                                         {
                                             "source": pn["node_id"],
                                             "target": cn["node_id"],
@@ -565,6 +555,24 @@ class LeWMAttributor:
                                     )
                             except:
                                 continue
+
+            # Apply Top-20 per node constraint
+            node_connections = {}  # node_id -> list of links
+            for link in all_potential_links:
+                for role in ["source", "target"]:
+                    nid = link[role]
+                    if nid not in node_connections:
+                        node_connections[nid] = []
+                    node_connections[nid].append(link)
+
+            final_link_set = set()
+            for nid, links in node_connections.items():
+                links.sort(key=lambda x: x["weight"], reverse=True)
+                for l in links[:20]:
+                    final_link_set.add((l["source"], l["target"], l["weight"]))
+
+            for s, t, w in final_link_set:
+                clt_links.append({"source": s, "target": t, "weight": w})
 
             # Cleanup hooks
             self._cleanup_hooks()
