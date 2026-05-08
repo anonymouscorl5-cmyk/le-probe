@@ -43,16 +43,16 @@ The major changes are:
 
 ## 🔬 Results: The "Residual Highway"
 
-Using the new dashboard, we discovered that LeWM v8 does not reason in a strictly sequential manner. Instead, it utilizes a massive **Residual Highway**:
-
-*   **Discovery**: High-level decision hubs in the late encoder (L11) draw raw spatial data directly from early sensory layers (L0/L1) via 10+ layer skip connections.
-*   **Verification**: Feature **`F848`** (L11) was identified as a critical causal junction for grasp success, receiving direct injections from perceptual features like **`F5000`** (L0).
-*   **Connectivity Filtering**: We implemented a **Direction-Aware Union Min-K Filter** to maintain graph clarity while preserving these vital long-range causal links.
+The attribution graph was computed using integrated gradients,
 
 <div align="center">
   <img src="../assets/neuronpedia_dashboard.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
   <p><i>The Le-Probe Dashboard: Hierarchical circuit tracing from pixels to reward probability.</i></p>
 </div>
+
+*   **Observation**: High-level decision hubs in the late encoder (L11) draw raw spatial data directly from early sensory layers (L0/L1) via 10+ layer skip connections.
+*   **Verification**: Feature **`F848`** (L11) was identified as a critical causal junction for grasp success, receiving direct injections from perceptual features like **`F5000`** (L0).
+*   **Connectivity Filtering**: We implemented a **Direction-Aware Union Min-K Filter** to maintain graph clarity while preserving these vital long-range causal links.
 
 ## 🚀 Research Roadmap: Next Steps
 

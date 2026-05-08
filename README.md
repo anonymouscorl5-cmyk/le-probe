@@ -85,10 +85,11 @@ Given the behaviour somewhat works but nowhere near good enough, the next step i
 
 ### 4. Interpretability: The "Residual Highway"
 
-To understand why LeWM struggles with goal discrimination, we have deployed a **High-Fidelity Mechanistic Dashboard** based on a custom fork of **Neuronpedia**.
+To understand why LeWM struggles with goal discrimination, I am working with a fork of [neuronpedia](https://github.com/hijohnnylin/neuronpedia) [here](https://github.com/vedpatwardhan/neuronpedia).
 
 #### Architecture
-We use a full-stack attribution engine that probes every layer of the Encoder and Predictor. The dashboard visualizes the **5-Stage JEPA Flow**: `Inputs` $\rightarrow$ `Encoder` $\rightarrow$ `Joints` $\rightarrow$ `Predictor` $\rightarrow$ `Reward Head`.
+
+We use a full-stack attribution engine that probes every layer of the Encoder and Predictor.
 
 <div align="center">
   <img src="assets/interpretability_architecture.png" width="70%" style="border-radius: 12px; margin-top: 20px;">
@@ -96,7 +97,8 @@ We use a full-stack attribution engine that probes every layer of the Encoder an
 </div>
 
 #### Results
-By unlocking global causal jumps, we discovered that LeWM v8 utilizes a massive **Residual Highway**. High-level decision hubs (L11) draw raw spatial anchors directly from early sensory layers (L0/L1) via 10+ layer skip connections. 
+
+High-level decision hubs (L11) draw raw spatial anchors directly from early sensory layers (L0/L1) via 10+ layer skip connections.
 
 <div align="center">
   <img src="assets/neuronpedia_dashboard.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
