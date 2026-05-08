@@ -20,6 +20,7 @@ if str(LEWM_DIR) not in sys.path:
 from lewm.goal_mapper import GoalMapper
 from lewm.lewm_data_plugin import LEWMDataPlugin
 
+
 def harvest_manifold(
     model_path, dataset_repo, output_file, num_episodes=0, num_workers=4
 ):
@@ -62,7 +63,8 @@ def harvest_manifold(
         with torch.no_grad():
             pbar = tqdm(dataloader, desc="Harvesting", total=actual_total)
             for i, batch in enumerate(pbar):
-                if num_episodes > 0 and i >= num_episodes * 32:
+                # Stop after processing the requested number of episodes (64 frames per batch)
+                if num_episodes > 0 and (i * 64) >= (num_episodes * 32):
                     break
 
                 raw_pixels = batch["pixels"].to(device)
@@ -71,7 +73,9 @@ def harvest_manifold(
                 # --- 🎯 Model-Specific Transform ---
                 B, T, C, H, W = raw_pixels.shape
                 raw_pixels_flat = raw_pixels.view(B * T, C, H, W)
-                processed_pixels = mapper.transform({"pixels": raw_pixels_flat})["pixels"]
+                processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
+                    "pixels"
+                ]
                 pixels = processed_pixels.view(B, T, C, 224, 224)
                 # -----------------------------------
 
@@ -81,10 +85,10 @@ def harvest_manifold(
                 with torch.amp.autocast("cuda"):
                     # Extract the joint embedding (Encoder output)
                     info = model.encode({"pixels": pixels, "action": actions})
-                    emb = info["emb"] # (B, T, D)
-                
+                    emb = info["emb"]  # (B, T, D)
+
                 all_latents.append(emb.cpu().numpy().astype(np.float32))
-                
+
                 # Fetch frame indices for this batch
                 start_idx = i * B
                 end_idx = min((i + 1) * B, len(data_plugin.frame_indices))
@@ -95,29 +99,36 @@ def harvest_manifold(
         data_plugin.clear_cache()
 
     # Concatenate results
-    latents = np.concatenate(all_latents, axis=0) # (N, T, D)
-    latents = latents.reshape(-1, latents.shape[-1]) # (N*T, D)
-    indices = np.concatenate(all_indices, axis=0) # (N*T,)
+    latents = np.concatenate(all_latents, axis=0)  # (N, T, D)
+    latents = latents.reshape(-1, latents.shape[-1])  # (N*T, D)
+    indices = np.concatenate(all_indices, axis=0)  # (N*T,)
 
     print(f"💾 Saving manifold data...")
-    data = {
-        "latents": latents,
-        "frame_indices": indices
-    }
+    data = {"latents": latents, "frame_indices": indices}
     torch.save(data, output_path)
     print(f"✨ Manifold data saved to {output_path}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
     parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
-    parser.add_argument("--output", type=str, default="le-probe/interpretability/manifold/manifold_data.pt")
-    parser.add_argument("--episodes", type=int, default=0, help="Number of episodes to harvest (0 for all)")
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="le-probe/interpretability/manifold/manifold_data.pt",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=0,
+        help="Number of episodes to harvest (0 for all)",
+    )
     args = parser.parse_args()
 
     harvest_manifold(
         model_path=args.model,
         dataset_repo=args.dataset,
         output_file=args.output,
-        num_episodes=args.episodes
+        num_episodes=args.episodes,
     )
