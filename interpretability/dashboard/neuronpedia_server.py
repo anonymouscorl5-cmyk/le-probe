@@ -86,6 +86,24 @@ async def get_frame(idx: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/robot-dataset/gallery/{idx}.jpg")
+async def get_gallery(idx: int, patches: str = ""):
+    """
+    Proxies a gallery request to the Colab/Pinggy bridge.
+    """
+    if not CONFIG["remote_url"]:
+        raise HTTPException(status_code=501, detail="Cloud bridge URL not configured.")
+
+    url = f"{CONFIG['remote_url'].rstrip('/')}/api/robot-dataset/gallery/{idx}.jpg"
+    try:
+        resp = requests.get(url, params={"patches": patches}, timeout=30)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        return Response(content=resp.content, media_type="image/jpeg")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @app.post("/api/attribution/generate-graph")
 async def generate_graph(request_data: dict):
     """

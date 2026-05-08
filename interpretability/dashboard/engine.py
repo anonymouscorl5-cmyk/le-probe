@@ -612,10 +612,11 @@ class LeWMAttributor:
             # E. Final Graph structure
             graph_data = {
                 "metadata": {
-                    "slug": f"sample_{target_logit_idx}",
+                    "slug": f"robot_trace_{idx}",
                     "scan": "lewm-robot",
+                    "trace_id": idx,
                     "prompt_tokens": ["Robotic", "Frame"],
-                    "prompt": f"Sample {target_logit_idx}",
+                    "prompt": f"Robotic Trace {idx}",
                     "title_prefix": "Robotic Circuit",
                     "schema_version": 0,
                     "node_threshold": 99999,
@@ -634,6 +635,7 @@ class LeWMAttributor:
                 },
                 "nodes": clt_nodes,
                 "links": clt_links,
+                "_top_patch_indices": top_patches.indices.tolist(),
             }
         except Exception as e:
             print(f"❌ Error processing layer: {e}")
@@ -720,10 +722,68 @@ async def generate_graph(request: Dict[str, Any]):
                 sample[k] = v.unsqueeze(0)
 
         graph = attributor.attribute(sample, target_logit_idx)
+        # Add metadata for the robotic gallery
+        graph["metadata"] = {
+            "trace_id": sample_idx,
+            "patch_indices": graph.get("_top_patch_indices", []),
+        }
         return graph
 
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Attribution failed: {str(e)}")
+
+
+@app.get("/api/robot-dataset/gallery/{idx}.jpg")
+async def get_gallery(idx: int, patches: Optional[str] = None):
+    """
+    Generates a 2x5 grid of the 10 frames in a sample, with specific patches highlighted.
+    """
+    dataset = STATE["dataset"]
+    if not dataset:
+        raise HTTPException(status_code=500, detail="Dataset not loaded")
+
+    try:
+        sample = dataset[idx]
+        pixels = sample["pixels"]  # [T, C, H, W]
+        if pixels.ndim == 5:
+            pixels = pixels[0]
+
+        T = pixels.shape[0]
+        patch_list = []
+        if patches:
+            patch_list = [int(p) for p in patches.split(",")]
+
+        frames = []
+        for t in range(min(T, 10)):
+            img_tensor = pixels[t]
+            img_np = (img_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype("uint8")
+            img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+            img_bgr = cv2.resize(img_bgr, (224, 224))
+
+            # Draw patches
+            for p in patch_list:
+                grid_size, patch_px = 16, 224 // 16
+                row, col = p // grid_size, p % grid_size
+                x1, y1 = col * patch_px, row * patch_px
+                cv2.rectangle(
+                    img_bgr, (x1, y1), (x1 + patch_px, y1 + patch_px), (0, 255, 0), 2
+                )
+
+            frames.append(img_bgr)
+
+        # Create 2x5 grid
+        rows = []
+        for i in range(0, len(frames), 5):
+            rows.append(np.hstack(frames[i : i + 5]))
+
+        composite = np.vstack(rows)
+        _, buffer = cv2.imencode(".jpg", composite)
+        return Response(content=buffer.tobytes(), media_type="image/jpeg")
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- 3. MAIN BOOTSTRAP ---
