@@ -16,6 +16,7 @@ Following is the architecture used for experimenting with the trained model for 
 ### 🛠 Key Components
 
 - [`dashboard`](./dashboard): contains the scripts used to visualize the neuronpedia dashboard based on the trained transcoders.
+- [`manifold`](./manifold): 3D PCA/t-SNE visualization of the latent manifold across trajectories.
 - [`transcoders`](./transcoders): Unified module for both SAE (Identity) and CLT (Transition) probes for harvesting as well as training.
 - [`steering`](./steering): Latent Steering used for interpretability (hasn't been tried yet).
 - [`teleop_ui_interpret.py`](./teleop_ui_interpret.py): Dashboard to view the top 15 features triggered the most by a given state-action configuration in a bar plot.
@@ -114,6 +115,17 @@ make webapp-localhost-dev
 
 # 4. Generate Graphs
 .venv/bin/python interpretability/dashboard/regenerate_graphs.py
+```
+
+### 3. Latent Manifold Visualization
+Analyze the topological structure of the latent space to diagnose discriminability:
+
+```bash
+# 1. Harvest latents for the entire trajectory
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 100
+
+# 2. Generate 3D PCA visualization
+.venv/bin/python interpretability/manifold/visualize_manifold.py --method pca
 ```
 
 Once the graphs are generated, the graph can be selected from the dropdown at http://localhost:3000.
