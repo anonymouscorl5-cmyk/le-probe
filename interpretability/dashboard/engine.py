@@ -75,8 +75,7 @@ async def get_frame(idx: int):
             if hasattr(img_tensor, "permute")
             else img_tensor.transpose(1, 2, 0)
         )
-        if img_np.max() <= 1.0:
-            img_np = (img_np * 255).astype("uint8")
+        img_np = img_np.astype("uint8")
         img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
         display_size = 480
@@ -93,7 +92,7 @@ async def get_frame(idx: int):
                 (col + 1) * patch_px,
                 (row + 1) * patch_px,
             )
-            cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 1)
             cv2.putText(
                 img_bgr,
                 f"P{p}",
@@ -722,11 +721,9 @@ async def generate_graph(request: Dict[str, Any]):
                 sample[k] = v.unsqueeze(0)
 
         graph = attributor.attribute(sample, target_logit_idx)
-        # Add metadata for the robotic gallery
-        graph["metadata"] = {
-            "trace_id": sample_idx,
-            "patch_indices": graph.get("_top_patch_indices", []),
-        }
+        # Add metadata for the robotic gallery without overwriting
+        graph["metadata"]["trace_id"] = sample_idx
+        graph["metadata"]["patch_indices"] = graph.get("_top_patch_indices", [])
         return graph
 
     except Exception as e:
@@ -757,7 +754,7 @@ async def get_gallery(idx: int, patches: Optional[str] = None):
         frames = []
         for t in range(min(T, 10)):
             img_tensor = pixels[t]
-            img_np = (img_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype("uint8")
+            img_np = img_tensor.permute(1, 2, 0).cpu().numpy().astype("uint8")
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
             img_bgr = cv2.resize(img_bgr, (224, 224))
 
@@ -767,7 +764,7 @@ async def get_gallery(idx: int, patches: Optional[str] = None):
                 row, col = p // grid_size, p % grid_size
                 x1, y1 = col * patch_px, row * patch_px
                 cv2.rectangle(
-                    img_bgr, (x1, y1), (x1 + patch_px, y1 + patch_px), (0, 255, 0), 2
+                    img_bgr, (x1, y1), (x1 + patch_px, y1 + patch_px), (0, 255, 0), 1
                 )
 
             frames.append(img_bgr)
