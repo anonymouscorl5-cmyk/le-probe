@@ -1,121 +1,413 @@
+# --- Path Stabilization ---
+# Ensures that 'le-probe' is in the python path for absolute imports
 import os
+import sys
+from pathlib import Path
+
+CURRENT_FILE = Path(__file__).resolve()
+ROOT_DIR = CURRENT_FILE.parents[2]  # To le-probe/
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+# --------------------------
+
+import json
 import torch
 import torch.optim as optim
 import argparse
-from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
+from torch.utils.data import Dataset
 from tqdm import tqdm
+
+# 🔥 SPEED FIX: Prevent GPU stalls from tiny subnormal numbers in sparse gradients
+if torch.cuda.is_available():
+    torch.set_flush_denormal(True)
 from interpretability.transcoders.universal_transcoder import Transcoder
 
 
+class StreamingActivationsDataset(Dataset):
+    """
+    High-performance streaming dataset for .bin activation files.
+    Supports memory mapping for zero-RAM overhead.
+    """
+
+    def __init__(self, bin_path, json_path):
+        with open(json_path, "r") as f:
+            self.meta = json.load(f)
+
+        self.shape = tuple(self.meta["shape"])
+        self.tokens_per_sample = self.meta.get("tokens_per_sample", 1)
+        # Load as float16 to save RAM and speed up transfer
+        self.data = np.memmap(bin_path, dtype=np.float16, mode="r", shape=self.shape)
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, idx):
+        # We don't use this in the hot loop (we use get_batch_raw)
+        return torch.from_numpy(self.data[idx])
+
+
+class MultiLayerStreamingDataset(Dataset):
+    """
+    Synchronized dataset for multiple .bin activation files.
+
+    Optimized for Crosscoder mode: Handles multiple file pointers and de-duplicates
+    disk reads for overlapping source/target layers.
+    """
+
+    def __init__(self, source_dir, layers):
+        self.datasets = []
+        self.layer_to_idx = {}
+        print("🔍 MultiLayer Startup Audit:")
+        for i, layer in enumerate(layers):
+            bin_path = os.path.join(source_dir, f"{layer}.bin")
+            json_path = os.path.join(source_dir, f"{layer}.json")
+            ds = StreamingActivationsDataset(bin_path, json_path)
+            self.datasets.append(ds)
+            self.layer_to_idx[layer] = i
+            print(f"  - [{layer}] Linked to: {bin_path} | Shape: {ds.shape}")
+
+        # Calculate shared 'moments' (samples) count
+        # In JEPA, layers have different tokens but share the same number of time-moments.
+        self.total_moments = (
+            self.datasets[0].shape[0] // self.datasets[0].tokens_per_sample
+        )
+        self.d_model_per_layer = self.datasets[0].shape[1]
+
+    def __len__(self):
+        return self.total_moments
+
+    def get_batch_raw(self, indices, layer_indices=None):
+        """
+        Pull raw float16 tensors. ZERO COPY on CPU.
+        layer_indices: Optional list of specific dataset indices to fetch.
+        """
+        if layer_indices is None:
+            layer_indices = range(len(self.datasets))
+
+        return {
+            idx: torch.from_numpy(self.datasets[idx].data[indices])
+            for idx in layer_indices
+        }
+
+
 def train_transcoder(
-    source_path,
-    target_path,
+    source_dir,
+    source_layers_str,
+    target_layers_str,
     output_path,
     dict_size=12288,
     l1_coeff=1e-3,
-    epochs=30,
-    batch_size=256,
-    lr=1e-3,
+    epochs=5,
+    batch_size=4096,
+    lr=1e-4,
 ):
+    """
+    Core training loop for SAEs and Crosscoders.
+    Optimized for maximum GPU utilization and minimal CPU-to-GPU latency.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Training Transcoder | Device: {device}")
-    print(f"  - Source: {source_path}")
-    print(f"  - Target: {target_path}")
+    print(f"🚀 Bare-Metal Optimized Training | Device: {device}")
 
-    # 1. Load Data
-    x_source = torch.load(source_path, map_location="cpu").float()
-    x_target = (
-        torch.load(target_path, map_location="cpu").float()
-        if source_path != target_path
-        else x_source
+    # Parse layer lists for multi-layer support
+    src_list = [s.strip() for s in source_layers_str.split(",")]
+    tgt_list = [t.strip() for t in target_layers_str.split(",")]
+
+    # Identify unique layers to avoid redundant disk reads
+    unique_layers = sorted(list(set(src_list + tgt_list)))
+    layer_to_pos = {l: i for i, l in enumerate(unique_layers)}
+
+    print(f"📦 Unique Layers in play: {unique_layers}")
+    print(f"🔗 {source_layers_str} ⮕ {target_layers_str}")
+
+    # 1. Initialize Master Dataset
+    master_ds = MultiLayerStreamingDataset(source_dir, unique_layers)
+
+    # 2. Normalization Pass (Vectorized)
+    # Calculate running stats for BOTH source and target to ensure balanced gradients
+    print("📈 Calculating Normalization Stats (Source & Target)...")
+
+    # Pick a random subset of MOMENTS to avoid indexing errors across layers
+    sample_moments = min(
+        master_ds.total_moments, 500
+    )  # 500 moments is enough for stats
+    moment_indices = np.random.choice(
+        master_ds.total_moments, sample_moments, replace=False
     )
 
-    # 2. Normalize (Unit Variance for both Source and Target)
-    mean_s, std_s = x_source.mean(dim=0), x_source.std(dim=0) + 1e-6
-    mean_t, std_t = x_target.mean(dim=0), x_target.std(dim=0) + 1e-6
+    print(f"  - Sampling {sample_moments} moments for stats calibration.")
 
-    x_s_norm = (x_source - mean_s) / std_s
-    x_t_norm = (x_target - mean_t) / std_t
+    def get_layer_stats(layer_names):
+        means, stds = [], []
+        for l in layer_names:
+            ds_l = master_ds.datasets[master_ds.layer_to_idx[l]]
+            tps = ds_l.tokens_per_sample
 
-    dataset = TensorDataset(x_s_norm, x_t_norm)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+            # Vectorized expansion
+            token_indices = (moment_indices[:, None] * tps + np.arange(tps)).flatten()
+            raw = torch.from_numpy(ds_l.data[token_indices]).to(device).float()
 
-    # 3. Initialize Model
-    d_model = x_source.shape[1]
-    model = Transcoder(d_model, dict_size, l1_coeff).to(device)
+            l_mean = raw.mean(dim=0)
+            l_std = raw.std(dim=0) + 1e-6
+
+            print(
+                f"    🧠 [{l}] Tokens: {len(token_indices)} | Mean: {l_mean.mean().item():.3f} | Std: {l_std.mean().item():.3f}"
+            )
+            means.append(l_mean)
+            stds.append(l_std)
+
+        return torch.cat(means), torch.cat(stds)
+
+    # Calculate stats independently per layer and then join
+    mean_s, std_s = get_layer_stats(src_list)
+    mean_t, std_t = get_layer_stats(tgt_list)
+
+    print(
+        f"  ✅ Normalization Ready: Source Dim {mean_s.shape[0]} | Target Dim {mean_t.shape[0]}"
+    )
+
+    # 3. Model Setup
+    d_in = len(src_list) * master_ds.d_model_per_layer
+    d_out = len(tgt_list) * master_ds.d_model_per_layer
+
+    model = Transcoder(
+        d_model=d_in, d_dict=dict_size, d_output=d_out, l1_coeff=l1_coeff
+    ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    # Diagnostics tracking: tracks which features have fired at least once
+    has_activated = torch.zeros(dict_size, dtype=torch.bool, device=device)
 
     # 4. Training Loop
     for epoch in range(epochs):
         model.train()
-        total_loss, total_mse, total_l1 = 0, 0, 0
-        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{epochs}")
+        # The prefetcher must cover all TOKENS in the source layer
+        num_tokens = len(master_ds.datasets[master_ds.layer_to_idx[src_list[0]]])
 
-        for s_batch, t_batch in pbar:
-            s_batch, t_batch = s_batch.to(device), t_batch.to(device)
-            optimizer.zero_grad()
+        # A block is a 'Funnel' if ANY target layer has a different resolution than the source
+        src_tokens = master_ds.datasets[
+            master_ds.layer_to_idx[src_list[0]]
+        ].tokens_per_sample
+        is_funnel = False
+        for l in tgt_list:
+            if (
+                master_ds.datasets[master_ds.layer_to_idx[l]].tokens_per_sample
+                != src_tokens
+            ):
+                is_funnel = True
+                break
 
-            out = model(s_batch, target=t_batch)
-            loss = out["loss"]
+        # --- 🚀 ASYNCHRONOUS PREFETCHER (MAX THROUGHPUT) ---
+        import threading
+        import queue
 
-            loss.backward()
-            optimizer.step()
-            model.normalize_decoder()
+        buffer_size = 1_000_000
+        num_batches = (num_tokens + batch_size - 1) // batch_size
+        num_blocks = (num_tokens + buffer_size - 1) // buffer_size
+        prefetch_queue = queue.Queue(maxsize=1)
 
-            total_loss += loss.item()
-            total_mse += out["l2_loss"].item()
-            total_l1 += out["l1_loss"].item()
+        def prefetch_worker(starts):
+            for b_start in starts:
+                b_end = min(b_start + buffer_size, num_tokens)
+                b_indices = np.arange(b_start, b_end)
+                # 1. Sequential Disk Read (Fast on SSD)
+                # 🔥 FIX: Only prefetch layers that MATCH the source resolution.
+                # Asymmetric layers are handled on-demand in the loop.
+                matching_layer_indices = [
+                    master_ds.layer_to_idx[l]
+                    for l in unique_layers
+                    if len(master_ds.datasets[master_ds.layer_to_idx[l]]) == num_tokens
+                ]
+                b_raw = master_ds.get_batch_raw(
+                    b_indices, layer_indices=matching_layer_indices
+                )
 
-            pbar.set_postfix(
-                {
-                    "mse": f"{out['l2_loss'].item():.4f}",
-                    "sparsity": f"{(out['activations'] > 0).float().mean().item():.2%}",
-                }
-            )
+                # 2. Local RAM Shuffle (IID Quality)
+                l_indices = np.arange(len(b_indices))
+                np.random.shuffle(l_indices)
 
-    # 5. Save with Metadata
+                # 3. Buffer the block for the GPU
+                prefetch_queue.put((b_raw, l_indices, b_indices))
+            prefetch_queue.put(None)
+
+        with tqdm(total=num_batches, desc=f"Epoch {epoch+1}/{epochs}") as pbar:
+            block_starts = [j * buffer_size for j in range(num_blocks)]
+            np.random.shuffle(block_starts)
+            threading.Thread(
+                target=prefetch_worker, args=(block_starts,), daemon=True
+            ).start()
+
+            while True:
+                data = prefetch_queue.get()
+                if data is None:
+                    break
+                block_raw, local_indices, block_indices = data
+
+                # Inner training loop: Process the shuffled buffer in GPU batches
+                for i in range(0, len(local_indices), batch_size):
+                    batch_local_idx = local_indices[i : i + batch_size]
+                    if len(batch_local_idx) < batch_size:
+                        continue
+
+                    # Move batch to GPU and cast to float32
+                    gpu_tensors = {
+                        idx: t[batch_local_idx].to(device, non_blocking=True).float()
+                        for idx, t in block_raw.items()
+                    }
+                    s_batch = torch.cat(
+                        [gpu_tensors[master_ds.layer_to_idx[l]] for l in src_list],
+                        dim=-1,
+                    )
+                    s_batch_norm = (s_batch - mean_s) / std_s
+
+                    if source_layers_str == target_layers_str:
+                        t_batch_norm = s_batch_norm
+                    else:
+                        if not is_funnel:
+                            t_batch = torch.cat(
+                                [
+                                    gpu_tensors[master_ds.layer_to_idx[l]]
+                                    for l in tgt_list
+                                ],
+                                dim=-1,
+                            )
+                            t_batch_norm = (t_batch - mean_t) / std_t
+                        else:
+                            global_idx = block_indices[batch_local_idx]
+                            src_idx_start = global_idx // src_tokens
+                            token_offset = global_idx % src_tokens
+
+                            t_batch_pieces = []
+                            for l in tgt_list:
+                                ds_l = master_ds.datasets[master_ds.layer_to_idx[l]]
+                                l_tgt_tokens = ds_l.tokens_per_sample
+
+                                # Calculate per-layer target index (Handling the Funnel Effect)
+                                if src_tokens == l_tgt_tokens:
+                                    l_tgt_idx = global_idx
+                                elif src_tokens == 771 and l_tgt_tokens == 3:
+                                    # Encoder (Spatial) -> Predictor (Global)
+                                    l_tgt_idx = src_idx_start * 3 + (
+                                        token_offset // 257
+                                    )
+                                elif src_tokens == 3 and l_tgt_tokens == 771:
+                                    # Predictor (Global) -> Encoder (Spatial)
+                                    # We map the global latent to the first patch (CLS) of the target
+                                    l_tgt_idx = src_idx_start * 771 + (
+                                        token_offset * 257
+                                    )
+                                else:
+                                    l_tgt_idx = global_idx  # Default fallback
+
+                                # Pull from memmap
+                                t_raw = torch.from_numpy(ds_l.data[l_tgt_idx])
+                                t_batch_pieces.append(
+                                    t_raw.to(device, non_blocking=True).float()
+                                )
+
+                            t_batch = torch.cat(t_batch_pieces, dim=-1)
+                            t_batch_norm = (t_batch - mean_t) / std_t
+
+                    optimizer.zero_grad()
+                    res = model(s_batch_norm, t_batch_norm)
+                    res["loss"].backward()
+                    optimizer.step()
+                    model.normalize_decoder()
+
+                    # Metrics Update (Every 2nd batch)
+                    pbar.update(1)
+                    if pbar.n % 2 == 0:
+                        with torch.no_grad():
+                            if "activations" in res:
+                                has_activated |= res["activations"].sum(dim=0) > 0
+                            mse_total = res["l2_loss"].item()
+                            ev_total = 1 - (mse_total / 1.0)
+                            l0 = (
+                                (res["activations"] > 0)
+                                .float()
+                                .sum(dim=1)
+                                .mean()
+                                .item()
+                                if "activations" in res
+                                else 0
+                            )
+                            audit_str = ""
+                            for j, layer_name in enumerate(tgt_list):
+                                start = j * master_ds.d_model_per_layer
+                                end = (j + 1) * master_ds.d_model_per_layer
+                                l_mse = torch.nn.functional.mse_loss(
+                                    res["output"][:, start:end],
+                                    t_batch_norm[:, start:end],
+                                ).item()
+                                audit_str += f"{layer_name.split('_')[-1]}:{l_mse:.3f} "
+
+                            pbar.set_postfix(
+                                {
+                                    "l2": f"{mse_total:.4f}",
+                                    "l1": f"{res['l1_loss'].item():.4f}",
+                                    "ev": f"{ev_total*100:.1f}%",
+                                    "l0": f"{l0:.1f}",
+                                    "dead": f"{(~has_activated).sum().item()}",
+                                    "audit": f"[{audit_str.strip()}]",
+                                }
+                            )
+
+    # 5. Save Model
+    print(f"💾 Saving to {output_path}")
     save_dict = {
         "state_dict": model.state_dict(),
-        "input_dim": d_model,
-        "dict_size": dict_size,
-        "l1_coeff": l1_coeff,
         "norm_stats": {
-            "source_mean": mean_s,
-            "source_std": std_s,
-            "target_mean": mean_t,
-            "target_std": std_t,
+            "mean": mean_s.cpu(),
+            "std": std_s.cpu(),
+            "tgt_mean": mean_t.cpu(),
+            "tgt_std": std_t.cpu(),
+        },
+        "meta": {
+            "d_model": d_in,
+            "d_output": d_out,
+            "d_dict": dict_size,
+            "source_layers": src_list,
+            "target_layers": tgt_list,
         },
     }
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     torch.save(save_dict, output_path)
-    print(f"💾 Transcoder saved to {output_path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--source", type=str, required=True, help="Path to source activations"
+        "--dir", type=str, required=True, help="Directory with .bin/.json files"
     )
     parser.add_argument(
-        "--target",
+        "--source_layer",
         type=str,
         required=True,
-        help="Path to target activations (same as source for SAE)",
+        help="Layer(s) to read from (comma-sep)",
     )
-    parser.add_argument("--output", type=str, required=True, help="Output weights path")
+    parser.add_argument(
+        "--target_layer",
+        type=str,
+        required=True,
+        help="Layer(s) to reconstruct (comma-sep)",
+    )
+    parser.add_argument("--output", type=str, required=True, help="Output .pt path")
     parser.add_argument("--dict_size", type=int, default=12288)
     parser.add_argument("--l1", type=float, default=1e-3)
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=4096)
+    parser.add_argument("--lr", type=float, default=1e-4)
 
     args = parser.parse_args()
+
     train_transcoder(
-        args.source,
-        args.target,
-        args.output,
-        args.dict_size,
-        args.l1,
-        args.epochs,
-        args.batch_size,
-        args.lr,
+        source_dir=args.dir,
+        source_layers_str=args.source_layer,
+        target_layers_str=args.target_layer,
+        output_path=args.output,
+        dict_size=args.dict_size,
+        l1_coeff=args.l1,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
     )

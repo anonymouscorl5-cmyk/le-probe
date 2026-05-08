@@ -1,30 +1,47 @@
-# Needs to be fixed 🚧
-# Optimized for local macOS (M2) environment
+# --- Core Physics & Robotics ---
+mujoco==3.4.0
+lerobot==0.4.3
+gymnasium
+stable_baselines3==2.8.0
 
-# --- Core Physics & Math ---
-mujoco>=3.0.0
-numpy>=2.0.0
-pyyaml
-msgpack
+# --- Machine Learning & Training ---
+torch==2.7.1
+torchvision==0.22.1
+lightning==2.6.1
+pytorch_lightning==2.6.1
+einops
+timm==1.0.26
+torchmetrics==1.9.0
+stable_pretraining==0.1.6
+stable_worldmodel==0.0.6
 
-# --- Networking & Server (ZMQ) ---
-pyzmq
-rembg
-
-# --- Training & Experiment Tracking ---
+# --- Configuration & Logging ---
+hydra-core>=1.3.2
+omegaconf==2.3.0
 wandb>=0.16.0
 tqdm>=4.66.0
-lerobot==0.4.3
-transformers<5.0.0
-torch>=2.2.0
-einops
-huggingface-hub
-scikit-learn      # For PCA projections
-matplotlib        # For plotting clouds
 
-# --- Diagnostics & Visuals ---
-# Matches the current dashboard configuration
-rerun-sdk[all]==0.28.2
-av                # Stable video backend for macOS
+# --- Data Processing & Video ---
+numpy==2.4.4
+pandas==2.3.3
+pyarrow==20.0.0
+msgpack==1.1.2
+huggingface-hub
+datasets
 pillow
 imageio[ffmpeg]
+av
+torchcodec  # High-performance video bypass
+
+# --- Interpretability & Auditing ---
+nnsight     # Causal tracing & harvesting
+scikit-learn
+matplotlib
+plotly
+streamlit   # Teleop & Monitoring UI
+
+# --- Networking & Server ---
+pyzmq
+rembg
+rerun-sdk[all]==0.28.2
+scipy

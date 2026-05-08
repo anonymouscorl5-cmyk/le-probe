@@ -1,3 +1,7 @@
 [submodule "le_wm"]
 	path = lewm/le_wm
 	url = https://github.com/lucas-maes/le-wm.git
+[submodule "interpretability/neuronpedia"]
+	path = interpretability/neuronpedia
+	url = https://github.com/vedpatwardhan/neuronpedia.git
+	branch = le-probe-changes
