@@ -95,7 +95,7 @@ We use a full-stack attribution engine that probes every layer of the Encoder an
   <p><i>LeWM Interpretability: Global Causal Tracing from Pixels to Reward.</i></p>
 </div>
 
-#### Results: Breakthrough Discovery
+#### Results
 By unlocking global causal jumps, we discovered that LeWM v8 utilizes a massive **Residual Highway**. High-level decision hubs (L11) draw raw spatial anchors directly from early sensory layers (L0/L1) via 10+ layer skip connections. 
 
 <div align="center">
