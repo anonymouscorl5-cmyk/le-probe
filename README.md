@@ -81,63 +81,62 @@ To try and still get some sort of idea of the quality of training, I trained an 
 
 #### Next Steps
 
-Given the behaviour somewhat works but nowhere near good enough, the next step is to try and probe into the model if we can find certain sparse features. Given that my training run of the LeWM model ended up with a softrank of about 75, it is likely possible to identify certain sparse features that influence the latent space more than others.
+Given the behaviour somewhat works but nowhere near good enough, the next step is to try and probe into the model to identify the sparse features driving these latent representations.
 
-### 4. Interpretability
+### 4. Interpretability: The "Residual Highway"
+
+To understand why LeWM struggles with goal discrimination, we have deployed a **High-Fidelity Mechanistic Dashboard** based on a custom fork of **Neuronpedia**.
 
 #### Architecture
-
-Following is the architecture used for experimenting with the trained model for interpretability,
+We use a full-stack attribution engine that probes every layer of the Encoder and Predictor. The dashboard visualizes the **5-Stage JEPA Flow**: `Inputs` $\rightarrow$ `Encoder` $\rightarrow$ `Joints` $\rightarrow$ `Predictor` $\rightarrow$ `Reward Head`.
 
 <div align="center">
   <img src="assets/interpretability_architecture.png" width="70%" style="border-radius: 12px; margin-top: 20px;">
-  <p><i>LeWM Interpretability: Mechanistic Analysis & Causal Intervention Stack</i></p>
+  <p><i>LeWM Interpretability: Global Causal Tracing from Pixels to Reward.</i></p>
 </div>
 
-#### Results
-
-After training the CLT (details available in [**`interpretability/README.md`**](./interpretability/README.md)), there were 3 features that were firing at a large value at certain phases of the pickup in the training data (`gr1_pickup_grasp`):
-
-| Feature | Label | Max Act. | Episode | Frame Index | Phase |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **358** | **Spatial Lockdown** | **2.0461** | 111 | 27 | Lift (Post-Grip) |
-| **90** | **Tactile Engagement** | **1.5157** | 115 | 23 | Grasp (Coupling) |
-| **743** | **Alignment Precision** | **1.5508** | 19 | 25 | Grasp-to-Lift Handover |
-
-Following are the plots demonstrating the transition of states triggering the above features:
+#### Results: Breakthrough Discovery
+By unlocking global causal jumps, we discovered that LeWM v8 utilizes a massive **Residual Highway**. High-level decision hubs (L11) draw raw spatial anchors directly from early sensory layers (L0/L1) via 10+ layer skip connections. 
 
 <div align="center">
-  <p>Spatial Lockdown</p>
-  <img src="assets/spatial_lockdown.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
+  <img src="assets/neuronpedia_dashboard.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
+  <p><i>The Le-Probe Dashboard: Mapping the L0 $\rightarrow$ L11 skip connections.</i></p>
 </div>
 
-<div align="center">
-  <p>Tactile Engagement</p>
-  <img src="assets/tactile_engagement.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
-</div>
+The dashboard now provides:
+*   **Visual Patch Audit**: Mapping feature activations back to specific image patches with green-box highlighting.
+*   **Integrated Gradients**: Tracing the exact causal path from pixels to Success Probability.
+*   **Directional Filtering**: Using a **Min-K Union** filter to isolate the most critical causal circuits.
 
-<div align="center">
-  <p>Alignment Precision</p>
-  <img src="assets/alignment_precision.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
-</div>
-
-For a broader analysis, a new dashboard has been added which looks at the top 15 features and explained in [**`interpretability/README.md`**](./interpretability/README.md).
+More details are available in [**`interpretability/README.md`**](./interpretability/README.md).
 
 #### Next Steps
-
-Given we now have an interpretable latent space, it would help identify the effects of the following changes to the training pipeline:
-1. **Multi-View Data:** Currently LeWM was only trained with the front camera (`world_center`), unlike GR00T that was trained on 5 different views (`world_center`, `world_right`, `world_left`, `world_top` and `world_wrist`). Training LeWM with 5 views would require further tweaks to the pipeline but is likely to lead to more effective discrimination between goal states and non-goal states.
-2. **Reachability:** Another potential improvement could be achieved by using kinematic polytopes (using tools like PyCapacity) around the right arm in particular, to further guide the model for avoiding catastrophic failures like folding the arm behind the back or lifting it in the air. Neither of these failure modes were part of the dataset as a result of which it's likely that the model hasn't learned to avoid them and it's not feasible to have all failure modes in the dataset given the number of degrees of freedom.
-3. **Behavioural Strategies:** Currently our training was focused just on the grasp movement, but once that behaviour works reasonably well, the next goal would be training the model on the cup movement as well.
-4. **Latent Steering**: Closing the causal loop by using Feature 90 (Tactile Engagement) as a reward booster during real-time inference.
+With the diagnostic infrastructure stabilized, we are investigating:
+1. **Multi-View Data**: Training with 5 camera views to match VLA input density.
+2. **Kinematic Polytopes**: Using reachability analysis to prevent out-of-distribution arm folding.
+3. **Latent Steering**: Using discovered features as reward boosters for real-time MPC.
 
 ## 🛠 Getting Started
 
+### 1. Installation
 ```bash
-# 1. Install
+# Clone with submodules (includes the custom Neuronpedia fork)
 git clone --recursive https://github.com/vedpatwardhan/le-probe.git
 cd le-probe && python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+### 2. Infrastructure Setup
+The mechanistic dashboard requires a local Dockerized Neuronpedia instance.
+
+```bash
+# Start the Dashboard (Docker)
+cd interpretability/neuronpedia
+make up
+
+# Start the Attribution Proxy
+# Tunnels requests from the dashboard to the model engine
+.venv/bin/python interpretability/dashboard/neuronpedia_server.py
 ```
 
 ### 1. Data Collection & Datasets
@@ -214,55 +213,16 @@ The weights of the reward-tuned model can be found at [`gr1_reward_tuned_v2.ckpt
    .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
    ```
 
-### 4. Interpretability
+### 4. Interpretability (Neuronpedia Dashboard)
 
-0. **Pre-trained Artifacts**:
+The mechanistic audit is now conducted via the integrated Neuronpedia dashboard.
 
-- [`activations_dual_14k.pt`](https://drive.google.com/file/d/169G_KAaQXCUbFH4wu6u5eoYFU9qInb2u/view?usp=sharing): Harvested latents from ENC and PRED.
-- [`sae_weights.pt`](https://drive.google.com/file/d/12rrdjf1GKd_1OEVFzBI-lhNzc30yFYiQ/view?usp=sharing): Trained Sparse Autoencoder.
-- [`clt_weights.pt`](https://drive.google.com/file/d/1PQCZYzIGhRAh8FcxYyHV4-Sac7Ap2v_v/view?usp=sharing): Trained Cross-Layer Transcoder.
+1. **Infrastructure Setup**: Ensure you have followed the **Infrastructure Setup** steps above to start the Dockerized dashboard and the proxy server.
+2. **Launch Dashboard**: Open your browser to `http://localhost:3000/lewm-robot/graph`.
+3. **Audit**: Use the "Select a Prompt" dropdown to load canonical robotic scenarios (Success, Failure, etc.) and generate causal attribution graphs.
 
-1. **Activation Harvesting**: Collect raw latents from the frozen World Model to build the interpretability dataset:
-```bash
-# Harvests ENC and PRED latents across snapshots and LeRobot datasets
-.venv/bin/python interpretability/sae/harvest_activations.py --out activations_dual_14k.pt
-```
+For advanced feature training and activation harvesting, please refer to the [**`interpretability/README.md`**](./interpretability/README.md).
 
-2. **Feature Training (Cascading Transcoders)**: Decompose the latent space and build the "Chain of Custody" across layers:
-```bash
-# 1. Train Layer 0 SAE (Identity Mapping)
-.venv/bin/python interpretability/transcoders/train_transcoder.py --source L0.pt --target L0.pt --output sae_weights.pt
-
-# 2. Train Layer 0 -> Layer 1 CLT (Transition Mapping)
-.venv/bin/python interpretability/transcoders/train_transcoder.py --source sae_L0_acts.pt --target L1.pt --output clt_weights.pt
-```
-
-3. **Mechanistic Audit & Feature Discovery**: Identify "Golden Triggers" and visualize the model's internal representations:
-```bash
-# 1. Find peak activation frames for specific features (e.g., Feature 90)
-.venv/bin/python scripts/find_feature_triggers.py --feature 90
-
-# 2. Generate bit-perfect canonical triptychs for found triggers
-.venv/bin/python scripts/generate_canonical_triptychs.py
-```
-
-4. **Canonical State Reproduction**: Extract precise joint vectors and images for reproduction in the simulation:
-```bash
-# Harvests 32-dim action vectors and high-res images to le-probe/temp_repro
-.venv/bin/python scripts/reproduce_canonical_states_direct.py
-```
-
-4. **Mechanistic Teleoperation**: Observe the top 15 features activated by any set of actions controlled through the sliders.
-```bash
-# 1. Start the simulation
-.venv/bin/python interpretability/simulation_teleop_interpret.py
-
-# 2. Start the latent server
-.venv/bin/python interpretability/latent_server.py
-
-# 3. Start the dashboard
-.venv/bin/python interpretability/teleop_ui_interpret.py
-```
 
 ---
 *Developed by Ved Patwardhan.*
