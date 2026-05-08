@@ -15,11 +15,12 @@ Following is the architecture used for experimenting with the trained model for 
 
 ### 🛠 Key Components
 
-- [`transcoders`]: Unified module for both SAE (Identity) and CLT (Transition) probes.
-- [`steering`]: Latent Steering used for interpretability (hasn't been tried yet).
-- [`teleop_ui_interpret.py`]: Dashboard to view the top 15 features triggered the most by a given state-action configuration in a bar plot.
-- [`simulation_teleop_interpret.py`]: A simplified version of [`dataset/simulation_teleop.py`] for the features that are needed with static brain snapshots to complement the activation plot.
-- [`latent_server.py`]: Server used to compute features with the most activation, used by the dashboard to contruct the bar plot.
+- [`dashboard`](./dashboard): contains the scripts used to visualize the neuronpedia dashboard based on the trained transcoders.
+- [`transcoders`](./transcoders): Unified module for both SAE (Identity) and CLT (Transition) probes for harvesting as well as training.
+- [`steering`](./steering): Latent Steering used for interpretability (hasn't been tried yet).
+- [`teleop_ui_interpret.py`](./teleop_ui_interpret.py): Dashboard to view the top 15 features triggered the most by a given state-action configuration in a bar plot.
+- [`simulation_teleop_interpret.py`](./simulation_teleop_interpret.py): A simplified version of [`dataset/simulation_teleop.py`] for the features that are needed with static brain snapshots to complement the activation plot.
+- [`latent_server.py`](./latent_server.py): Server used to compute features with the most activation, used by the dashboard to contruct the bar plot.
 
 ### 🏗 Process
 
@@ -30,6 +31,15 @@ Instead of single-layer probes, we now employ a full-stack attribution strategy:
 - **Comprehensive Grounding**: Sparse Autoencoders (SAE) are trained on Layer 0 to isolate physical primitives (edges, colors, spatial anchors).
 - **Causal Chaining**: Cross-Layer Transcoders (CLT) are trained for **every single layer** of the Encoder (L0-L11) and Predictor (L12-L17), mapping the "Chain of Custody" from raw pixels to future state predictions.
 - **JEPA Alignment**: The attribution engine reflects the 5-stage JEPA flow: `Inputs` $\rightarrow$ `Encoder` $\rightarrow$ `Joints` $\rightarrow$ `Predictor` $\rightarrow$ `Reward Head`.
+
+### 👀 Neuronpedia Adaptation
+
+While [neuronpedia](https://github.com/hijohnnylin/neuronpedia) is mainly used for interpretability in LLMs, I have tried adapting it to work with our data by creating a [fork](https://github.com/vedpatwardhan/neuronpedia).
+
+The major changes are:
+1. Graphs are supposed to be created using the [`dashboard`](./dashboard) scripts rather than the default buttons on neuronpedia.
+2. Additional pane at the bottom right for visualizing the patches in the image visualized on the graph.
+3. A proxy server that serves data to the frontend for the interpretability pipeline.
 
 ## 🔬 Results: The "Residual Highway"
 
@@ -44,14 +54,6 @@ Using the new dashboard, we discovered that LeWM v8 does not reason in a strictl
   <p><i>The Le-Probe Dashboard: Hierarchical circuit tracing from pixels to reward probability.</i></p>
 </div>
 
-## 👀 Visualization: Neuronpedia Integration
-
-We have forked and adapted the **Neuronpedia** webapp to handle robotic multi-modal inputs:
-
-*   **Visual Patch Audit**: The dashboard now includes a persistent gallery that maps activations back to physical image patches.
-*   **Saliency Grounding**: Features are highlighted with **green boxes** on the original robotic frames to identify their spatial focus.
-*   **Interactive Attribution**: Users can click any node to see its most influential causal precursors (inputs) and downstream targets (outputs).
-
 ## 🚀 Research Roadmap: Next Steps
 
 The dashboard now allows us to audit the effects of key architectural changes:
@@ -61,7 +63,35 @@ The dashboard now allows us to audit the effects of key architectural changes:
 
 ## 🚀 Workflows
 
-### 0. Infrastructure Setup
+### 1. Training the CLT
+
+The activations and weights are available here:
+
+| Type | Google Drive Link |
+| --- | --- |
+| Activations | [activations_granular](https://drive.google.com/drive/folders/1wAUUsT88b458OUQ6qdTsIe8hCzuinNc4?usp=sharing) |
+| Weights | [transcoder_weights_residual](https://drive.google.com/drive/folders/1LRxPy4A02ZTanGnQmsosvC_oxq-8AHM6?usp=sharing) |
+
+Optionally, the activations can be harvested with the following scripts, also covered in [**`LeWM_Interpretability.ipynb`**](./LeWM_Interpretability.ipynb)
+
+```bash
+# 1. Harvest the activations
+.venv/bin/python interpretability/transcoders/harvest_activations.py \
+    --model gr1_reward_tuned_v2.ckpt
+    --output activations_granular \
+    --workers 4
+
+# 2. Audit the harvest
+.venv/bin/python interpretability/transcoders/audit_harvest.py \
+    --model gr1_reward_tuned_v2.ckpt \
+    --dir activations_granular
+
+# 3. Train CLT
+bash interpretability/transcoders/batch_train.sh
+```
+
+
+### 2. Neuronpedia Visualization
 
 The dashboard requires a local Dockerized Neuronpedia instance and a proxy bridge to the attribution engine.
 
@@ -70,21 +100,20 @@ The dashboard requires a local Dockerized Neuronpedia instance and a proxy bridg
 cd interpretability/neuronpedia
 make webapp-localhost-dev
 
-# 2. Start the Attribution Proxy (Local)
-# This tunnels requests from the dashboard to the GPU engine
+# 2. Start the engine (Colab)
+.venv/bin/python interpretability/dashboard/engine.py \
+    --repo vedpatwardhan/gr1_pickup_grasp \
+    --meta activations_granular/encoder_L0.json \
+    --model gr1_reward_tuned_v2.ckpt \
+    --transcoders transcoder_weights_residual \
+    --min-k 10
+
+# 3. Start the Dashboard Proxy (Local)
+# This tunnels requests from the dashboard to the GPU engine using the COLAB_URL
 .venv/bin/python interpretability/dashboard/neuronpedia_server.py
-```
 
-### 1. Feature Training
-Decompose the latent space across the entire transformer stack:
-```bash
-# Train transcoders for a specific layer pair (e.g., L10 to L11)
-.venv/bin/python interpretability/transcoders/train_transcoder.py --source L10.pt --target L11.pt --output clt_L10_L11.pt
-```
-
-### 2. Mechanistic Audit
-Generate the causal graphs for specific robotic scenarios:
-```bash
-# Regenerate all canonical graphs (Success, Failure, Approach)
+# 4. Generate Graphs
 .venv/bin/python interpretability/dashboard/regenerate_graphs.py
 ```
+
+Once the graphs are generated, the graph can be selected from the dropdown at http://localhost:3000.

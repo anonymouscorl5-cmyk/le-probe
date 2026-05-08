@@ -213,16 +213,66 @@ The weights of the reward-tuned model can be found at [`gr1_reward_tuned_v2.ckpt
    .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
    ```
 
-### 4. Interpretability (Neuronpedia Dashboard)
+### 4. Interpretability
 
-The mechanistic audit is now conducted via the integrated Neuronpedia dashboard.
+#### Train CLT
 
-1. **Infrastructure Setup**: Ensure you have followed the **Infrastructure Setup** steps above to start the Dockerized dashboard and the proxy server.
-2. **Launch Dashboard**: Open your browser to `http://localhost:3000/lewm-robot/graph`.
-3. **Audit**: Use the "Select a Prompt" dropdown to load canonical robotic scenarios (Success, Failure, etc.) and generate causal attribution graphs.
+The activations and weights are available here:
 
-For advanced feature training and activation harvesting, please refer to the [**`interpretability/README.md`**](./interpretability/README.md).
+| Type | Google Drive Link |
+| --- | --- |
+| Activations | [activations_granular](https://drive.google.com/drive/folders/1wAUUsT88b458OUQ6qdTsIe8hCzuinNc4?usp=sharing) |
+| Weights | [transcoder_weights_residual](https://drive.google.com/drive/folders/1LRxPy4A02ZTanGnQmsosvC_oxq-8AHM6?usp=sharing) |
 
+Optionally, the activations can be harvested with the following steps, also covered in [**`LeWM_Interpretability.ipynb`**](./LeWM_Interpretability.ipynb)
+
+1. **Harvest the Activations**: Stores activations for all layers of the LeWM with all the data
+```bash
+.venv/bin/python interpretability/transcoders/harvest_activations.py \
+    --model gr1_reward_tuned_v2.ckpt \
+    --output activations_granular \
+    --workers 4
+```
+
+2. **Audit the Harvest**: Just to check if the harvest worked
+```bash
+.venv/bin/python interpretability/transcoders/audit_harvest.py \
+    --model gr1_reward_tuned_v2.ckpt \
+    --dir activations_granular
+```
+
+3. **Train the CLT**: The [`batch_train.sh`](interpretability/transcoders/batch_train.sh) script trains the CLT for all layers using the harvested activations.
+```bash
+bash interpretability/transcoders/batch_train.sh
+```
+
+#### Neuronpedia Visualization
+
+1. **Start the Neuronpedia Dashboard (Docker)**: This spins up our fork of neuronpedia.
+```bash
+cd interpretability/neuronpedia
+make webapp-localhost-dev
+```
+
+2. **Start the Engine (Colab)**: The engine runs on colab using a Pinggy tunnel
+```bash
+.venv/bin/python interpretability/dashboard/engine.py \
+    --repo vedpatwardhan/gr1_pickup_grasp \
+    --meta activations_granular/encoder_L0.json \
+    --model gr1_reward_tuned_v2.ckpt \
+    --transcoders transcoder_weights_residual \
+    --min-k 10
+```
+
+3. **Start the Neuronpedia Dashboard Proxy (Local)**: The proxy runs locally and tunnels requests from the dashboard to the engine
+```bash
+.venv/bin/python interpretability/dashboard/neuronpedia_server.py
+```
+
+4. **Generate Graphs**: Uses the server to pre-compute the graphs for certain states in the dataset
+```bash
+.venv/bin/python interpretability/dashboard/regenerate_graphs.py
+```
 
 ---
 *Developed by Ved Patwardhan.*
