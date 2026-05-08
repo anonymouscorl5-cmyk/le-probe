@@ -74,8 +74,8 @@ The model is trained using [**`LeWM_Training.ipynb`**](LeWM_Training.ipynb).
 After training, use [**`harvest_goals.py`**](harvest_goals.py) to harvest latent goal embeddings into a gallery.
 
 **Pre-trained Artifacts:**
-- [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/12YDes7GSQRWzQ-IMHbpq_64oWEoYj96V/view?usp=sharing): Reward-tuned checkpoint.
-- [`goal_gallery.pth`](https://drive.google.com/file/d/1l-jdRkcwUUYxLcDiyDS6pb59M-CeZfSf/view?usp=sharing): Harvested latent goal gallery.
+- [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing): Reward-tuned checkpoint.
+- [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing): Harvested latent goal gallery.
 
 ### 2. Inference
 To test the World Model and MPC planner:
