@@ -90,17 +90,9 @@ def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--input",
-        type=str,
-        default="le-probe/interpretability/manifold/manifold_data.pt",
-    )
+    parser.add_argument("--input", type=str, default="manifold_data.pt")
     parser.add_argument("--method", type=str, choices=["pca", "tsne"], default="pca")
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="le-probe/interpretability/manifold/manifold_3d.html",
-    )
+    parser.add_argument("--output", type=str, default="manifold_3d.html")
     args = parser.parse_args()
 
     visualize_manifold(args.input, args.method, args.output)
