@@ -34,12 +34,10 @@ def harvest_manifold(
     mapper = GoalMapper(model_path=model_path, dataset_root=".")
     model = mapper.model.to(device).eval()
 
-    # 2. Initialize Data Plugin
-    # We use num_steps=1 to process every frame individually
+    # 2. Initialize Data Plugin (num_steps=1 for frame-level granularity)
     data_plugin = LEWMDataPlugin(
         repo_id=dataset_repo, keys_to_load=["pixels", "action"], num_steps=1
     )
-
     data_plugin.clear_cache()
 
     dataloader = DataLoader(
@@ -53,18 +51,22 @@ def harvest_manifold(
     all_latents = []
     all_indices = []
 
-    actual_total = len(dataloader)
+    # 3. Calculate processing scope
+    total_frames = len(data_plugin)
     if num_episodes > 0:
-        actual_total = min(actual_total, num_episodes * 32)
+        total_frames = min(total_frames, num_episodes * 32)
 
-    print(f"📊 Processing {actual_total} frames...")
+    batch_size = 64
+    num_batches = (total_frames + batch_size - 1) // batch_size
+
+    print(f"📊 Target: {num_episodes if num_episodes > 0 else 'Full Dataset'} episodes")
+    print(f"📊 Processing {total_frames} total frames (~{num_batches} batches)...")
 
     try:
         with torch.no_grad():
-            pbar = tqdm(dataloader, desc="Harvesting", total=actual_total)
+            pbar = tqdm(dataloader, desc="Harvesting", total=num_batches)
             for i, batch in enumerate(pbar):
-                # Stop after processing the requested number of episodes (64 frames per batch)
-                if num_episodes > 0 and (i * 64) >= (num_episodes * 32):
+                if i >= num_batches:
                     break
 
                 raw_pixels = batch["pixels"].to(device)

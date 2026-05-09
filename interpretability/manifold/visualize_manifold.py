@@ -47,7 +47,7 @@ def interpolate_color(idx):
 
 def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html"):
     print(f"🎨 Loading manifold data from {input_file}...")
-    data = torch.load(input_file)
+    data = torch.load(input_file, weights_only=False)
     latents = data["latents"]
     indices = data["frame_indices"]
 
