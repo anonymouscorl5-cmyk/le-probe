@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from pathlib import Path
+import umap
 
 
 def interpolate_color(idx):
@@ -13,13 +14,13 @@ def interpolate_color(idx):
     4 anchor colors at specific intervals.
     0: C1, 7: C2, 14: C3, 21: C4, 31: C5 (optional end color)
     """
-    # Anchor colors in RGB
+    # Anchor colors in RGB (Inferno style)
     anchors = [
-        [75, 0, 130],  # Indigo (C1)
-        [0, 128, 128],  # Teal (C2)
-        [255, 215, 0],  # Gold (C3)
-        [220, 20, 60],  # Crimson (C4)
-        [128, 0, 128],  # Purple (C5 - Final phase)
+        [255, 255, 190],  # Pale Yellow (Start)
+        [255, 215, 0],  # Gold
+        [255, 140, 0],  # Dark Orange
+        [178, 34, 34],  # Firebrick Red
+        [40, 0, 0],  # Deep Maroon (Goal)
     ]
 
     # Define the boundaries
@@ -54,8 +55,12 @@ def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html")
     print(f"📉 Reducing dimensions using {method.upper()}...")
     if method.lower() == "pca":
         reducer = PCA(n_components=3)
+    elif method.lower() == "tsne":
+        reducer = TSNE(n_components=3, perplexity=30, max_iter=1000)
+    elif method.lower() == "umap":
+        reducer = umap.UMAP(n_components=3, n_neighbors=15, min_dist=0.1)
     else:
-        reducer = TSNE(n_components=3, perplexity=30, n_iter=1000)
+        raise ValueError(f"Unsupported method: {method}")
 
     reduced_data = reducer.fit_transform(latents)
 
@@ -91,7 +96,9 @@ def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html")
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=str, default="manifold_data.pt")
-    parser.add_argument("--method", type=str, choices=["pca", "tsne"], default="pca")
+    parser.add_argument(
+        "--method", type=str, choices=["pca", "tsne", "umap"], default="pca"
+    )
     parser.add_argument("--output", type=str, default="manifold_3d.html")
     args = parser.parse_args()
 
