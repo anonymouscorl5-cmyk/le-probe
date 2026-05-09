@@ -116,7 +116,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output",
         type=str,
-        default="le-probe/interpretability/manifold/manifold_data.pt",
+        default=str(CURRENT_FILE.parent / "manifold_data.pt"),
     )
     parser.add_argument(
         "--episodes",
