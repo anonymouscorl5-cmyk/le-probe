@@ -97,8 +97,9 @@ class MetricsCallback(pl.Callback):
 
         # 1. Latent Diagnostics (Rank and Variance)
         # emb shape: (B, T, D)
-        z = outputs["emb"][:, 0, :]  # Use first timestep for analysis
-        diagnostics = self.compute_latent_diagnostics(z)
+        # We use all timesteps to get a more robust measure of the manifold
+        z_all = outputs["emb"].reshape(-1, outputs["emb"].shape[-1])
+        diagnostics = self.compute_latent_diagnostics(z_all)
 
         pl_module.log("research/soft_rank", diagnostics["soft_rank"])
         pl_module.log(
@@ -114,7 +115,7 @@ class MetricsCallback(pl.Callback):
         # 3. Action Signal Metrics
         # batch['action'] shape: (B, T, 32)
         act_mag = batch["action"].abs().mean().item()
-        emb_mag = z.abs().mean().item()
+        emb_mag = z_all.abs().mean().item()
         sig_ratio = act_mag / (emb_mag + 1e-8)
 
         pl_module.log("research/action_mag", act_mag)
@@ -137,7 +138,7 @@ class MetricsCallback(pl.Callback):
         # 5. PCA Visualization (Cloud Geometry)
         if batch_idx % (self.log_every_n_steps * 4) == 0:
             pca_start = time.time()
-            self.log_pca_to_wandb(z, trainer.current_epoch, batch_idx)
+            self.log_pca_to_wandb(z_all, trainer.current_epoch, batch_idx)
             pca_duration = time.time() - pca_start
             if pca_duration > 0.5:
                 print(f"  ⚠️  PCA Plotting took {pca_duration:.3f}s (Blocking GPU!)")

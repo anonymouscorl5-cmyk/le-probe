@@ -184,6 +184,7 @@ def run(cfg):
         num_steps=cfg.wm.history_size + cfg.wm.num_preds,
         use_virtual_actions=cfg.data.get("use_virtual_actions", True),
         use_multi_view=cfg.get("use_multi_view", True),
+        img_size=cfg.img_size,
     )
 
     # 2. Data Integrity Guard (Sanity Check)

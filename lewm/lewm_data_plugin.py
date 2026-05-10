@@ -38,6 +38,7 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
         transform=None,
         use_virtual_actions=True,
         use_multi_view=True,
+        img_size=224,
     ):
         self.repo_id = repo_id
         self.keys_to_load = keys_to_load
@@ -45,6 +46,7 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
         self.transform = transform
         self.use_virtual_actions = use_virtual_actions
         self.use_multi_view = use_multi_view
+        self.img_size = img_size
 
         # 1. Base Dataset Discovery
         self.lerobot_dataset = LeRobotDataset(repo_id)
@@ -214,12 +216,13 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
 
                 decoder = self._get_decoder(video_path)
 
-                # Fetch the entire sequence in ONE call
+                # Fetch the entire sequence in ONE call with NATIVE resizing
                 seq_indices = list(range(frame_idx, frame_idx + self.num_steps))
-                # Torchcodec returns a FrameBatch object. Use .data to get the (T, C, H, W) tensor.
-                frames = decoder.get_frames_at(indices=seq_indices)
+                # Decode directly to the target resolution to save CPU and IPC bandwidth
+                frames = decoder.get_frames_at(
+                    indices=seq_indices, dimension=(self.img_size, self.img_size)
+                )
                 # Torchcodec returns [T, C, H, W] in RGB uint8 [0, 255] by default.
-                # We simply use .data and ensure it's in byte format.
                 batch[target_key] = frames.data.byte()
             elif target_key not in batch:
                 # Handle vector keys (state, proprio, etc.)
