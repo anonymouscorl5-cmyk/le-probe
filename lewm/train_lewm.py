@@ -190,12 +190,16 @@ def run(cfg):
     p_min = raw_pixels.min().item()
     p_dtype = raw_pixels.dtype
     # Calculate channel means to verify RGB signature (R=104, B=90)
-    p_means = raw_pixels.float().mean(dim=(0, 2, 3))
+    # Handle both (T, C, H, W) and (T, V, C, H, W)
+    if raw_pixels.ndim == 5:
+        p_means = raw_pixels.float().mean(dim=(0, 1, 3, 4))
+    else:
+        p_means = raw_pixels.float().mean(dim=(0, 2, 3))
 
     print(f"  - Dtype: {p_dtype}")
     print(f"  - Range: [{p_min}, {p_max}]")
     print(
-        f"  - Channel Means (R,G,B): [{p_means[0]:.2f}, {p_means[1]:.2f}, {p_means[2]:.2f}]"
+        f"  - Channel Means (R,G,B): [{p_means[0].item():.2f}, {p_means[1].item():.2f}, {p_means[2].item():.2f}]"
     )
 
     if p_max > 255:
