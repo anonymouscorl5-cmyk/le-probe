@@ -10,6 +10,7 @@ if ROOT_DIR not in sys.path:
 import torch
 import numpy as np
 import time
+import torchvision.transforms.functional as TF
 from pathlib import Path
 import pandas as pd
 from huggingface_hub import hf_hub_download
@@ -216,14 +217,16 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
 
                 decoder = self._get_decoder(video_path)
 
-                # Fetch the entire sequence in ONE call with NATIVE resizing
+                # Fetch the entire sequence in ONE call
                 seq_indices = list(range(frame_idx, frame_idx + self.num_steps))
-                # Decode directly to the target resolution to save CPU and IPC bandwidth
-                frames = decoder.get_frames_at(
-                    indices=seq_indices, dimension=(self.img_size, self.img_size)
-                )
-                # Torchcodec returns [T, C, H, W] in RGB uint8 [0, 255] by default.
-                batch[target_key] = frames.data.byte()
+                # Restore compatibility: Remove the 'dimension' argument which is not supported in this version
+                frames = decoder.get_frames_at(indices=seq_indices)
+
+                # Manual resize immediately after decoding to keep performance gains
+                # This reduces IPC overhead significantly.
+                batch[target_key] = TF.resize(
+                    frames.data, [self.img_size, self.img_size], antialias=True
+                ).byte()
             elif target_key not in batch:
                 # Handle vector keys (state, proprio, etc.)
                 source_key = self.key_map.get(target_key, target_key)
