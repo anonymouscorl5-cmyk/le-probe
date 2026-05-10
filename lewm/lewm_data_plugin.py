@@ -240,9 +240,12 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
                 "world_wrist",
             ]
             for vn in view_names:
+                # Check both long name and short name
                 key = f"observation.images.{vn}"
                 if key in final_batch:
                     views.append(final_batch[key])
+                elif vn in final_batch:
+                    views.append(final_batch[vn])
 
             if views:
                 # Stack into (T, V, C, H, W)

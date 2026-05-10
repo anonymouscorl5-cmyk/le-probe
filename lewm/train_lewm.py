@@ -171,7 +171,12 @@ def run(cfg):
         "observation.images.world_center",
         "action",
     ]
-    keys_to_load = cfg.data.get("keys_to_load") or default_keys
+    # Check both data and data.dataset for keys_to_load
+    keys_to_load = (
+        cfg.data.get("keys_to_load")
+        or cfg.data.dataset.get("keys_to_load")
+        or default_keys
+    )
 
     dataset = LEWMDataPlugin(
         repo_id=repo_id,
@@ -534,17 +539,31 @@ def run(cfg):
         model_dict = world_model.model.state_dict()
 
         # STRICT VERIFICATION: We must load the Vision Encoder Patch Embeddings.
-        # If this fails, the model is effectively blind.
+        # patch_key is the name in the Hub weights.
+        # local_patch_key is the name in our local model.
         patch_key = "encoder.embeddings.patch_embeddings.projection.weight"
+        local_patch_key = (
+            "encoder.proj.weight" if cfg.get("use_multi_view") else patch_key
+        )
         if (
             patch_key in state_dict
-            and state_dict[patch_key].shape != model_dict[patch_key].shape
+            and local_patch_key in model_dict
+            and state_dict[patch_key].shape != model_dict[local_patch_key].shape
         ):
-            raise RuntimeError(
-                f"🚨 FATAL: Vision Encoder Patch Size Mismatch! "
-                f"Hub: {state_dict[patch_key].shape} Local: {model_dict[patch_key].shape}. "
-                f"Ensure patch_size is correctly aligned in config."
-            )
+            # We only raise error in single-view because in multi-view we expect
+            # mismatch
+            if not cfg.get("use_multi_view"):
+                raise RuntimeError(
+                    f"🚨 FATAL: Vision Encoder Patch Size Mismatch! "
+                    f"Hub: {state_dict[patch_key].shape} "
+                    f"Local: {model_dict[local_patch_key].shape}. "
+                    f"Ensure patch_size is correctly aligned in config."
+                )
+            else:
+                print(
+                    "⚠️  Pretrained 2D patch embeddings "
+                    "ignored for 3D Multi-View encoder."
+                )
 
         filtered_dict = {
             k: v
