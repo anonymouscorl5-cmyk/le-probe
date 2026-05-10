@@ -10,6 +10,44 @@ if ROOT_DIR not in sys.path:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
+from jepa import JEPA
+
+
+class MultiViewJEPA(JEPA):
+    """
+    Improved JEPA for Multi-View and Spatiotemporal Tubelets.
+    Overrides encode() to pass (B, T, V, C, H, W) to the encoder
+    instead of flattening T into the batch dimension.
+    """
+
+    def encode(self, info):
+        """
+        Encode multi-view observations.
+        info['pixels']: (B, T, V, C, H, W)
+        """
+        pixels = info["pixels"].float()
+        b, t = pixels.shape[:2]
+
+        # Pass the full (B, T, V, C, H, W) to the encoder
+        # The encoder should handle the spatiotemporal tokenization
+        output = self.encoder(pixels, interpolate_pos_encoding=True)
+
+        # The encoder should return (B, T, D) for the predictor
+        # or (B*T, D) which we then rearrange.
+        emb = output.last_hidden_state
+        if emb.dim() == 2:  # (B*T, D)
+            emb = rearrange(emb, "(b t) d -> b t d", b=b, t=t)
+
+        # Project if needed
+        pixels_emb = rearrange(emb, "b t d -> (b t) d")
+        pixels_emb = self.projector(pixels_emb)
+        info["emb"] = rearrange(pixels_emb, "(b t) d -> b t d", b=b, t=t)
+
+        if "action" in info:
+            info["act_emb"] = self.action_encoder(info["action"])
+
+        return info
 
 
 class GR1Embedder(nn.Module):

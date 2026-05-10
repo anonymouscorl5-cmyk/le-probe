@@ -37,12 +37,14 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
         num_steps=1,
         transform=None,
         use_virtual_actions=True,
+        use_multi_view=True,
     ):
         self.repo_id = repo_id
         self.keys_to_load = keys_to_load
         self.num_steps = num_steps
         self.transform = transform
         self.use_virtual_actions = use_virtual_actions
+        self.use_multi_view = use_multi_view
 
         # 1. Base Dataset Discovery
         self.lerobot_dataset = LeRobotDataset(repo_id)
@@ -51,7 +53,11 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
 
         # 2. Key Mapping & Dim Detection
         self.key_map = {
-            "pixels": "observation.images.world_center",
+            "world_center": "observation.images.world_center",
+            "world_left": "observation.images.world_left",
+            "world_right": "observation.images.world_right",
+            "world_top": "observation.images.world_top",
+            "world_wrist": "observation.images.world_wrist",
             "state": "observation.state",
             "proprio": "observation.state",
             "action": "action",
@@ -184,12 +190,28 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
 
         # 3. Direct Video Decoding (High Performance)
         for target_key in self.keys_to_load:
-            if "images" in target_key or target_key == "pixels":
-                image_key = self.key_map.get(target_key, target_key)
+            # Handle specific camera views or generic 'pixels'
+            if "images" in target_key or target_key in [
+                "pixels",
+                "world_center",
+                "world_left",
+                "world_right",
+                "world_top",
+                "world_wrist",
+            ]:
+                # If target_key is 'pixels', default to 'world_center' for loading
+                # unless use_multi_view is enabled (handled in post-processing)
+                source_key = "world_center" if target_key == "pixels" else target_key
+                image_key = self.key_map.get(source_key, source_key)
                 episode_idx = int(self.episode_indices[idx])
                 frame_idx = int(self.frame_indices[idx])
 
                 video_path = self._get_video_path(episode_idx, image_key)
+                if not video_path.exists():
+                    raise FileNotFoundError(
+                        f"🚨 Missing required video stream: {video_path}"
+                    )
+
                 decoder = self._get_decoder(video_path)
 
                 # Fetch the entire sequence in ONE call
@@ -207,15 +229,32 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
 
         final_batch = self.flatten_dict(nested_batch)
 
-        # Add Aliases for Model Compatibility
-        aliases = {}
-        for k, v in final_batch.items():
-            if "world_center" in k:
-                aliases["pixels"] = v
-            if "observation.state" in k:
-                aliases["state"] = v
-                aliases["proprio"] = v
-        final_batch.update(aliases)
+        if self.use_multi_view:
+            # If we have multiple world_* views, stack them into [T, V, C, H, W]
+            views = []
+            view_names = [
+                "world_center",
+                "world_left",
+                "world_right",
+                "world_top",
+                "world_wrist",
+            ]
+            for vn in view_names:
+                key = f"observation.images.{vn}"
+                if key in final_batch:
+                    views.append(final_batch[key])
+
+            if views:
+                # Stack into (T, V, C, H, W)
+                final_batch["pixels"] = torch.stack(views, dim=1)
+        else:
+            # Single-View fallback: pixels = world_center
+            if "observation.images.world_center" in final_batch:
+                final_batch["pixels"] = final_batch["observation.images.world_center"]
+
+        if "observation.state" in final_batch:
+            final_batch["state"] = final_batch["observation.state"]
+            final_batch["proprio"] = final_batch["observation.state"]
 
         return final_batch
 

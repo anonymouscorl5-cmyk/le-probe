@@ -40,6 +40,10 @@ class MetricsCallback(pl.Callback):
         self.csv_path = csv_path
         self._init_csv()
 
+        # 🌟 Manifold Accumulation Buffers
+        self.val_latents = []
+        self.val_steps = []
+
     def _init_csv(self):
         """Initializes the CSV file with headers if it doesn't exist."""
         if not os.path.exists(self.csv_path):
@@ -281,3 +285,100 @@ class MetricsCallback(pl.Callback):
 
         wandb.log({"visuals/latent_pca": wandb.Image(plt)})
         plt.close()
+
+    def on_validation_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    ):
+        """Accumulates a small subset of validation latents for manifold plotting."""
+        if len(self.val_latents) < self.pca_n_samples:
+            # outputs is the result of lejepa_forward
+            if "emb" in outputs:
+                z = outputs["emb"].detach().float()  # (B, T, D)
+                b, t, d = z.shape
+
+                # Fetch temporal steps from frame_indices if available
+                # Fallback to range(T) if not found
+                steps = torch.arange(t).repeat(b, 1).to(z.device)
+
+                self.val_latents.append(z.cpu())
+                self.val_steps.append(steps.cpu())
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        """Generates the 3D Manifold Plot at the end of the validation epoch."""
+        if not self.val_latents:
+            return
+
+        try:
+            # 1. Prepare Data
+            z = torch.cat(self.val_latents, dim=0)  # (N, T, D)
+            steps = torch.cat(self.val_steps, dim=0)  # (N, T)
+
+            n, t, d = z.shape
+            z_flat = z.view(-1, d)
+            steps_flat = steps.view(-1)
+
+            # Subsample for plotting efficiency
+            if z_flat.shape[0] > 2048:
+                indices = torch.randperm(z_flat.shape[0])[:2048]
+                z_flat = z_flat[indices]
+                steps_flat = steps_flat[indices]
+
+            # 2. 3D PCA Projection
+            z_centered = z_flat - z_flat.mean(dim=0, keepdim=True)
+            U, S, V = torch.pca_lowrank(z_centered, q=3)
+            z_3d = torch.matmul(z_centered, V[:, :3]).numpy()
+
+            # 4. Topology Health Report (Calibrated to GR-1 Baselines)
+            # Baseline (Single-View) SoftRank is ~45.
+            # We expect Multi-View to push this higher as it resolves geometric ambiguities.
+            avg_soft_rank = self.compute_latent_diagnostics(z_flat)["soft_rank"]
+
+            print(
+                f"\n📊 --- TOPOLOGY HEALTH REPORT (Epoch {trainer.current_epoch}) ---"
+            )
+            print(f"    - Avg SoftRank:  {avg_soft_rank:.4f}")
+            if avg_soft_rank < 30.0:
+                print("    - Status:        🚨 COLLAPSED (Significant Variance Loss)")
+            elif avg_soft_rank < 55.0:
+                print("    - Status:        🟡 STAGNANT (Baseline Performance)")
+            else:
+                print("    - Status:        ✅ UNRAVELING (High Geometric Diversity)")
+            print("    ---------------------------------------------\n")
+
+            # 3. Create 3D Plot
+            fig = plt.figure(figsize=(10, 8))
+            ax = fig.add_subplot(111, projection="3d")
+
+            scatter = ax.scatter(
+                z_3d[:, 0],
+                z_3d[:, 1],
+                z_3d[:, 2],
+                c=steps_flat.numpy(),
+                cmap="viridis",
+                alpha=0.6,
+                s=10,
+            )
+
+            plt.colorbar(scatter, label="Temporal Step (0-31)")
+            ax.set_title(f"LeWM Manifold Topology (Epoch {trainer.current_epoch})")
+            ax.set_xlabel("PC1")
+            ax.set_ylabel("PC2")
+            ax.set_zlabel("PC3")
+
+            # Log to WandB
+            wandb.log(
+                {
+                    "visuals/manifold_3d": wandb.Image(plt),
+                    "research/epoch": trainer.current_epoch,
+                }
+            )
+            plt.close()
+
+            print(f"📊 Manifold Plot generated for Epoch {trainer.current_epoch}")
+
+        except Exception as e:
+            print(f"⚠️ Manifold Plotting failed: {e}")
+
+        # Clear buffers for next epoch
+        self.val_latents = []
+        self.val_steps = []

@@ -32,10 +32,11 @@ sys.path.append(LEWM_ROOT)
 # Import official LeWM components
 from jepa import JEPA
 from module import ARPredictor, SIGReg
-from gr1_modules import GR1Embedder, GR1MLP
+from gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack
 from lewm_data_plugin import LEWMDataPlugin
 from metrics import MetricsCallback
+from multi_view_encoder import get_multi_view_encoder
 
 
 class RewardPredictor(torch.nn.Module):
@@ -74,6 +75,8 @@ def lejepa_forward(self, batch, stage, cfg):
     if self.trainer.global_step == 0:
         print(f"\n🩺 [STEP 0] DATA HEALTH CHECK:")
         print(f"  - Pixel Shape:    {pixels.shape}")
+        if cfg.get("use_multi_view", True):
+            print(f"  - Multi-View:     Detected {pixels.shape[2]} views.")
         print(f"  - Pixel Range:    [{pixels.min():.2f}, {pixels.max():.2f}]")
         print(f"  - Pixel Mean/Var: {pixels.mean():.4f} / {pixels.var():.8f}")
 
@@ -175,6 +178,7 @@ def run(cfg):
         keys_to_load=keys_to_load,
         num_steps=cfg.wm.history_size + cfg.wm.num_preds,
         use_virtual_actions=cfg.data.get("use_virtual_actions", True),
+        use_multi_view=cfg.get("use_multi_view", True),
     )
 
     # 2. Data Integrity Guard (Sanity Check)
@@ -212,7 +216,7 @@ def run(cfg):
     # 3. Rescale & Normalize Pixels
     transforms = []
     for col in keys_to_load:
-        if "pixels" in col or "images" in col:
+        if "pixels" in col or "images" in col or col.startswith("world_"):
             transforms.append(
                 get_img_preprocessor(source=col, target=col, img_size=cfg.img_size)
             )
@@ -276,13 +280,19 @@ def run(cfg):
     ##       model / optim      ##
     ##############################
 
-    encoder = spt.backbone.utils.vit_hf(
-        cfg.encoder_scale,
-        patch_size=cfg.patch_size,
-        image_size=cfg.img_size,
-        pretrained=False,
-        use_mask_token=False,
-    )
+    # --- WORLD MODEL INITIALIZATION ---
+    if cfg.get("use_multi_view", True):
+        # Replaces standard ViT with Tubelet Tokenization + 3D RoPE (learned for now)
+        encoder = get_multi_view_encoder(cfg)
+    else:
+        # Standard Single-View Baseline
+        encoder = spt.backbone.utils.vit_hf(
+            cfg.encoder_scale,
+            patch_size=cfg.patch_size,
+            image_size=cfg.img_size,
+            pretrained=False,
+            use_mask_token=False,
+        )
 
     hidden_dim = encoder.config.hidden_size
     embed_dim = cfg.wm.get("embed_dim", hidden_dim)
@@ -310,7 +320,10 @@ def run(cfg):
         hidden_dim=2048,
     )
 
-    world_model = JEPA(
+    # --- UPGRADED WORLD MODEL ---
+    # Uses MultiViewJEPA to handle spatiotemporal tubelets
+    WM_CLASS = MultiViewJEPA if cfg.get("use_multi_view", True) else JEPA
+    world_model = WM_CLASS(
         encoder=encoder,
         predictor=predictor,
         action_encoder=action_encoder,

@@ -3,7 +3,11 @@ dataset:
   frameskip: 1
   repo_id: "vedpatwardhan/gr1_pickup_grasp"
   keys_to_load:
-    - pixels
+    - world_center
+    - world_left
+    - world_right
+    - world_top
+    - world_wrist
     - action
     - proprio
     - state
