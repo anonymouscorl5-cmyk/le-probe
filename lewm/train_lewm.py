@@ -233,7 +233,7 @@ def run(cfg):
     # 3. Standardize States/Actions (Z-Score)
     with open_dict(cfg):
         for col in keys_to_load:
-            if "pixels" in col or "images" in col:
+            if "pixels" in col or "images" in col or col.startswith("world_"):
                 continue
 
             # SAFE NORMALIZATION (Injected locally to avoid submodule edits)

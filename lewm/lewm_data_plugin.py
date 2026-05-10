@@ -295,7 +295,8 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
             return self.cached_states.numpy()
 
         # Fallback for other columns
-        return np.array(self.hf_dataset[col_name])
+        source_key = self.key_map.get(col_name, col_name)
+        return np.array(self.hf_dataset[source_key])
 
     def get_dim(self, col_name):
         """Fast path for dimension check."""
