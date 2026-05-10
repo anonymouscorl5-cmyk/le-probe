@@ -105,10 +105,15 @@ High-level decision hubs (L11) draw raw spatial anchors directly from early sens
   <p><i>The Le-Probe Dashboard: Mapping the L0 $\rightarrow$ L11 skip connections.</i></p>
 </div>
 
-The dashboard now provides:
-*   **Visual Patch Audit**: Mapping feature activations back to specific image patches with green-box highlighting.
-*   **Integrated Gradients**: Tracing the exact causal path from pixels to Success Probability.
-*   **Directional Filtering**: Using a **Min-K Union** filter to isolate the most critical causal circuits.
+*   **Neuronpedia Dashboard**: Hierarchical circuit tracing from pixels to reward probability (L0 $\rightarrow$ L11 skip connections).
+    *   **Visual Patch Audit**: Mapping feature activations back to specific image patches with green-box highlighting.
+    *   **Integrated Gradients**: Tracing the exact causal path from pixels to Success Probability.
+    *   **Directional Filtering**: Using a **Min-K Union** filter to isolate the most critical causal circuits.
+*   **Latent Topology Audit**: Dimensionality reduction (PCA, t-SNE, UMAP) to diagnose manifold fragmentation and MPC search failures.
+
+| 3D PCA | 3D t-SNE | 3D UMAP |
+| :---: | :---: | :---: |
+| ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
 
 More details are available in [**`interpretability/README.md`**](./interpretability/README.md).
 
@@ -274,6 +279,21 @@ make webapp-localhost-dev
 4. **Generate Graphs**: Uses the server to pre-compute the graphs for certain states in the dataset
 ```bash
 .venv/bin/python interpretability/dashboard/regenerate_graphs.py
+```
+
+#### Latent Manifold Topology
+Analyze the internal "map" of the latent space to diagnose planning failures.
+| ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
+
+
+1. **Harvest Latents**: Uses the server to pre-compute the graphs for certain states in the dataset
+```bash
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200
+```
+
+2. **Visualize Latent Topology**:
+```bash
+.venv/bin/python interpretability/manifold/visualize_manifold.py --method umap --output manifold_3d_umap.html
 ```
 
 ---

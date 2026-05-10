@@ -42,6 +42,10 @@ The major changes are:
 2. Additional pane at the bottom right for visualizing the patches in the image visualized on the graph.
 3. A proxy server that serves data to the frontend for the interpretability pipeline.
 
+### 📊 Latent Topology Audit: The "Discriminability Gap"
+
+Separate from the mechanistic circuit analysis, we analyzed the topological structure of the latent space to diagnose why the MPC solver "stalls" during search. By projecting 200 episodes into 3D space, we identified "manifold fragmentation."
+
 ## 🔬 Results: The "Residual Highway"
 
 The attribution graph was computed using integrated gradients,
@@ -54,6 +58,12 @@ The attribution graph was computed using integrated gradients,
 *   **Observation**: High-level decision hubs in the late encoder (L11) draw raw spatial data directly from early sensory layers (L0/L1) via 10+ layer skip connections.
 *   **Verification**: Feature **`F848`** (L11) was identified as a critical causal junction for grasp success, receiving direct injections from perceptual features like **`F5000`** (L0).
 *   **Connectivity Filtering**: We implemented a **Direction-Aware Union Min-K Filter** to maintain graph clarity while preserving these vital long-range causal links.
+
+Here's the results of the manifold visualization,
+| 3D PCA | 3D t-SNE | 3D UMAP |
+| :---: | :---: | :---: |
+| ![PCA](../assets/manifold_3d_pca.png) | ![t-SNE](../assets/manifold_3d_tsne.png) | ![UMAP](../assets/manifold_3d_umap.png) |
+| **Global Variance Audit**: Identifies latent collapse and environmental noise saturation. | **Local Neighborhood Audit**: Identifies temporal flow entanglement between phases. | **Manifold Topology Audit**: The "Smoking Gun" for MPC search failures (Disconnected islands). |
 
 ## 🚀 Research Roadmap: Next Steps
 
@@ -118,7 +128,8 @@ make webapp-localhost-dev
 ```
 
 ### 3. Latent Manifold Visualization
-Analyze the topological structure of the latent space to diagnose discriminability:
+
+Analyze the topological structure of the latent space to diagnose discriminability.
 
 ```bash
 # 1. Harvest latents for the entire trajectory
