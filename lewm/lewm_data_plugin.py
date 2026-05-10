@@ -221,6 +221,12 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
                 # Torchcodec returns [T, C, H, W] in RGB uint8 [0, 255] by default.
                 # We simply use .data and ensure it's in byte format.
                 batch[target_key] = frames.data.byte()
+            elif target_key not in batch:
+                # Handle vector keys (state, proprio, etc.)
+                source_key = self.key_map.get(target_key, target_key)
+                if source_key in self.hf_dataset.column_names:
+                    data = self.hf_dataset[source_key][idx : idx + self.num_steps]
+                    batch[target_key] = torch.from_numpy(np.array(data))
 
         # 4. Standard Plugin Post-Processing (Nesting/Transforms)
         nested_batch = self.nest_dict(batch)

@@ -16,6 +16,7 @@ dump_object: True
 use_pretrained_cube: True
 rabc_kappa: 0.01
 use_multi_view: True
+fusion_type: mean
 
 trainer:
   max_epochs: 100

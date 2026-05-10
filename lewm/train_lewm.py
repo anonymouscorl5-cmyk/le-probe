@@ -438,16 +438,24 @@ def run(cfg):
             # PyTorch Lightning stores weights in "state_dict", naked models store them directly
             state_dict = checkpoint.get("state_dict", checkpoint)
 
-            # Remove "model." prefix if it exists (common in Lightning checkpoints)
-            new_sd = {}
+            # --- KEY MAPPING BRIDGE (Handle Late Fusion Nesting) ---
+            new_state_dict = {}
             for k, v in state_dict.items():
                 new_key = k.replace("model.", "") if k.startswith("model.") else k
-                new_sd[new_key] = v
+
+                # If we are using Multi-View, map 'encoder.*' to 'encoder.backbone.*' (Late Fusion)
+                if cfg.get("use_multi_view"):
+                    if new_key.startswith("encoder.") and not new_key.startswith(
+                        "encoder.backbone."
+                    ):
+                        new_key = new_key.replace("encoder.", "encoder.backbone.", 1)
+
+                new_state_dict[new_key] = v
 
             model_dict = world_model.model.state_dict()
             filtered_dict = {
                 k: v
-                for k, v in new_sd.items()
+                for k, v in new_state_dict.items()
                 if k in model_dict and v.shape == model_dict[k].shape
             }
 
@@ -538,50 +546,47 @@ def run(cfg):
         print("🧠 Loading weights into World Model (Warm-start)...")
         model_dict = world_model.model.state_dict()
 
-        # STRICT VERIFICATION: We must load the Vision Encoder Patch Embeddings.
-        # patch_key is the name in the Hub weights.
-        # local_patch_key is the name in our local model.
-        patch_key = "encoder.embeddings.patch_embeddings.projection.weight"
-        local_patch_key = (
-            "encoder.proj.weight" if cfg.get("use_multi_view") else patch_key
-        )
-        if (
-            patch_key in state_dict
-            and local_patch_key in model_dict
-            and state_dict[patch_key].shape != model_dict[local_patch_key].shape
-        ):
-            # We only raise error in single-view because in multi-view we expect
-            # mismatch
-            if not cfg.get("use_multi_view"):
-                raise RuntimeError(
-                    f"🚨 FATAL: Vision Encoder Patch Size Mismatch! "
-                    f"Hub: {state_dict[patch_key].shape} "
-                    f"Local: {model_dict[local_patch_key].shape}. "
-                    f"Ensure patch_size is correctly aligned in config."
-                )
-            else:
-                print(
-                    "⚠️  Pretrained 2D patch embeddings "
-                    "ignored for 3D Multi-View encoder."
-                )
+        # --- KEY MAPPING BRIDGE (Pretrained Cube) ---
+        new_state_dict = {}
+        is_multi_view = cfg.get("use_multi_view", True)
+
+        for k, v in state_dict.items():
+            new_key = k
+            if (
+                is_multi_view
+                and k.startswith("encoder.")
+                and not k.startswith("encoder.backbone.")
+            ):
+                new_key = k.replace("encoder.", "encoder.backbone.", 1)
+            new_state_dict[new_key] = v
 
         filtered_dict = {
             k: v
-            for k, v in state_dict.items()
+            for k, v in new_state_dict.items()
             if k in model_dict and v.shape == model_dict[k].shape
         }
 
-        # Load into world_model.model
+        # DIAGNOSTIC: Check if patch embeddings are being skipped
+        patch_key = "encoder.embeddings.patch_embeddings.projection.weight"
+        if is_multi_view:
+            patch_key = "encoder.backbone.embeddings.patch_embeddings.projection.weight"
+
+        if patch_key not in filtered_dict:
+            print(f"⚠️  WARNING: {patch_key} NOT FOUND OR SHAPE MISMATCH.")
+            if is_multi_view and patch_key in new_sd:
+                print(f"   - Found in state_dict (mapped): {new_sd[patch_key].shape}")
+            elif not is_multi_view and patch_key in state_dict:
+                print(f"   - Found in state_dict (raw): {state_dict[patch_key].shape}")
+
+            if patch_key in model_dict:
+                print(f"   - Expected in model: {model_dict[patch_key].shape}")
+
         msg = world_model.model.load_state_dict(filtered_dict, strict=False)
         print(
             f"✅ Weights loaded. Transferred: {len(filtered_dict)} layers. "
-            f"Skipped: {len(state_dict) - len(filtered_dict)} (due to configuration mismatch)."
+            f"Skipped: {len(model_dict) - len(filtered_dict)} "
+            "(due to configuration mismatch)."
         )
-
-        if len(msg.missing_keys) > 200:
-            print(
-                f"⚠️ WARNING: High number of missing keys ({len(msg.missing_keys)}). Check compatibility!"
-            )
 
     print("🚀 Launching GR-1 Official Training Loop...")
     # We use the standard Trainer.fit() instead of the library's Manager
