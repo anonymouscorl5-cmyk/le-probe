@@ -181,7 +181,7 @@ def run(cfg):
         print(f"📡 Multi-View Enabled: Loading {len(keys_to_load)} cameras.")
     else:
         # Single View Baseline: Use the center camera explicitly
-        keys_to_load = ["observation.images.world_center"]
+        keys_to_load = default_keys
         print(f"📺 Single-View Baseline: Loading {keys_to_load[0]} only.")
 
     dataset = LEWMDataPlugin(
