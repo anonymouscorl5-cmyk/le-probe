@@ -21,7 +21,7 @@ class LateFusionEncoder(nn.Module):
         # To match HF ViT API for the predictor
         self.config = backbone.config
 
-        if self.fusion == "learned":
+        if self.fusion == "linear":
             self.fusion_layer = nn.Linear(embed_dim * self.num_views, embed_dim)
         elif self.fusion == "attention":
             self.fusion_query = nn.Parameter(torch.randn(1, 1, embed_dim))
@@ -50,7 +50,7 @@ class LateFusionEncoder(nn.Module):
         # 4. Fusion
         if self.fusion == "mean":
             fused = z.mean(dim=2)  # (B, T, D)
-        elif self.fusion == "learned":
+        elif self.fusion == "linear":
             fused = rearrange(z, "b t v d -> (b t) (v d)")
             fused = self.fusion_layer(fused)
             fused = rearrange(fused, "(b t) d -> b t d", b=b, t=t)
