@@ -196,6 +196,7 @@ def run(cfg):
     print("\n🔍 DATA INTEGRITY GUARD: Inspecting raw pixels...")
     raw_sample = dataset[0]
     raw_pixels = raw_sample.get("pixels")
+    print(f"  - Shape: {raw_pixels.shape}")
     if raw_pixels is None:
         raise KeyError(
             f"Could not find 'pixels' in dataset sample. Available keys: {list(raw_sample.keys())}"
@@ -330,10 +331,8 @@ def run(cfg):
         hidden_dim=2048,
     )
 
-    # --- UPGRADED WORLD MODEL ---
-    # Uses MultiViewJEPA to handle spatiotemporal tubelets
-    WM_CLASS = MultiViewJEPA if cfg.get("use_multi_view", True) else JEPA
-    world_model = WM_CLASS(
+    # World Model
+    world_model = MultiViewJEPA(
         encoder=encoder,
         predictor=predictor,
         action_encoder=action_encoder,
