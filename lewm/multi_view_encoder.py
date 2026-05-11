@@ -86,9 +86,16 @@ def get_multi_view_encoder(cfg):
         use_mask_token=False,
     )
 
+    # Determine number of views
+    if not cfg.get("use_multi_view", True):
+        num_views = 1
+    else:
+        # Default to 5 for standard GR1 multi-view if not specified
+        num_views = cfg.get("num_views", 5)
+
     return LateFusionEncoder(
         backbone,
         embed_dim=backbone.config.hidden_size,
         fusion=cfg.get("fusion_type", "mean"),
-        num_views=len(cfg.data.dataset.get("keys", ["world_center"])),
+        num_views=num_views,
     )
