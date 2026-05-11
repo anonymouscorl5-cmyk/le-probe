@@ -61,6 +61,7 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
             "world_right": "observation.images.world_right",
             "world_top": "observation.images.world_top",
             "world_wrist": "observation.images.world_wrist",
+            "pixels": "observation.images.world_center",
             "state": "observation.state",
             "proprio": "observation.state",
             "action": "action",
