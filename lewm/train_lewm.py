@@ -300,18 +300,9 @@ def run(cfg):
     ##############################
 
     # --- WORLD MODEL INITIALIZATION ---
-    if cfg.get("use_multi_view", True):
-        # Replaces standard ViT with Tubelet Tokenization + 3D RoPE (learned for now)
-        encoder = get_multi_view_encoder(cfg)
-    else:
-        # Standard Single-View Baseline
-        encoder = spt.backbone.utils.vit_hf(
-            cfg.encoder_scale,
-            patch_size=cfg.patch_size,
-            image_size=cfg.img_size,
-            pretrained=False,
-            use_mask_token=False,
-        )
+    # Unified Path: Always use the LateFusionEncoder wrapper.
+    # For single-view (use_multi_view=False), it will process V=1 views.
+    encoder = get_multi_view_encoder(cfg)
 
     hidden_dim = encoder.config.hidden_size
     embed_dim = cfg.wm.get("embed_dim", hidden_dim)

@@ -266,7 +266,10 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
         else:
             # Single-View fallback: pixels = world_center
             if "observation.images.world_center" in final_batch:
-                final_batch["pixels"] = final_batch["observation.images.world_center"]
+                # Standardize to 5D: [T, 1, C, H, W]
+                final_batch["pixels"] = final_batch[
+                    "observation.images.world_center"
+                ].unsqueeze(1)
 
         if "observation.state" in final_batch:
             final_batch["state"] = final_batch["observation.state"]
