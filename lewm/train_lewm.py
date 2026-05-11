@@ -172,11 +172,17 @@ def run(cfg):
         "action",
     ]
     # Check both data and data.dataset for keys_to_load
-    keys_to_load = (
-        cfg.data.get("keys_to_load")
-        or cfg.data.dataset.get("keys_to_load")
-        or default_keys
-    )
+    if cfg.get("use_multi_view", True):
+        keys_to_load = (
+            cfg.data.get("keys_to_load")
+            or cfg.data.dataset.get("keys_to_load")
+            or default_keys
+        )
+        print(f"📡 Multi-View Enabled: Loading {len(keys_to_load)} cameras.")
+    else:
+        # Single View Baseline: Use the center camera explicitly
+        keys_to_load = ["observation.images.world_center"]
+        print(f"📺 Single-View Baseline: Loading {keys_to_load[0]} only.")
 
     dataset = LEWMDataPlugin(
         repo_id=repo_id,
@@ -190,7 +196,11 @@ def run(cfg):
     # 2. Data Integrity Guard (Sanity Check)
     print("\n🔍 DATA INTEGRITY GUARD: Inspecting raw pixels...")
     raw_sample = dataset[0]
-    raw_pixels = raw_sample["pixels"]  # (T, C, H, W)
+    raw_pixels = raw_sample.get("pixels")
+    if raw_pixels is None:
+        raise KeyError(
+            f"Could not find 'pixels' in dataset sample. Available keys: {list(raw_sample.keys())}"
+        )
 
     p_max = raw_pixels.max().item()
     p_min = raw_pixels.min().item()
