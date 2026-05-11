@@ -11,17 +11,23 @@ class LateFusionEncoder(nn.Module):
     Leverages 100% of pretrained 2D weights to prevent manifold collapse.
     """
 
-    def __init__(self, backbone, embed_dim=192, fusion="mean"):
+    def __init__(self, backbone, embed_dim=192, fusion="mean", num_views=5):
         super().__init__()
         self.backbone = backbone
         self.fusion = fusion
         self.embed_dim = embed_dim
+        self.num_views = num_views
 
         # To match HF ViT API for the predictor
         self.config = backbone.config
 
         if self.fusion == "learned":
-            self.fusion_layer = nn.Linear(embed_dim * 5, embed_dim)
+            self.fusion_layer = nn.Linear(embed_dim * self.num_views, embed_dim)
+        elif self.fusion == "attention":
+            self.fusion_query = nn.Parameter(torch.randn(1, 1, embed_dim))
+            self.fusion_attn = nn.MultiheadAttention(
+                embed_dim, num_heads=3, batch_first=True
+            )
 
     def forward(self, x, interpolate_pos_encoding=True):
         """
@@ -48,6 +54,14 @@ class LateFusionEncoder(nn.Module):
             fused = rearrange(z, "b t v d -> (b t) (v d)")
             fused = self.fusion_layer(fused)
             fused = rearrange(fused, "(b t) d -> b t d", b=b, t=t)
+        elif self.fusion == "attention":
+            # z: (B, T, V, D)
+            b_size, t_size, v_size, d_size = z.shape
+            z_flat = rearrange(z, "b t v d -> (b t) v d")
+            query = self.fusion_query.expand(b_size * t_size, 1, -1)
+            # Use learned query to attend over view tokens
+            fused, _ = self.fusion_attn(query, z_flat, z_flat)
+            fused = rearrange(fused, "(b t) 1 d -> b t d", b=b, t=t)
         else:
             raise ValueError(f"Unknown fusion type: {self.fusion}")
 
@@ -76,4 +90,5 @@ def get_multi_view_encoder(cfg):
         backbone,
         embed_dim=backbone.config.hidden_size,
         fusion=cfg.get("fusion_type", "mean"),
+        num_views=len(cfg.data.dataset.get("keys", ["world_center"])),
     )
