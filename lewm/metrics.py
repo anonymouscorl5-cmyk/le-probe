@@ -44,6 +44,10 @@ class MetricsCallback(pl.Callback):
         self.val_latents = []
         self.val_steps = []
 
+        # 🚀 Virtual Batch Metrics (Decoupling Rank from Batch Size)
+        self.train_latent_buffer = []
+        self.virtual_batch_size = 256
+
     def _init_csv(self):
         """Initializes the CSV file with headers if it doesn't exist."""
         if not os.path.exists(self.csv_path):
@@ -100,10 +104,24 @@ class MetricsCallback(pl.Callback):
         z = outputs["emb"][:, 0, :]  # Use first timestep for analysis
         diagnostics = self.compute_latent_diagnostics(z)
 
-        pl_module.log("research/soft_rank", diagnostics["soft_rank"])
-        pl_module.log(
-            "research/participation_ratio", diagnostics["participation_ratio"]
-        )
+        # 🚀 Virtual Batch Accumulation & Diagnostics
+        # We accumulate latents over multiple logging steps to decouple the rank from the batch size
+        self.train_latent_buffer.append(z.detach().cpu())
+        total_samples = len(self.train_latent_buffer) * z.shape[0]
+
+        if total_samples >= self.virtual_batch_size:
+            z_virtual = torch.cat(self.train_latent_buffer, dim=0)
+            diag_virtual = self.compute_latent_diagnostics(z_virtual)
+
+            # Log to the primary keys (now with virtual batch stability)
+            pl_module.log("research/soft_rank", diag_virtual["soft_rank"])
+            pl_module.log(
+                "research/participation_ratio",
+                diag_virtual["participation_ratio"],
+            )
+
+            # Keep buffer size manageable - clear after logging
+            self.train_latent_buffer = []
 
         # 2. Path Straightening (Trajectory Linearity)
         linearity = 1.0
