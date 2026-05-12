@@ -65,7 +65,7 @@ More details available in [**`vla/README.md`**](./vla/README.md).
 </div>
 
 ### 3. LeWM Challenges (The Discriminability Gap)
-LeWM, despite training with a large softrank, failed to sufficiently discriminate the goal state from non-goal states in the latent space.
+LeWM, despite training with a large softrank, failed to sufficiently discriminate the goal state from non-goal states in the latent space. Training with multi-view data did show improvements in performance.
 
 More details available in [**`lewm/README.md`**](./lewm/README.md).
 
@@ -77,6 +77,16 @@ To try and still get some sort of idea of the quality of training, I trained an 
   <b>LeWM: Grasp Execution</b>
   <hr width="320">
   <img src="assets/lewm_grasp.gif" width="320">
+</div>
+
+#### Multi-View Training
+
+For the above result, we had only trained the LeWM model with single-view images (`world_center`). Completed another training run while including all the views with late fusion at the encoder side, and got this result.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View)</b>
+  <hr width="320">
+  <img src="assets/lewm_multiview_grasp.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
 </div>
 
 #### Next Steps
@@ -111,17 +121,17 @@ High-level decision hubs (L11) draw raw spatial anchors directly from early sens
     *   **Directional Filtering**: Using a **Min-K Union** filter to isolate the most critical causal circuits.
 *   **Latent Topology Audit**: Dimensionality reduction (PCA, t-SNE, UMAP) to diagnose manifold fragmentation and MPC search failures.
 
-| 3D PCA | 3D t-SNE | 3D UMAP |
-| :---: | :---: | :---: |
-| ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
+| Type | 3D PCA | 3D t-SNE | 3D UMAP |
+| :--- | :---: | :---: | :---: |
+| **Single-View** | ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
+| **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
 
 More details are available in [**`interpretability/README.md`**](./interpretability/README.md).
 
 #### Next Steps
-With the diagnostic infrastructure stabilized, we are investigating:
-1. **Multi-View Data**: Training with 5 camera views to match VLA input density.
-2. **Kinematic Polytopes**: Using reachability analysis to prevent out-of-distribution arm folding.
-3. **Latent Steering**: Using discovered features as reward boosters for real-time MPC.
+With the multi-view infrastructure stabilized, we are investigating:
+1. **Kinematic Polytopes**: Using reachability analysis to prevent out-of-distribution arm folding.
+2. **Latent Steering**: Using discovered features as reward boosters for real-time MPC.
 
 ## 🛠 Getting Started
 
@@ -200,18 +210,25 @@ To run the stabilized VLA policy in simulation, the model weights/configs are av
 
 ### 3. LeWM + CEM/MPC
 
-#### Training
-
-The model was trained using [**`lewm/LeWM_Training.ipynb`**](lewm/LeWM_Training.ipynb). The original model was trained under the `GR-1 Pickup Grasp` section and the reward head was separately trained under the `GR-1 Reward Pred` section.
+The model is trained using [**`lewm/LeWM_Training.ipynb`**](lewm/LeWM_Training.ipynb). The single-view training of the model was done in the `GR-1 Pickup Grasp` section and the multi-view training was done in the `GR-1 Pickup Grasp (Multi-View)` section.
 
 Following the training, all goal states in the dataset were harvested in the latent space using [**`lewm/harvest_goals.py`**](lewm/harvest_goals.py) to save inference time.
 
-The weights of the reward-tuned model can be found at [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) and the harvested goals can be found at [`goal_gallery.pth](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing).
+**Pre-trained Artifacts**:
+
+| Version | Model Checkpoint | Goal Gallery |
+| :--- | :--- | :--- |
+| **Single-View** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
+| **Multi-View** | [Download](#) | [Download](#) |
 
 #### Inference
 
 1. **Inference Server**: Was run using [**`lewm/LEWM_E2E.ipynb`**](lewm/LEWM_E2E.ipynb) using a Pinggy tunnel.
    ```bash
+   # For Multi-View
+   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth --multi_view
+
+   # For Single-View
    .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
    ```
 
@@ -283,11 +300,17 @@ make webapp-localhost-dev
 
 #### Latent Manifold Topology
 Analyze the internal "map" of the latent space to diagnose planning failures.
-| ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
+| Type | 3D PCA | 3D t-SNE | 3D UMAP |
+| :--- | :---: | :---: | :---: |
+| **Single-View** | ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
+| **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
 
-
-1. **Harvest Latents**: Uses the server to pre-compute the graphs for certain states in the dataset
+1. **Harvest Latents**:
 ```bash
+# Multi-View Harvest
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200 --multi_view
+
+# Single-View Harvest
 .venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200
 ```
 

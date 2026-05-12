@@ -4,7 +4,9 @@ This module implements the **LeWM** (LeRobot World Model) training and inference
 
 ## 📐 Methodology
 
-The model was first trained on the `gr1_pickup_grasp` dataset using [**`LeWM_Training.ipynb`**](LeWM_Training.ipynb), then given the poor performance of discriminating between goal and non-goal states, an additional reward model tuning was performed in the same notebook.
+The model was initially trained on the `gr1_pickup_grasp` dataset using a single-view baseline. Following the discovery of the **Discriminability Gap**, we upgraded to a **Multi-View JEPA** architecture which utilizes 5 camera streams to stabilize the latent manifold.
+
+Reward model tuning is performed using `tune_reward_head.py` to calibrate the MPC cost logic against a broad spectrum of successful and failing trajectories.
 
 Finally, the performance was evaluated using [**`LEWM_E2E.ipynb`**](LEWM_E2E.ipynb) and [**`simulation_lewm.py`**](simulation_lewm.py).
 
@@ -74,17 +76,23 @@ The model is trained using [**`LeWM_Training.ipynb`**](LeWM_Training.ipynb).
 After training, use [**`harvest_goals.py`**](harvest_goals.py) to harvest latent goal embeddings into a gallery.
 
 **Pre-trained Artifacts:**
-- [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing): Reward-tuned checkpoint.
-- [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing): Harvested latent goal gallery.
+| Version | Description | Checkpoint (G-Drive) | Goal Gallery |
+| :--- | :--- | :--- | :--- |
+| **Single-View** | Standard Baseline | [gr1_reward_tuned_v2.ckpt](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [goal_gallery.pth](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
+| **Multi-View** | Multi-Camera Oracle | [gr1_reward_tuned_v2.ckpt](#) | [goal_gallery.pth](#) |
 
 ### 2. Inference
 To test the World Model and MPC planner:
 
-1. **LeWM MPC Server**: Start the server with the tuned model and gallery, I've done that in the [**`LEWM_E2E.ipynb`**](LEWM_E2E.ipynb) notebook.
+1. **LeWM MPC Server**: Start the ZMQ inference host.
    ```bash
-   python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
+   # Multi-View Inference
+   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth --multi_view
+
+   # Single-View Inference
+   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
    ```
 2. **Simulation Host**: Start the MuJoCo environment.
    ```bash
-   python lewm/simulation_lewm.py --host <host> --port <port>
+   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
    ```

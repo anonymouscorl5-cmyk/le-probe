@@ -5,6 +5,7 @@ temp_repro
 activations
 brain_snapshots
 datasets
+manifold_visualization
 scratch
 *.log
 run_*

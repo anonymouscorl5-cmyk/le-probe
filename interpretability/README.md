@@ -60,17 +60,19 @@ The attribution graph was computed using integrated gradients,
 *   **Connectivity Filtering**: We implemented a **Direction-Aware Union Min-K Filter** to maintain graph clarity while preserving these vital long-range causal links.
 
 Here's the results of the manifold visualization,
-| 3D PCA | 3D t-SNE | 3D UMAP |
-| :---: | :---: | :---: |
-| ![PCA](../assets/manifold_3d_pca.png) | ![t-SNE](../assets/manifold_3d_tsne.png) | ![UMAP](../assets/manifold_3d_umap.png) |
-| **Global Variance Audit**: Identifies latent collapse and environmental noise saturation. | **Local Neighborhood Audit**: Identifies temporal flow entanglement between phases. | **Manifold Topology Audit**: The "Smoking Gun" for MPC search failures (Disconnected islands). |
+| Tool | **3D PCA** | **3D t-SNE** | **3D UMAP** |
+| :--- | :---: | :---: | :---: |
+| **Methodology** | **Global Variance Audit**: Measures representational diversity and collapse. | **Local Neighborhood Audit**: Measures phase-wise temporal consistency. | **Manifold Topology Audit**: Maps global task continuity and goal reachability. |
+| **Single-View Result** | ![PCA](../assets/manifold_3d_pca.png) | ![t-SNE](../assets/manifold_3d_tsne.png) | ![UMAP](../assets/manifold_3d_umap.png) |
+| **Finding** | High entropy cloud; saturated by environmental noise. | High entanglement; phase-transition "jitter." | **Failure**: Disconnected islands (stalled planning). |
+| **Multi-View Result** | ![PCA](../assets/manifold_3d_multiview_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_umap.png) |
+| **Finding** | Low entropy threads; linearized physics. | Distinct episode "hairs"; temporal smoothness. | **Success**: Threaded manifold (global continuity). |
 
 ## 🚀 Research Roadmap: Next Steps
 
 The dashboard now allows us to audit the effects of key architectural changes:
-1. **Multi-View Data**: Training LeWM with 5 views to match the VLA input density and observing if it resolves the "Latent confusion" in the Predictor stack.
-2. **Kinematic Polytopes**: Using reachability analysis to avoid out-of-distribution failure modes like arm folding.
-3. **Latent Steering**: Closing the causal loop by using discovered features as reward boosters during real-time inference.
+1. **Kinematic Polytopes**: Using reachability analysis to avoid out-of-distribution failure modes like arm folding.
+2. **Latent Steering**: Closing the causal loop by using discovered features as reward boosters during real-time inference.
 
 ## 🚀 Workflows
 
@@ -127,16 +129,23 @@ make webapp-localhost-dev
 .venv/bin/python interpretability/dashboard/regenerate_graphs.py
 ```
 
+Once the graphs are generated, the interactive HTML can be viewed at http://localhost:3000.
+
+
 ### 3. Latent Manifold Visualization
 
 Analyze the topological structure of the latent space to diagnose discriminability.
+
+**Latest Checkpoints & Manifolds:**
+| Version | Interactive Manifold (UMAP) |
+| :--- | :--- |
+| **Single-View** | [manifold_data.pt](https://drive.google.com/file/d/17f2l3ebzrX0chu5Zy0GiWEYqGZ-M0CyK/view?usp=sharing) |
+| **Multi-View** | [manifold_data.pt](https://drive.google.com/file/d/1ix3_ISc80CX91RWKafP0pV8ZA9RlO49f/view?usp=sharing) |
 
 ```bash
 # 1. Harvest latents for the entire trajectory
 .venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 100
 
-# 2. Generate 3D PCA visualization
-.venv/bin/python interpretability/manifold/visualize_manifold.py --method pca
+# 2. Generate 3D Visualization
+.venv/bin/python interpretability/manifold/visualize_manifold.py --method umap
 ```
-
-Once the graphs are generated, the graph can be selected from the dropdown at http://localhost:3000.
