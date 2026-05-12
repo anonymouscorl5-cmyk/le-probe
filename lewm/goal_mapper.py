@@ -25,7 +25,7 @@ from pathlib import Path
 import stable_pretraining as spt
 from jepa import JEPA
 from module import ARPredictor
-from gr1_modules import GR1Embedder, GR1MLP
+from gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
 from lewm.le_wm.utils import get_img_preprocessor
 from lewm.goal_utils import get_goal_pixels, get_episode_video_path
 from lewm.train_lewm import RewardPredictor
@@ -79,7 +79,7 @@ class GoalMapper:
         self.projector_proj = GR1MLP(input_dim=192, output_dim=192, hidden_dim=2048)
 
         self.model = (
-            JEPA(
+            MultiViewJEPA(
                 encoder=self.encoder,
                 predictor=self.predictor,
                 action_encoder=self.action_encoder,

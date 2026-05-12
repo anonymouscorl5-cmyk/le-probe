@@ -88,17 +88,22 @@ def harvest_manifold(
                 actions = batch["action"].to(device)
 
                 # --- 🎯 Unified 6D Protocol (B, T, V, C, H, W) ---
+                if i == 0:
+                    print(f"\n🔍 [BATCH 0] SHAPE TRACE:")
+                    print(f"  - raw_pixels:    {raw_pixels.shape}")
+
                 if raw_pixels.ndim == 5:
                     if not use_multi_view:
                         # (B, T, C, H, W) -> (B, T, 1, C, H, W)
-                        # Here it's 5D, so we assume T is present and V is missing
                         pixels_6d = raw_pixels.unsqueeze(2)
                     else:
                         # (B, V, C, H, W) -> (B, 1, V, C, H, W)
-                        # Here it's 5D, so we assume T was squeezed
                         pixels_6d = raw_pixels.unsqueeze(1)
                 else:
                     pixels_6d = raw_pixels
+
+                if i == 0:
+                    print(f"  - pixels_6d:     {pixels_6d.shape}")
 
                 B, T, V, C, H, W = pixels_6d.shape
                 raw_pixels_flat = pixels_6d.reshape(B * T * V, C, H, W)
@@ -106,6 +111,11 @@ def harvest_manifold(
                     "pixels"
                 ]
                 pixels = processed_pixels.view(B, T, V, C, 224, 224)
+
+                if i == 0:
+                    print(f"  - mapper_out:    {processed_pixels.shape}")
+                    print(f"  - pixels_final:  {pixels.shape}")
+                    print(f"  - actions:       {actions.shape}\n")
                 # -----------------------------------------------
 
                 if torch.isnan(actions).any():
