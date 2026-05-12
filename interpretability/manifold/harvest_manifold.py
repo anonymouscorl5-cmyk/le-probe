@@ -47,9 +47,22 @@ def harvest_manifold(
     model = mapper.model.to(device).eval()
 
     # 2. Initialize Data Plugin (num_steps=1 for frame-level granularity)
+    # Use exact canonical keys from train_lewm.py for strict parity
+    keys_to_load = ["action"]
+    if use_multi_view:
+        keys_to_load += [
+            "observation.images.world_center",
+            "observation.images.world_left",
+            "observation.images.world_right",
+            "observation.images.world_top",
+            "observation.images.world_wrist",
+        ]
+    else:
+        keys_to_load += ["pixels"]
+
     data_plugin = LEWMDataPlugin(
         repo_id=dataset_repo,
-        keys_to_load=["pixels", "action"],
+        keys_to_load=keys_to_load,
         num_steps=1,
         use_multi_view=use_multi_view,
     )
