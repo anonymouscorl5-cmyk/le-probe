@@ -30,7 +30,15 @@ if project_root not in sys.path:
 from goal_mapper import GoalMapper
 
 
-def train_reward_head(checkpoint_path, repo_id, epochs=20, lr=1e-4, batch_size=32):
+def train_reward_head(
+    checkpoint_path,
+    repo_id,
+    epochs=20,
+    lr=1e-4,
+    batch_size=32,
+    use_multi_view=True,
+    fusion_type="linear",
+):
     device = torch.device(
         "cuda"
         if torch.cuda.is_available()
@@ -51,7 +59,13 @@ def train_reward_head(checkpoint_path, repo_id, epochs=20, lr=1e-4, batch_size=3
     print(f"📦 Dataset Loaded: {len(df)} samples.")
 
     # 2. Initialize Mapper & Model
-    mapper = GoalMapper(model_path=checkpoint_path, dataset_root=local_dir)
+    mapper = GoalMapper(
+        model_path=checkpoint_path,
+        dataset_root=local_dir,
+        use_multi_view=use_multi_view,
+        fusion_type=fusion_type,
+        num_views=5 if use_multi_view else 1,
+    )
     model = mapper.model.to(device)
 
     # Freeze everything except the Reward Head
@@ -71,20 +85,50 @@ def train_reward_head(checkpoint_path, repo_id, epochs=20, lr=1e-4, batch_size=3
 
         def __getitem__(self, idx):
             row = self.df.iloc[idx]
-            raw_img = row["observation.images.world_center"]
 
-            # Manual reconstruction by channel to break object-array nesting
-            img_np = np.stack(
-                [
-                    np.array(raw_img[0].tolist(), dtype=np.uint8),
-                    np.array(raw_img[1].tolist(), dtype=np.uint8),
-                    np.array(raw_img[2].tolist(), dtype=np.uint8),
-                ],
-                axis=-1,
-            )
+            if use_multi_view:
+                # Load all 5 cameras
+                cam_keys = [
+                    "observation.images.world_center",
+                    "observation.images.world_left",
+                    "observation.images.world_right",
+                    "observation.images.world_top",
+                    "observation.images.world_wrist",
+                ]
+                views = []
+                for k in cam_keys:
+                    raw_img = row[k]
+                    img_np = np.stack(
+                        [
+                            np.array(raw_img[0].tolist(), dtype=np.uint8),
+                            np.array(raw_img[1].tolist(), dtype=np.uint8),
+                            np.array(raw_img[2].tolist(), dtype=np.uint8),
+                        ],
+                        axis=-1,
+                    )
+                    # Apply transform to EACH view individually to match ToImage expectations
+                    transformed = self.transform({"pixels": img_np})
+                    views.append(transformed["pixels"])
 
-            batch = self.transform({"pixels": img_np})
-            return batch["pixels"], torch.tensor([row["progress"]], dtype=torch.float32)
+                # Stack to (V, C, H, W)
+                img_pixels = torch.stack(views, dim=0)
+                # Add T=1 dimension: (1, V, C, H, W)
+                img_pixels = img_pixels.unsqueeze(0)
+            else:
+                raw_img = row["observation.images.world_center"]
+                img_np = np.stack(
+                    [
+                        np.array(raw_img[0].tolist(), dtype=np.uint8),
+                        np.array(raw_img[1].tolist(), dtype=np.uint8),
+                        np.array(raw_img[2].tolist(), dtype=np.uint8),
+                    ],
+                    axis=-1,
+                )
+                transformed = self.transform({"pixels": img_np})
+                # Add T=1 and V=1 dimensions: (1, 1, C, H, W)
+                img_pixels = transformed["pixels"].unsqueeze(0).unsqueeze(0)
+
+            return img_pixels, torch.tensor([row["progress"]], dtype=torch.float32)
 
     dataset = ParquetDataset(df, mapper.transform)
     train_size = int(0.9 * len(dataset))
@@ -104,7 +148,8 @@ def train_reward_head(checkpoint_path, repo_id, epochs=20, lr=1e-4, batch_size=3
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
 
         for imgs, rewards in pbar:
-            imgs, rewards = imgs.unsqueeze(1).to(device), rewards.to(device)
+            # imgs: (B, T=1, V, C, H, W), rewards: (B, 1)
+            imgs, rewards = imgs.to(device), rewards.to(device)
 
             optimizer.zero_grad()
             info = model.encode({"pixels": imgs})
@@ -122,7 +167,7 @@ def train_reward_head(checkpoint_path, repo_id, epochs=20, lr=1e-4, batch_size=3
         val_loss = 0
         with torch.no_grad():
             for imgs, rewards in val_loader:
-                imgs, rewards = imgs.unsqueeze(1).to(device), rewards.to(device)
+                imgs, rewards = imgs.to(device), rewards.to(device)
                 info = model.encode({"pixels": imgs})
                 pred_reward = model.reward_head(info["emb"]).squeeze(-1)
                 val_loss += criterion(pred_reward, rewards).item()
@@ -146,6 +191,16 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--multi_view", action="store_true", default=True)
+    parser.add_argument("--fusion", type=str, default="linear")
     args = parser.parse_args()
 
-    train_reward_head(args.ckpt, args.snapshots, args.epochs, args.lr, args.batch_size)
+    train_reward_head(
+        args.ckpt,
+        args.snapshots,
+        args.epochs,
+        args.lr,
+        args.batch_size,
+        use_multi_view=args.multi_view,
+        fusion_type=args.fusion,
+    )

@@ -29,6 +29,7 @@ from gr1_modules import GR1Embedder, GR1MLP
 from lewm.le_wm.utils import get_img_preprocessor
 from lewm.goal_utils import get_goal_pixels, get_episode_video_path
 from lewm.train_lewm import RewardPredictor
+from lewm.multi_view_encoder import LateFusionEncoder
 
 
 class GoalMapper:
@@ -37,19 +38,32 @@ class GoalMapper:
     Used for Zero-Shot Goal-Conditioned MPC.
     """
 
-    def __init__(self, model_path, dataset_root, img_size=224):
+    def __init__(
+        self,
+        model_path,
+        dataset_root,
+        img_size=224,
+        use_multi_view=True,
+        num_views=5,
+        fusion_type="linear",
+    ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dataset_root = Path(dataset_root)
         self.img_size = img_size
+        self.use_multi_view = use_multi_view
+        self.num_views = num_views
 
         # 🎯 OFFICIAL TRAINING TRANSFORMS (Strict Parity)
         self.transform = get_img_preprocessor(
             source="pixels", target="pixels", img_size=img_size
         )
 
-        # Initialize Model Architecture (v17 Hardcoded Abstractions)
-        self.encoder = spt.backbone.utils.vit_hf(
+        # Initialize Model Architecture (Always Wrapped for Parity)
+        backbone = spt.backbone.utils.vit_hf(
             "tiny", patch_size=14, image_size=224, pretrained=False
+        )
+        self.encoder = LateFusionEncoder(
+            backbone, embed_dim=192, fusion=fusion_type, num_views=num_views
         )
         self.predictor = ARPredictor(
             num_frames=3,
@@ -102,10 +116,16 @@ class GoalMapper:
         if pixels is None:
             return False
 
-        # 1. Transform: (3, H, W) -> (1, 1, 3, 224, 224)
+        # 1. Transform and Batch (Force 6D: B, T, V, C, H, W)
         batch = self.transform({"pixels": pixels})
         processed_pixels = batch["pixels"].to(self.device)
-        processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0)
+
+        if not self.use_multi_view:
+            # (C, H, W) -> (1, 1, 1, C, H, W)
+            processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+        else:
+            # (V, C, H, W) -> (1, 1, V, C, H, W)
+            processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0)
 
         # 2. Encode to Latent once
         info = self.model.encode({"pixels": processed_pixels})
@@ -164,14 +184,16 @@ class GoalMapper:
         raw_pixels = obs_dict["pixels"]
         B, S = actions.size(0), actions.size(1)
 
-        # Defensive Dimension Stripping: (Batch, Samples, T, C, H, W) -> (Batch, T, C, H, W)
-        pixels_5d = raw_pixels
-        while pixels_5d.ndim > 5:
-            pixels_5d = pixels_5d[:, 0]  # Squeeze the Sample/S dimensions
+        # Force 6D Protocol: (Batch, T, V, C, H, W)
+        pixels_input = raw_pixels
+        target_ndim = 6
+
+        while pixels_input.ndim > target_ndim:
+            pixels_input = pixels_input[:, 0]  # Squeeze the Sample/S dimensions
 
         # 2. Optimized Encoding
-        # All samples S share the same history. We encode the 5D batch once.
-        info = self.model.encode({"pixels": pixels_5d})
+        # All samples S share the same history. We encode the batch once.
+        info = self.model.encode({"pixels": pixels_input})
         init_emb = info["emb"]  # (B, T, D)
 
         # Expand latents for the solver: (B, T, D) -> (B*S, T, D)

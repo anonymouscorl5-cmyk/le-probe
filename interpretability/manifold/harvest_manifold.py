@@ -22,7 +22,13 @@ from lewm.lewm_data_plugin import LEWMDataPlugin
 
 
 def harvest_manifold(
-    model_path, dataset_repo, output_file, num_episodes=0, num_workers=4
+    model_path,
+    dataset_repo,
+    output_file,
+    num_episodes=0,
+    num_workers=4,
+    use_multi_view=True,
+    fusion_type="linear",
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     output_path = Path(output_file).resolve()
@@ -31,12 +37,21 @@ def harvest_manifold(
     print(f"🚀 Initializing Manifold Harvest | Device: {device}")
 
     # 1. Load Model
-    mapper = GoalMapper(model_path=model_path, dataset_root=".")
+    mapper = GoalMapper(
+        model_path=model_path,
+        dataset_root=".",
+        use_multi_view=use_multi_view,
+        fusion_type=fusion_type,
+        num_views=5 if use_multi_view else 1,
+    )
     model = mapper.model.to(device).eval()
 
     # 2. Initialize Data Plugin (num_steps=1 for frame-level granularity)
     data_plugin = LEWMDataPlugin(
-        repo_id=dataset_repo, keys_to_load=["pixels", "action"], num_steps=1
+        repo_id=dataset_repo,
+        keys_to_load=["pixels", "action"],
+        num_steps=1,
+        use_multi_view=use_multi_view,
     )
     data_plugin.clear_cache()
 
@@ -72,14 +87,25 @@ def harvest_manifold(
                 raw_pixels = batch["pixels"].to(device)
                 actions = batch["action"].to(device)
 
-                # --- 🎯 Model-Specific Transform ---
-                B, T, C, H, W = raw_pixels.shape
-                raw_pixels_flat = raw_pixels.view(B * T, C, H, W)
-                processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
-                    "pixels"
-                ]
-                pixels = processed_pixels.view(B, T, C, 224, 224)
-                # -----------------------------------
+                # --- 🎯 Unified 6D Protocol (B, T, V, C, H, W) ---
+                if not use_multi_view:
+                    # raw_pixels: (B, T, C, H, W) -> (B, T, 1, C, H, W)
+                    B, T, C, H, W = raw_pixels.shape
+                    V = 1
+                    raw_pixels_flat = raw_pixels.view(B * T * V, C, H, W)
+                    processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
+                        "pixels"
+                    ]
+                    pixels = processed_pixels.view(B, T, V, C, 224, 224)
+                else:
+                    # raw_pixels: (B, T, V, C, H, W)
+                    B, T, V, C, H, W = raw_pixels.shape
+                    raw_pixels_flat = raw_pixels.view(B * T * V, C, H, W)
+                    processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
+                        "pixels"
+                    ]
+                    pixels = processed_pixels.view(B, T, V, C, 224, 224)
+                # -----------------------------------------------
 
                 if torch.isnan(actions).any():
                     actions = torch.nan_to_num(actions, 0.0)
@@ -126,6 +152,8 @@ if __name__ == "__main__":
         default=0,
         help="Number of episodes to harvest (0 for all)",
     )
+    parser.add_argument("--multi_view", action="store_true", default=True)
+    parser.add_argument("--fusion", type=str, default="linear")
     args = parser.parse_args()
 
     harvest_manifold(
@@ -133,4 +161,6 @@ if __name__ == "__main__":
         dataset_repo=args.dataset,
         output_file=args.output,
         num_episodes=args.episodes,
+        use_multi_view=args.multi_view,
+        fusion_type=args.fusion,
     )
