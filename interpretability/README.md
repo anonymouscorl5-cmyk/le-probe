@@ -136,7 +136,7 @@ Once the graphs are generated, the interactive HTML can be viewed at http://loca
 
 Analyze the topological structure of the latent space to diagnose discriminability.
 
-**Latest Checkpoints & Manifolds:**
+**Latest Manifolds:**
 | Version | Interactive Manifold (UMAP) |
 | :--- | :--- |
 | **Single-View** | [manifold_data.pt](https://drive.google.com/file/d/17f2l3ebzrX0chu5Zy0GiWEYqGZ-M0CyK/view?usp=sharing) |

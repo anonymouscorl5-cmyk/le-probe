@@ -221,7 +221,7 @@ Following the training, all goal states in the dataset were harvested in the lat
 | Version | Model Checkpoint | Goal Gallery |
 | :--- | :--- | :--- |
 | **Single-View** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
-| **Multi-View** | [Download](#) | [Download](#) |
+| **Multi-View** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1pGMMicqYL_Z8GCS1TOe2A_kAAJQLV3qd/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1gYk_P9Godif20boD64M8epR5xSSSxugn/view?usp=sharing) |
 
 #### Inference
 
@@ -306,6 +306,12 @@ Analyze the internal "map" of the latent space to diagnose planning failures.
 | :--- | :---: | :---: | :---: |
 | **Single-View** | ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
 | **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
+
+0. **Latest Manifolds:**
+| Version | Interactive Manifold (UMAP) |
+| :--- | :--- |
+| **Single-View** | [manifold_data.pt](https://drive.google.com/file/d/17f2l3ebzrX0chu5Zy0GiWEYqGZ-M0CyK/view?usp=sharing) |
+| **Multi-View** | [manifold_data.pt](https://drive.google.com/file/d/1ix3_ISc80CX91RWKafP0pV8ZA9RlO49f/view?usp=sharing) |
 
 1. **Harvest Latents**:
 ```bash
