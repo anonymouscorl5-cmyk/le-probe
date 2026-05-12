@@ -79,16 +79,6 @@ To try and still get some sort of idea of the quality of training, I trained an 
   <img src="assets/lewm_grasp.gif" width="320">
 </div>
 
-#### Multi-View Training
-
-For the above result, we had only trained the LeWM model with single-view images (`world_center`). Completed another training run while including all the views with late fusion at the encoder side, and got this result.
-
-<div align="center">
-  <b>LeWM: Grasp Execution (Multi-View)</b>
-  <hr width="320">
-  <img src="assets/lewm_multiview_grasp.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
-</div>
-
 #### Next Steps
 
 Given the behaviour somewhat works but nowhere near good enough, the next step is to try and probe into the model to identify the sparse features driving these latent representations.
@@ -127,6 +117,18 @@ High-level decision hubs (L11) draw raw spatial anchors directly from early sens
 | **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
 
 More details are available in [**`interpretability/README.md`**](./interpretability/README.md).
+
+### 5. Multi-View Training
+
+Previously, we had only trained the LeWM model with single-view images (`world_center`). Completed another training run while including all the views with late fusion at the encoder side, and got this result where the robot does smash the cube off the table but the only challenge is for the hand to get on top of the table.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View)</b>
+  <hr width="320">
+  <img src="assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
+</div>
+
+More details are available in [**`lewm/README.md`**](./lewm/README.md).
 
 #### Next Steps
 With the multi-view infrastructure stabilized, we are investigating:

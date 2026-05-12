@@ -52,9 +52,9 @@ As can be seen, the softrank ends up close to a 60-90 range which was initially 
 The results with solely relying on the goal state embeddings weren't useful, but after training with an auxillary reward head instead, the robot atleast managed to get close to the table but not able to close in on the cube.
 
 <div align="center">
-  <b>LeWM: Grasp Execution (Reward Head Trained)</b>
+  <b>LeWM: Grasp Execution</b>
   <hr width="320">
-  <img src="../assets/lewm_grasp.gif" width="320">
+  <img src="../assets/lewm_grasp.gif" width="320" alt="LeWM: Grasp Execution">
 </div>
 
 ## ⚠️ Current Challenges: The Discriminability Gap
@@ -65,6 +65,16 @@ My research shows that while LeWM can learn to predict video frames accurately, 
 - **Reward Head Intervention**: I use an auxiliary **Reward Predictor** to provide a clearer gradient for the MPC solver. This has shown improvement in the robot's movement intent, though smoothness still trails behind VLA baselines.
 
 The above thus motivated the need for interpretability, covered in [**`interpretability/README.md`**](../interpretability/README.md).
+
+## 📷 Multi-View Training
+
+Completed another training run while including all the views with late fusion at the encoder side, and got this result where the robot does smash the cube off the table but the only challenge is for the hand to get on top of the table.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View)</b>
+  <hr width="320">
+  <img src="../assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
+</div>
 
 ## 🚀 Workflows
 
