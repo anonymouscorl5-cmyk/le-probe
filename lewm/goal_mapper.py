@@ -335,8 +335,10 @@ class GoalMapper:
             else:
                 jump_internal = 0.0
 
-            # Smoothness Weight (10.0): Reduced from 300.0 to allow the solver to move the arm.
-            smoothness_weight = 10.0
+            # 3. Physical Grace (Smoothness Penalty)
+            # High weight = more fluid, professional movement
+            # Low weight = violent, jerky 'glitchy' movement
+            smoothness_weight = 100.0
             dist = dist + (jump_start + jump_internal) * smoothness_weight
 
         # 7. Unflatten back to (B, S) for the Solver
