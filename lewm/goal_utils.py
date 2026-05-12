@@ -20,6 +20,9 @@ if ROOT_DIR not in sys.path:
 
 from pathlib import Path
 
+import cv2
+from pathlib import Path
+
 # Try to import torchcodec for high-performance AV1 decoding
 try:
     import torchcodec
@@ -34,18 +37,37 @@ def extract_frame_at_index(video_path, frame_idx):
     Decodes a specific frame index from the video.
     Returns: torch.Tensor (3, H, W) in [0, 1]
     """
-    if not HAS_TORCHCODEC:
-        raise ImportError("torchcodec is required for frame extraction.")
-
     if not Path(video_path).exists():
         return None
 
+    # Try TorchCodec first (if available and not erroring)
+    if HAS_TORCHCODEC:
+        try:
+            decoder = torchcodec.decoders.VideoDecoder(str(video_path))
+            frame_batch = decoder.get_frames_at(indices=[frame_idx])
+            import torch
+
+            return frame_batch.data[0].float() / 255.0
+        except Exception:
+            pass  # Fallback to OpenCV
+
+    # OpenCV Fallback
     try:
-        decoder = torchcodec.decoders.VideoDecoder(str(video_path))
-        frame_batch = decoder.get_frames_at(indices=[frame_idx])
-        return frame_batch.data[0]
+        cap = cv2.VideoCapture(str(video_path))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            return None
+
+        # BGR -> RGB
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        import torch
+
+        # (H, W, C) -> (C, H, W)
+        return torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0
     except Exception as e:
-        print(f"❌ Failed to extract frame {frame_idx}: {e}")
+        print(f"❌ Failed to extract frame {frame_idx} with OpenCV: {e}")
         return None
 
 
@@ -57,8 +79,11 @@ def get_goal_pixels(video_path):
         return None
 
     try:
-        decoder = torchcodec.decoders.VideoDecoder(str(video_path))
-        num_frames = decoder.metadata.num_frames
+        # Use OpenCV for metadata if torchcodec is unavailable
+        cap = cv2.VideoCapture(str(video_path))
+        num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+
         last_frame_idx = num_frames - 1
         return extract_frame_at_index(video_path, last_frame_idx)
     except Exception:

@@ -107,31 +107,57 @@ class GoalMapper:
     @torch.no_grad()
     def set_goal(self, episode_idx=0):
         """
-        Fetches the success state (last frame) from the dataset and
-        encodes it once into a latent vector stored in self.goal_latent.
+        Fetches the success state (last frame) from the dataset.
+        In Multi-View mode, it loads all 5 camera views and stacks them.
         """
-        video_path = get_episode_video_path(self.dataset_root, episode_idx)
-        pixels = get_goal_pixels(video_path)
+        if self.use_multi_view:
+            cam_keys = [
+                "observation.images.world_center",
+                "observation.images.world_left",
+                "observation.images.world_right",
+                "observation.images.world_top",
+                "observation.images.world_wrist",
+            ]
+            views = []
+            for cam in cam_keys:
+                video_path = get_episode_video_path(
+                    self.dataset_root, episode_idx, camera_key=cam
+                )
+                pixels = get_goal_pixels(video_path)
+                if pixels is None:
+                    print(f"⚠️ Warning: Missing view {cam} for episode {episode_idx}")
+                    return False
 
-        if pixels is None:
-            return False
+                # Transform each view individually
+                # Transform expects a dict with 'pixels' as (C, H, W) or (H, W, C)
+                # Goal Utils returns (C, H, W)
+                transformed = self.transform({"pixels": pixels})["pixels"]
+                views.append(transformed)
 
-        # 1. Transform and Batch (Force 6D: B, T, V, C, H, W)
-        batch = self.transform({"pixels": pixels})
-        processed_pixels = batch["pixels"].to(self.device)
+            # Stack to (V, C, H, W)
+            processed_pixels = torch.stack(views, dim=0).to(self.device)
+            # Add T=1 and B=1: (1, 1, V, C, H, W)
+            processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0)
+        else:
+            video_path = get_episode_video_path(self.dataset_root, episode_idx)
+            pixels = get_goal_pixels(video_path)
 
-        if not self.use_multi_view:
+            if pixels is None:
+                return False
+
+            # Transform and Batch (Force 6D: B, T, V, C, H, W)
+            batch = self.transform({"pixels": pixels})
+            processed_pixels = batch["pixels"].to(self.device)
             # (C, H, W) -> (1, 1, 1, C, H, W)
             processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-        else:
-            # (V, C, H, W) -> (1, 1, V, C, H, W)
-            processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0)
 
         # 2. Encode to Latent once
         info = self.model.encode({"pixels": processed_pixels})
         self.goal_latent = info["emb"].detach()  # (1, 1, D)
 
-        print(f"✅ Goal Latent Cached: {self.goal_latent.shape}")
+        print(
+            f"✅ Goal Latent Cached: {self.goal_latent.shape} (Multi-View: {self.use_multi_view})"
+        )
         return True
 
     def predict(self, *args, **kwargs):

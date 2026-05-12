@@ -55,10 +55,15 @@ class MockSpace:
 
 
 class LEWMInferenceServer:
-    def __init__(self, model_path, gallery_path="goal_gallery.pth"):
-        print("--- Initializing Oracle MPC Server (Gallery Only) ---")
+    def __init__(
+        self, model_path, gallery_path="goal_gallery.pth", use_multi_view=False
+    ):
+        print(
+            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}) ---"
+        )
         self.scaler = StandardScaler()
         self.initial_pose = None
+        self.use_multi_view = use_multi_view
 
         gallery_file = Path(gallery_path)
         if not gallery_file.exists():
@@ -72,7 +77,12 @@ class LEWMInferenceServer:
         print(f"✅ Success: {len(self.gallery['goals'])} goal latents ready.")
 
         # 2. Initialize Brain (Gallery doesn't need data root)
-        self.agent = GoalMapper(model_path, dataset_root=".")
+        self.agent = GoalMapper(
+            model_path,
+            dataset_root=".",
+            use_multi_view=use_multi_view,
+            num_views=5 if use_multi_view else 1,
+        )
 
         # 3. Load Entire Gallery into Brain (Omni-Goal mode)
         goal_list = [
@@ -115,7 +125,30 @@ class LEWMInferenceServer:
                         d["shape"]
                     )
 
-                raw_image = unpack_np(req.get("observation.images.world_center"))
+                # 1. Perception Unpacking
+                if self.use_multi_view:
+                    cam_keys = [
+                        "observation.images.world_center",
+                        "observation.images.world_left",
+                        "observation.images.world_right",
+                        "observation.images.world_top",
+                        "observation.images.world_wrist",
+                    ]
+                    views = []
+                    for k in cam_keys:
+                        raw_img = unpack_np(req.get(k))
+                        # Transform to (C, H, W)
+                        transformed = self.agent.transform({"pixels": raw_img})
+                        views.append(transformed["pixels"])
+
+                    # Current frame is (V, C, H, W)
+                    current_pixels = torch.stack(views, dim=0).to(DEVICE)
+                else:
+                    raw_image = unpack_np(req.get("observation.images.world_center"))
+                    transformed = self.agent.transform({"pixels": raw_image})
+                    # Current frame is (1, C, H, W) for single-view consistency
+                    current_pixels = transformed["pixels"].unsqueeze(0).to(DEVICE)
+
                 raw_sim_state = unpack_np(req.get("state"))
 
                 # Grounding: Normalize the current state for history alignment
@@ -131,10 +164,7 @@ class LEWMInferenceServer:
                         f"🧊 Initial Pose Anchored: Left Shoulder Pitch = {self.initial_pose[0]:.4f}"
                     )
 
-                batch = self.agent.transform({"pixels": raw_image})
-                image_t = batch["pixels"].to(DEVICE)
-
-                self.history["pixels"].append(image_t)
+                self.history["pixels"].append(current_pixels)
                 if len(self.history["pixels"]) > 3:
                     self.history["pixels"].pop(0)
 
@@ -142,12 +172,11 @@ class LEWMInferenceServer:
                 while len(self.history["actions"]) < 3:
                     self.history["actions"].append(norm_state)
 
+                # pixels_stacked: (B=1, T=3, V, C, H, W)
                 pixels_stacked = (
-                    torch.stack(self.history["pixels"])
-                    .unsqueeze(0)
-                    .unsqueeze(0)
-                    .to(DEVICE)
+                    torch.stack(self.history["pixels"]).unsqueeze(0).to(DEVICE)
                 )
+
                 actions_stacked = (
                     torch.tensor(np.stack(self.history["actions"]), dtype=torch.float32)
                     .unsqueeze(0)
@@ -155,7 +184,9 @@ class LEWMInferenceServer:
                     .to(DEVICE)
                 )
 
-                print("🧠 Step: Planning (8,000 parallel samples)...")
+                print(
+                    f"🧠 Step: Planning (8,000 parallel samples, Shape: {pixels_stacked.shape})..."
+                )
                 start_time = time.time()
                 with torch.inference_mode():
                     # 🚀 WARM-START CEM: Pass previous action as initial guess
@@ -233,8 +264,9 @@ class LEWMInferenceServer:
                 )
 
                 # --- 📡 Rerun Telemetry & Audit ---
+                # For now, log the center view for diagnostics
                 self.log_diagnostics(
-                    raw_image=raw_image,
+                    raw_image=pixels_stacked[0, -1, 0].cpu().numpy().transpose(1, 2, 0),
                     best_plan=best_plan,
                     plan_time=plan_time,
                     instruction=req.get("instruction", "Unknown"),
@@ -285,6 +317,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
+    parser.add_argument("--multi_view", action="store_true", default=False)
     args = parser.parse_args()
-    server = LEWMInferenceServer(args.model, args.gallery)
+    server = LEWMInferenceServer(
+        args.model, args.gallery, use_multi_view=args.multi_view
+    )
     server.run()
