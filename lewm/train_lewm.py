@@ -466,10 +466,14 @@ def run(cfg):
                     f"⚠️ Re-initialized layers (Mismatched/Missing): {[k for k in msg.missing_keys if 'action_encoder' in k]}"
                 )
 
-            # Since we have manually loaded the weights (partial load),
-            # we tell Lightning to start a FRESH run from this state
-            # rather than a strict resume (which would fail on shape mismatch).
-            ckpt_path_str = None
+            # 🔄 STRATEGY SELECTION:
+            # - FRESH START (Default): Partial weight load + Epoch 0 (Safe for architecture changes).
+            # - STRICT RESUME (Opt-in): Full trainer state restore (Fails on architecture changes).
+            if not cfg.get("strict_resume", False):
+                print("🔄 RESET: Starting fresh epoch count (Weight Transfer Mode).")
+                ckpt_path_str = None
+            else:
+                print("⏳ RESUME: Restoring full trainer state (Strict Resume Mode).")
         except Exception as e:
             print(f"❌ Safe Transfer Failed: {e}. Falling back to standard resume.")
     else:
