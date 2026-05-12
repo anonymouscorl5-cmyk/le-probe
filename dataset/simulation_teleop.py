@@ -128,32 +128,53 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 norm_state = StandardScaler().scale_state(raw_state)
                 physics = self.get_physics_state()
 
-                # 2. Capture and Resize Image (world_center)
-                self.renderer.update_scene(self.data, camera="world_center")
-                rgb = self.renderer.render()
-                img = Image.fromarray(rgb).resize((224, 224))
-                img_list = np.array(img).transpose(2, 0, 1).tolist()  # (C, H, W)
+                # Capture Cube Pose (Full 7-DoF for future-proof restoration)
+                cube_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint"
+                )
+                cube_qpos = []
+                if cube_id != -1:
+                    q_idx = self.model.jnt_qposadr[cube_id]
+                    cube_qpos = self.data.qpos[q_idx : q_idx + 7].tolist()
 
-                # 3. Build Payload (Strict metadata.json format)
+                # 2. Build Payload with all 5 Camera Views
                 snapshot = {
-                    "observation.images.world_center": img_list,
                     "observation.state": norm_state.tolist(),
-                    "action": norm_state.tolist(),  # Use current state as dummy action
+                    "action": norm_state.tolist(),  # Dummy action (current state)
                     "progress": (1.0 - physics["target_dist"]) * 10.0,
+                    "cube_qpos": cube_qpos,
                 }
 
-                # 4. Save to Next Available Index
-                # Standardized Path: datasets/vedpatwardhan/gr1_reward_pred
+                cam_mapping = {
+                    "observation.images.world_center": "world_center",
+                    "observation.images.world_left": "world_left",
+                    "observation.images.world_right": "world_right",
+                    "observation.images.world_top": "world_top",
+                    "observation.images.world_wrist": "world_wrist",
+                }
+
+                for key, cam_name in cam_mapping.items():
+                    self.renderer.update_scene(self.data, camera=cam_name)
+                    rgb = self.renderer.render()
+                    img = Image.fromarray(rgb).resize((224, 224))
+                    # Store as (C, H, W) list
+                    snapshot[key] = np.array(img).transpose(2, 0, 1).tolist()
+
+                # 3. Save to Next Available Index in v2 Dataset
                 snap_dir = os.path.join(
                     ROOT_DIR,
                     "datasets",
                     "vedpatwardhan",
-                    "gr1_reward_pred",
+                    "gr1_reward_pred_v2",
                 )
                 os.makedirs(snap_dir, exist_ok=True)
-                existing = [f for f in os.listdir(snap_dir) if f.endswith(".json")]
-                next_idx = len(existing)
-                snap_path = os.path.join(snap_dir, f"{next_idx:04d}.json")
+
+                # Check for "wild_" prefix to distinguish from harvested spectrum
+                existing_wild = [
+                    f for f in os.listdir(snap_dir) if f.startswith("wild_")
+                ]
+                next_idx = len(existing_wild)
+                snap_path = os.path.join(snap_dir, f"wild_{next_idx:04d}.json")
 
                 with open(snap_path, "w") as f:
                     json.dump(snapshot, f)
