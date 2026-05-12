@@ -88,23 +88,24 @@ def harvest_manifold(
                 actions = batch["action"].to(device)
 
                 # --- 🎯 Unified 6D Protocol (B, T, V, C, H, W) ---
-                if not use_multi_view:
-                    # raw_pixels: (B, T, C, H, W) -> (B, T, 1, C, H, W)
-                    B, T, C, H, W = raw_pixels.shape
-                    V = 1
-                    raw_pixels_flat = raw_pixels.view(B * T * V, C, H, W)
-                    processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
-                        "pixels"
-                    ]
-                    pixels = processed_pixels.view(B, T, V, C, 224, 224)
+                if raw_pixels.ndim == 5:
+                    if not use_multi_view:
+                        # (B, T, C, H, W) -> (B, T, 1, C, H, W)
+                        # Here it's 5D, so we assume T is present and V is missing
+                        pixels_6d = raw_pixels.unsqueeze(2)
+                    else:
+                        # (B, V, C, H, W) -> (B, 1, V, C, H, W)
+                        # Here it's 5D, so we assume T was squeezed
+                        pixels_6d = raw_pixels.unsqueeze(1)
                 else:
-                    # raw_pixels: (B, T, V, C, H, W)
-                    B, T, V, C, H, W = raw_pixels.shape
-                    raw_pixels_flat = raw_pixels.view(B * T * V, C, H, W)
-                    processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
-                        "pixels"
-                    ]
-                    pixels = processed_pixels.view(B, T, V, C, 224, 224)
+                    pixels_6d = raw_pixels
+
+                B, T, V, C, H, W = pixels_6d.shape
+                raw_pixels_flat = pixels_6d.reshape(B * T * V, C, H, W)
+                processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
+                    "pixels"
+                ]
+                pixels = processed_pixels.view(B, T, V, C, 224, 224)
                 # -----------------------------------------------
 
                 if torch.isnan(actions).any():
