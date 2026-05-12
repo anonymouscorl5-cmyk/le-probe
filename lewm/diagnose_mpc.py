@@ -46,16 +46,20 @@ class MockSpace:
         self.high = 1.0
 
 
-def run_diagnostic(model_path, gallery_path="goal_gallery.pth", batch_size=10):
+def run_diagnostic(
+    model_path, gallery_path="goal_gallery.pth", batch_size=10, use_multi_view=False
+):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"🔬 Running Full-Spectrum Diagnostic on {device}...")
+    print(
+        f"🔬 Running Full-Spectrum Diagnostic on {device} (Multi-View: {use_multi_view})..."
+    )
 
     if not Path(gallery_path).exists():
         print(f"❌ Error: Gallery not found at {gallery_path}")
         print(
             "💡 Please run 'python research/harvest_goals.py' first to generate the artifact."
         )
-    print(f"🔬 Running Vectorized Audit on {device}...")
+        return
 
     # 1. Load Gallery
     gallery = torch.load(gallery_path, map_location=device)
@@ -64,7 +68,12 @@ def run_diagnostic(model_path, gallery_path="goal_gallery.pth", batch_size=10):
     print(f"📈 Found {num_episodes} episodes. Auditing in batches of {batch_size}...")
 
     # 2. Setup Vectorized Agent & Solver
-    mapper = GoalMapper(model_path, dataset_root=".")
+    mapper = GoalMapper(
+        model_path,
+        dataset_root=".",
+        use_multi_view=use_multi_view,
+        num_views=5 if use_multi_view else 1,
+    )
 
     # Initialize frozen_pose for manifold squashing (Offline diagnostic uses zero-pose)
     mapper.frozen_pose = torch.zeros(32, device=device)
@@ -101,11 +110,31 @@ def run_diagnostic(model_path, gallery_path="goal_gallery.pth", batch_size=10):
         pixel_list = []
         latent_list = []
         for eid in batch_ids:
-            pixel_list.append(gallery["diagnostics"][eid]["pixels"])
+            pixels = gallery["diagnostics"][eid]["pixels"]  # Expected: (T, C, H, W)
+
+            if use_multi_view:
+                # GoalMapper expects (T, V, C, H, W)
+                # If gallery pixels are (T, C, H, W), we repeat them for 5 views (fallback)
+                if pixels.ndim == 4:
+                    pixels = pixels.unsqueeze(1).repeat(1, 5, 1, 1, 1)
+                elif pixels.ndim == 5:
+                    # Already multi-view (V=5)
+                    pass
+            else:
+                # Single view expects (T, 1, C, H, W)
+                if pixels.ndim == 4:
+                    pixels = pixels.unsqueeze(1)
+
+            pixel_list.append(pixels)
             latent_list.append(gallery["goals"][eid])
 
-        # Pixels: (B, 3, 3, 224, 224), Latents: (B, 1, 192)
-        info_dict = {"pixels": torch.stack(pixel_list).to(device)}
+        # Pixels: (B, T, V, C, H, W), Latents: (B, 1, 192)
+        info_dict = {
+            "pixels": torch.stack(pixel_list).to(device),
+            "action": torch.zeros(actual_batch_size, 3, 32).to(
+                device
+            ),  # Mock history actions
+        }
         mapper.goal_latent = torch.stack(latent_list).to(device)
 
         # B. Initial Cost (Current observations vs Goal)
@@ -141,5 +170,6 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
     parser.add_argument("--batch", type=int, default=10)
+    parser.add_argument("--multi_view", action="store_true", default=False)
     args = parser.parse_args()
-    run_diagnostic(args.model, args.gallery, args.batch)
+    run_diagnostic(args.model, args.gallery, args.batch, use_multi_view=args.multi_view)
