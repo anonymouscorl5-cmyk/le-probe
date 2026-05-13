@@ -114,10 +114,6 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                 # Fuse! [T, 3, H, W] + [T, 1, H, W] -> [T, 4, H, W]
                 fused = torch.cat([rgb, skel.to(rgb.device)], dim=1)
 
-                # Put back into nested batch
-                d = nested_batch
-                for p in path[:-1]:
-                    d = d[p]
                 d[path[-1]] = fused
 
         return nested_batch

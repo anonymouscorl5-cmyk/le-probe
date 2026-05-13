@@ -112,7 +112,45 @@ def test_data_plugin_tiled_config():
         traceback.print_exc()
 
 
+def test_fusion_logic():
+    print("\n🧪 [TEST 3] Testing 4-Channel Fusion Logic...")
+    try:
+        # Create a mock plugin
+        plugin = SkeletonDataPlugin(
+            repo_id="vedpatwardhan/gr1_pickup_grasp",
+            keys_to_load=["world_center"],
+            num_steps=1,
+            use_multi_view=True,
+            img_size=224,
+        )
+
+        # Create mock nested batch with tiled image [1, 3, 960, 480]
+        # (RGB on top 480x480, Skel on bottom 480x480)
+        # Wait, the bypass logic uses 960x480 (stacked vertically)
+        mock_tiled = torch.randn(1, 3, 960, 480)
+        mock_batch = {"observation": {"images": {"world_center": mock_tiled}}}
+
+        # Run wrapper
+        transformed = plugin.tiled_transform_wrapper(mock_batch)
+
+        # Check output
+        fused = transformed["observation"]["images"]["world_center"]
+        print(f"  - Fused Shape: {fused.shape}")
+
+        if fused.shape[1] == 4:
+            print("  ✅ SUCCESS: Fused tensor has 4 channels.")
+        else:
+            print(f"  ❌ FAILURE: Expected 4 channels, got {fused.shape[1]}")
+
+    except Exception as e:
+        print(f"  ❌ FUSION TEST FAILED: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+
 if __name__ == "__main__":
     print("🚀 [STARTING SKELETON SANITY CHECK]")
     test_encoder_patching()
     test_data_plugin_tiled_config()
+    test_fusion_logic()
