@@ -1,5 +1,8 @@
 import os
 import sys
+import torch
+import numpy as np
+from omegaconf import OmegaConf
 
 # --- Path Stabilization ---
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -7,10 +10,8 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 # --------------------------
 
-import torch
-import numpy as np
-from omegaconf import OmegaConf
 from lewm.skeleton.encoder import get_skeleton_encoder
+from lewm.skeleton.data import SkeletonDataPlugin
 
 
 def test_encoder_handshake():
@@ -28,7 +29,6 @@ def test_encoder_handshake():
     encoder = get_skeleton_encoder(cfg)
 
     # Create mock input: (B=1, T=1, V=5, C=4, H=224, W=224)
-    # Channels: [R, G, B, Skeleton]
     mock_input = torch.randn(1, 1, 5, 4, 224, 224)
 
     # 1. Baseline: Skeleton channel is zero
@@ -45,8 +45,6 @@ def test_encoder_handshake():
         out_baseline = encoder(input_zero_skel).last_hidden_state
         out_augmented = encoder(input_with_skel).last_hidden_state
 
-    # VERIFICATION: If Zero-Init is working, out_baseline should EQUAL out_augmented
-    # because the 4th channel weights are zeroed at step 0.
     diff = (out_baseline - out_augmented).abs().max().item()
     print(f"  - Output Shape: {out_baseline.shape}")
     print(f"  - Max Diff (Skeleton vs No-Skeleton): {diff:.12f}")
@@ -61,10 +59,7 @@ def test_encoder_handshake():
 
 def test_data_plugin():
     print("\n🧪 [TEST 2] Testing SkeletonDataPlugin Fusion...")
-    from lewm.skeleton.data import SkeletonDataPlugin
-
     try:
-        # Mocking a lightweight dataset run
         cfg = {
             "repo_id": "vedpatwardhan/gr1_pickup_grasp",
             "keys_to_load": ["world_center"],
@@ -73,7 +68,6 @@ def test_data_plugin():
             "img_size": 224,
         }
 
-        # We only test if it can initialize and handle the 4th channel logic
         plugin = SkeletonDataPlugin(
             repo_id=cfg["repo_id"],
             keys_to_load=cfg["keys_to_load"],
@@ -83,9 +77,6 @@ def test_data_plugin():
         )
 
         print(f"  - Plugin Root: {plugin.root}")
-        print(f"  - Keys to Load: {plugin.keys_to_load}")
-
-        # Check if we can find a skeleton video path
         sample_skel_path = plugin._get_video_path(
             0, "observation.images.world_center_skeleton"
         )
@@ -93,9 +84,7 @@ def test_data_plugin():
         if sample_skel_path.exists():
             print("  ✅ SUCCESS: Skeleton video found.")
         else:
-            print(
-                "  ⚠️ NOTE: Skeleton videos not found at path. Training will fallback to Zero-Masking."
-            )
+            print("  ⚠️ NOTE: Skeleton videos not found at path.")
 
     except Exception as e:
         print(f"  ❌ PLUGIN FAILED: {e}")
@@ -103,21 +92,5 @@ def test_data_plugin():
 
 if __name__ == "__main__":
     print("🚀 [STARTING SANITY CHECK]")
-
-    # TEST 1: The most important test (No video dependencies)
-    try:
-        test_encoder_handshake()
-    except Exception as e:
-        print(f"  ❌ ENCODER TEST FAILED: {e}")
-
-    # TEST 2: Data Plugin (Depends on ffmpeg/torchcodec)
-    print("\n🧪 [TEST 2] Testing SkeletonDataPlugin Fusion...")
-    try:
-        test_data_plugin()
-    except OSError as e:
-        print(
-            f"  ⚠️ SKIPPING DATA TEST: System library issue (ffmpeg). This is expected on some macOS setups."
-        )
-        print(f"    (Error: {e})")
-    except Exception as e:
-        print(f"  ❌ DATA TEST FAILED: {e}")
+    test_encoder_handshake()
+    test_data_plugin()
