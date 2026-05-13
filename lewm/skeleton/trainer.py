@@ -11,23 +11,30 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 
 # --- Path Stabilization (Matching train_lewm.py) ---
+# 1. Add the directory containing 'lewm' package (Repo Root)
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-LEWM_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "le_wm"))
+# 2. Add 'lewm' directory itself to allow direct imports like train_lewm.py does
+LEWM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if LEWM_DIR not in sys.path:
+    sys.path.append(LEWM_DIR)
+
+# 3. Add 'le_wm' submodule directory
+LEWM_ROOT = os.path.join(LEWM_DIR, "le_wm")
 if LEWM_ROOT not in sys.path:
     sys.path.append(LEWM_ROOT)
 # --------------------------------------------------
 
-# Project Imports
-from lewm.train_lewm import lejepa_forward, RewardPredictor
-from lewm.skeleton.encoder import get_skeleton_encoder
-from lewm.skeleton.data import SkeletonDataPlugin
-from lewm.le_wm.module import ARPredictor, SIGReg
-from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
-from lewm.metrics import MetricsCallback
-from lewm.utils import ModelObjectCallBack
+# Project Imports (Direct style to match train_lewm.py)
+from train_lewm import lejepa_forward, RewardPredictor
+from skeleton.encoder import get_skeleton_encoder
+from skeleton.data import SkeletonDataPlugin
+from module import ARPredictor, SIGReg
+from gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
+from metrics import MetricsCallback
+from utils import ModelObjectCallBack
 
 
 class SkeletonImportanceCallback(pl.Callback):
@@ -44,13 +51,13 @@ class SkeletonImportanceCallback(pl.Callback):
             backbone = pl_module.model.encoder.backbone
             weight = backbone.embeddings.patch_embeddings.projection.weight
 
-            # Calculate Mean Absolute Weights
+            # Calculate Mean Absolute Weights for comparison
             rgb_weight_norm = weight[:, :3, :, :].abs().mean()
             skel_weight_norm = weight[:, 3:, :, :].abs().mean()
 
             importance_ratio = skel_weight_norm / (rgb_weight_norm + 1e-8)
 
-            # Log to WandB/Logger
+            # Log to WandB/Logger for real-time manifold monitoring
             pl_module.log_dict(
                 {
                     "skeleton/weight_norm": skel_weight_norm,
@@ -76,10 +83,12 @@ def lejepa_forward_bips(self, batch, stage, cfg):
         rand = torch.rand(1).item()
 
         # 1. Skeletal Dropout (10%): Force reliance on geometry
+        # By zeroing out RGB, we force the latent manifold to ground itself in the 4th channel.
         if rand < 0.10:
             pixels[:, :, :, :3, :, :] = 0.0
 
         # 2. Structural Reliance (5%): Force hallucination of interactions
+        # We mask RGB patches only where the skeleton exists, forcing texture reconstruction from priors.
         elif rand < 0.15:
             skeleton_mask = (pixels[:, :, :, 3:, :, :] > 0.1).float()
             pixels[:, :, :, :3, :, :] *= 1.0 - skeleton_mask
@@ -92,7 +101,7 @@ def lejepa_forward_bips(self, batch, stage, cfg):
 def run(cfg):
     print("🦾 Starting Skeleton-Prior Augmented Training (BiPS)...")
 
-    # 1. Data Ingestion
+    # 1. Data Ingestion setup
     repo_id = cfg.data.dataset.get("repo_id", "vedpatwardhan/gr1_pickup_grasp")
     keys_to_load = [
         "observation.state",
@@ -113,7 +122,7 @@ def run(cfg):
         img_size=cfg.img_size,
     )
 
-    # 2. Architecture Initialization
+    # 2. Architecture Initialization (4-channel expanded backbone)
     encoder = get_skeleton_encoder(cfg)
     hidden_dim = encoder.config.hidden_size
     embed_dim = cfg.wm.get("embed_dim", hidden_dim)
@@ -134,7 +143,7 @@ def run(cfg):
     )
     world_model.reward_head = RewardPredictor(input_dim=embed_dim, hidden_dim=512)
 
-    # 3. Training Module setup
+    # 3. Training Module setup with BiPS Forward
     world_model_module = spt.Module(
         model=world_model,
         sigreg=SIGReg(**cfg.loss.sigreg.kwargs),
