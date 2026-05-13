@@ -10,30 +10,29 @@ from omegaconf import OmegaConf, open_dict
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 
-# --- Path Stabilization (Matching train_lewm.py) ---
-# 1. Add the directory containing 'lewm' package (Repo Root)
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# --- Path Stabilization (Robust Repo Root Targeting) ---
+# We go up two levels from lewm/skeleton/trainer.py to reach le-probe root.
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
+
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-# 2. Add 'lewm' directory itself to allow direct imports like train_lewm.py does
-LEWM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if LEWM_DIR not in sys.path:
-    sys.path.append(LEWM_DIR)
-
-# 3. Add 'le_wm' submodule directory
-LEWM_ROOT = os.path.join(LEWM_DIR, "le_wm")
+# Also add the le_wm submodule for its internal direct imports (utils, module)
+LEWM_ROOT = os.path.join(REPO_ROOT, "lewm", "le_wm")
 if LEWM_ROOT not in sys.path:
     sys.path.append(LEWM_ROOT)
-# --------------------------------------------------
+# -------------------------------------------------------
 
-# Project Imports (Direct style to match train_lewm.py)
-from train_lewm import lejepa_forward, RewardPredictor
-from skeleton.encoder import get_skeleton_encoder
-from skeleton.data import SkeletonDataPlugin
+# Project Imports (Using absolute package paths to avoid collisions with dataset/skeleton)
+from lewm.train_lewm import lejepa_forward, RewardPredictor
+from lewm.skeleton.encoder import get_skeleton_encoder
+from lewm.skeleton.data import SkeletonDataPlugin
+from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
+from lewm.metrics import MetricsCallback
+
+# Submodule direct imports (after adding LEWM_ROOT to sys.path)
 from module import ARPredictor, SIGReg
-from gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
-from metrics import MetricsCallback
 from utils import ModelObjectCallBack
 
 
