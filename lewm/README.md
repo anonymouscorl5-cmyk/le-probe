@@ -16,7 +16,7 @@ Finally, the performance was evaluated using [**`LEWM_E2E.ipynb`**](LEWM_E2E.ipy
 - [`train_lewm.py`](train_lewm.py): Core training logic for the world model and reward head.
 - [`gr1_modules.py`](gr1_modules.py): Additional modules for adapting the LeWM for Fourier GR-1.
 - [`lewm_data_plugin.py`](lewm_data_plugin.py): Custom data plugin for LeWM.
-- [`metrics.py`](metrics.py): Training metrics observed including softrank, signal ratio, partcipant ratio, etc.
+- [`metrics.py`](metrics.py): Training metrics observed including softrank, signal ratio, participation ratio, etc.
 - [`tune_reward_head.py`](tune_reward_head.py): A utility to tune the reward head of the LeWM with additional snapshots.
 - [`harvest_goals.py`](harvest_goals.py): Utility to pre-compute goal embeddings for testing.
 - [`diagnose_mpc.py`](diagnose_mpc.py): A utility to visualize the CEM planner's latent trajectory (the planning algorithm). This is not an online server but just a sanity check after training.
@@ -46,6 +46,18 @@ Here are some of the training metrics:
 </div>
 
 As can be seen, the softrank ends up close to a 60-90 range which was initially expected based on the dataset without colapsing lower than 45 at the start of training and the sigreg loss also drops significantly indicating that we're able to capture the dynamics without representation collapse.
+
+### 📈 Metric Glossary: Understanding Manifold Health
+
+To monitor the stability of the latent world, we track several topological and structural metrics:
+
+*   **SoftRank**: Measures latent "expressivity"; a higher rank indicates a rich, feature-dense manifold, while a low rank flags "representation collapse."
+*   **Participation Ratio**: The "Latent Vocabulary Size"; it counts the number of effective independent dimensions used by the model to represent a scene.
+*   **Signal Ratio**: Tracks the energy balance between predicted and target embeddings; values near 1.0 indicate a stable, non-exploding temporal flow.
+*   **SigReg Loss**: Signal Regularization; a critical loss term that prevents latent variance from vanishing, forcing the model to keep the manifold "breathing."
+*   **Path Straightening**: Measures how "predictable" the latent trajectories are; higher values indicate smoother transitions and more physically consistent dynamics.
+*   **Skeletal Relative Importance**: Tracks the L1-norm ratio of the 4th-channel (kinematics) vs RGB weights; monitors how aggressively the model is anchoring in structural reality.
+
 
 ## 🏆 Current Performance
 
