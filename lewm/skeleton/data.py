@@ -1,7 +1,5 @@
-import time
-import os
-import csv
 import torch
+import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from lewm.lewm_data_plugin import LEWMDataPlugin
 
@@ -40,42 +38,17 @@ class SkeletonDataPlugin(LEWMDataPlugin):
         self.orig_transform = self.transform
         self.transform = self.tiled_transform_wrapper
 
-        # 4. Profiling Setup
-        self.profile_csv = "dataloader_profile.csv"
-
         print(
             f"🚀 Tiled SkeletonDataPlugin initialized (Wrapped Transform) for views: {self.base_views}"
         )
-
-    def _log_profile(self, idx, metrics_dict):
-        worker_info = torch.utils.data.get_worker_info()
-        worker_id = worker_info.id if worker_info else 0
-        file_exists = (
-            os.path.exists(self.profile_csv) and os.path.getsize(self.profile_csv) > 0
-        )
-
-        with open(self.profile_csv, "a", newline="") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["timestamp", "worker_id", "idx"]
-                + sorted(metrics_dict.keys()),
-            )
-            if not file_exists:
-                writer.writeheader()
-
-            row = {"timestamp": time.time(), "worker_id": worker_id, "idx": idx}
-            row.update(metrics_dict)
-            writer.writerow(row)
 
     def tiled_transform_wrapper(self, nested_batch):
         """
         Intercepts the transform call to split tiled videos and handle 4-channel fusion.
         """
-        t0 = time.perf_counter()
         skeletons = {}
 
         # A. Split Tiled Videos into RGB + Skeleton
-        t_split_s = time.perf_counter()
         for view in self.base_views:
             path = None
             tensor = None
@@ -92,83 +65,76 @@ class SkeletonDataPlugin(LEWMDataPlugin):
 
             if tensor is not None and tensor.shape[-1] > tensor.shape[-2]:
                 mid = tensor.shape[-1] // 2
-                rgb = tensor[..., :mid].clone()
-                skeletons[view] = tensor[..., mid:].clone()  # Raw uint8 [T, 3, H, W]
+                rgb_raw = tensor[..., :mid]  # [T, 3, H, W]
+                skel_raw = tensor[..., mid:]
 
-                # 2. Store RGB back
+                # 2. Resize RGB immediately on Worker (CPU)
+                # This reduces tensor size from 480x480 -> 224x224 (4.5x reduction)
+                # We use F.interpolate because it's generally faster for raw tensors
+                if rgb_raw.shape[-2:] != (self.img_size, self.img_size):
+                    # F.interpolate expects [B, C, H, W], we have [T, C, H, W]
+                    rgb = torch.nn.functional.interpolate(
+                        rgb_raw.float(),
+                        size=(self.img_size, self.img_size),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).byte()
+                else:
+                    rgb = rgb_raw
+
+                # 3. Store RGB back
                 d = nested_batch
                 for p in path[:-1]:
                     d = d[p]
                 d[path[-1]] = rgb
-        t_split_e = time.perf_counter()
 
-        t_orig_s = time.perf_counter()
-        # B. Run Original Transforms (Resizing, Normalization, etc. on RGB)
+                # 4. Store Raw Skeleton (Keep at original res or downsample?)
+                # If we keep at 480, it's 3x more memory.
+                # Let's downsample to 224 here too, since the GPU-side resizing
+                # from 480->224 on the CPU is what's slow.
+                # If we do it here, we don't need GPU resizing!
+                if skel_raw.shape[-2:] != (self.img_size, self.img_size):
+                    skeletons[view] = torch.nn.functional.interpolate(
+                        skel_raw.float(),
+                        size=(self.img_size, self.img_size),
+                        mode="nearest",  # Use nearest for masks/skeletons
+                    ).byte()
+                else:
+                    skeletons[view] = skel_raw
+        # B. Run Original Transforms (Normalization, etc. - RESIZE will be a no-op now!)
         if self.orig_transform:
             nested_batch = self.orig_transform(nested_batch)
-        t_orig_e = time.perf_counter()
 
         # C. Post-Transform: Attach raw skeletons for GPU fusion
-        t_attach_s = time.perf_counter()
         for view, skel in skeletons.items():
             nested_batch[f"{view}_skel_raw"] = skel
-        t_attach_e = time.perf_counter()
-
-        # Attach timing info to batch for __getitem__ to log
-        if "_profile" not in nested_batch:
-            nested_batch["_profile"] = {}
-        nested_batch["_profile"]["split_tiled_ms"] = (t_split_e - t_split_s) * 1000
-        nested_batch["_profile"]["orig_trans_ms"] = (t_orig_e - t_orig_s) * 1000
-        nested_batch["_profile"]["attach_skel_ms"] = (t_attach_e - t_attach_s) * 1000
 
         return nested_batch
 
     def __getitem__(self, idx):
-        start_time = time.perf_counter()
-
         # 1. Base Loading (Video Decoding)
         batch = super().__getitem__(idx)
-        load_time = time.perf_counter()
 
-        # 2. Multi-view Stacking
-        stack_start = time.perf_counter()
+        # 2. Multi-view Stacking (Micro-optimized)
         if self.use_multi_view:
-            fused_views = []
-            fused_skels = []
-            for vn in self.base_views:
-                # RGB Views
-                key = f"observation.images.{vn}"
-                if key in batch:
-                    fused_views.append(batch[key])
-                elif vn in batch:
-                    fused_views.append(batch[vn])
+            views = self.base_views
+            pixels = []
+            skels = []
 
-                # Raw Skeleton Views
-                skel_key = f"{vn}_skel_raw"
-                if skel_key in batch:
-                    fused_skels.append(batch[skel_key])
-                    del batch[skel_key]
+            for vn in views:
+                # RGB
+                pix = batch.get(f"observation.images.{vn}") or batch.get(vn)
+                if pix is not None:
+                    pixels.append(pix)
 
-            if fused_views:
-                batch["pixels"] = torch.stack(fused_views, dim=1)
+                # Skeletons
+                sk = batch.get(f"{vn}_skel_raw")
+                if sk is not None:
+                    skels.append(sk)
 
-            if fused_skels:
-                batch["skeletons_raw"] = torch.stack(fused_skels, dim=1)
-        stack_end = time.perf_counter()
-
-        # 3. Logging
-        total_time_ms = (time.perf_counter() - start_time) * 1000
-
-        # Collect all metrics from nested _profile
-        metrics = batch.get("_profile", {}).copy()
-        metrics["super_getitem_total_ms"] = (load_time - start_time) * 1000
-        metrics["multiview_stack_ms"] = (stack_end - stack_start) * 1000
-        metrics["TOTAL_getitem_ms"] = total_time_ms
-
-        self._log_profile(idx, metrics)
-
-        # Cleanup internal profile keys
-        if "_profile" in batch:
-            del batch["_profile"]
+            if pixels:
+                batch["pixels"] = torch.stack(pixels, dim=1)
+            if skels:
+                batch["skeletons_raw"] = torch.stack(skels, dim=1)
 
         return batch

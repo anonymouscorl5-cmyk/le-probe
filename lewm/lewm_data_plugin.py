@@ -193,8 +193,6 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
             batch["progress"] = self.cached_progress[idx : idx + self.num_steps]
 
         # 3. Direct Video Decoding (High Performance)
-        if "_profile" not in batch:
-            batch["_profile"] = {}
         for target_key in self.keys_to_load:
             # Handle specific camera views, generic 'pixels', or skeletal priors
             if (
@@ -222,34 +220,25 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
                         f"🚨 Missing required video stream: {video_path}"
                     )
 
-                t_decode_s = time.perf_counter()
                 decoder = self._get_decoder(video_path)
 
-                # Fetch the entire sequence in ONE call
+                # 3. Decode Sequence
+                # Note: torchcodec 0.5 get_frames_at only takes indices.
                 seq_indices = list(range(frame_idx, frame_idx + self.num_steps))
                 frames = decoder.get_frames_at(indices=seq_indices)
-                t_decode_e = time.perf_counter()
 
-                # Manual resize immediately after decoding to keep performance gains
-                t_resize_s = time.perf_counter()
+                # 4. Manual Resize (Only for standard RGB views)
+                # Tiled videos are handled by the SkeletonDataPlugin transform.
                 if "_tiled" in image_key:
                     batch[target_key] = frames.data.byte()
                 else:
-                    batch[target_key] = TF.resize(
-                        frames.data, [self.img_size, self.img_size], antialias=True
-                    ).byte()
-                t_resize_e = time.perf_counter()
-
-                # Accumulate per-view timings
-                batch["_profile"][f"load_path_{target_key}"] = (
-                    t_decode_s - t_lookup_s
-                ) * 1000
-                batch["_profile"][f"load_decode_{target_key}"] = (
-                    t_decode_e - t_decode_s
-                ) * 1000
-                batch["_profile"][f"load_resize_{target_key}"] = (
-                    t_resize_e - t_resize_s
-                ) * 1000
+                    # Skip resize if already at target resolution
+                    if frames.data.shape[-2:] == (self.img_size, self.img_size):
+                        batch[target_key] = frames.data.byte()
+                    else:
+                        batch[target_key] = TF.resize(
+                            frames.data, [self.img_size, self.img_size], antialias=True
+                        ).byte()
 
             elif target_key not in batch:
                 # Handle vector keys (state, proprio, etc.)
@@ -259,9 +248,7 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
                     batch[target_key] = torch.from_numpy(np.array(data))
 
         # 4. Standard Plugin Post-Processing (Nesting/Transforms)
-        t_nest_s = time.perf_counter()
         nested_batch = self.nest_dict(batch)
-        batch["_profile"]["nest_dict"] = (time.perf_counter() - t_nest_s) * 1000
 
         if self.transform:
             nested_batch = self.transform(nested_batch)

@@ -24,9 +24,9 @@ def main():
     print("====================================")
 
     # 1. Config Simulation (Mirroring trainer.py)
-    num_workers = 4
+    num_workers = 6
     batch_size = 32
-    num_batches = 10
+    num_batches = 20
 
     cfg = OmegaConf.create(
         {
