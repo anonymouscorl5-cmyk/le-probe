@@ -140,15 +140,6 @@ def run(cfg):
                 transforms.append(
                     get_img_preprocessor(source=col, target=col, img_size=cfg.img_size)
                 )
-                # Handle the generated skeleton stream as well
-                if "world_" in col:
-                    transforms.append(
-                        get_img_preprocessor(
-                            source=f"{col}_skeleton",
-                            target=f"{col}_skeleton",
-                            img_size=cfg.img_size,
-                        )
-                    )
             else:
                 # B. State/Action Z-Score Normalization
                 col_data = dataset.get_col_data(col)
