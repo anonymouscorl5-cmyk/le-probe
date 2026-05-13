@@ -197,7 +197,7 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
             # Handle specific camera views, generic 'pixels', or skeletal priors
             if (
                 "images" in target_key
-                or "_skeleton" in target_key
+                or "_tiled" in target_key
                 or target_key
                 in [
                     "pixels",

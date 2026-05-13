@@ -30,12 +30,13 @@ if LEWM_ROOT not in sys.path:
 # -------------------------------------------------------
 
 # Project Imports
-from lewm.train_lewm import lejepa_forward, RewardPredictor
+from lewm.train_lewm import lejepa_forward, RewardPredictor, SIGReg
 from lewm.skeleton.encoder import get_skeleton_encoder
 from lewm.skeleton.data import SkeletonDataPlugin
-from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
+from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA, ARPredictor
 from metrics import MetricsCallback
 from utils import get_img_preprocessor, ModelObjectCallBack
+from spt.optim.lr_scheduler import LinearWarmupCosineAnnealingLR
 
 # Submodule direct imports
 from module import ARPredictor, SIGReg
@@ -105,7 +106,10 @@ def lejepa_forward_bips(self, batch, stage, cfg):
 def run(cfg):
     print("🦾 Starting Skeleton-Prior Augmented Training (BiPS)...")
 
-    # 1. Data Ingestion & Transformation setup
+    # 1. Seed Everything
+    pl.seed_everything(cfg.get("seed", 3072), workers=True)
+
+    # 2. Data Ingestion & Transformation setup
     repo_id = cfg.data.dataset.get("repo_id", "vedpatwardhan/gr1_pickup_grasp")
     keys_to_load = [
         "observation.state",
@@ -190,18 +194,32 @@ def run(cfg):
     )
     world_model.reward_head = RewardPredictor(input_dim=embed_dim, hidden_dim=512)
 
-    # 3. Training Module setup with BiPS Forward
+    # 4. Training Module setup with BiPS Forward
+    optimizers = {
+        "model_opt": {
+            "modules": "model",
+            "optimizer": dict(cfg.optimizer),
+            "scheduler": lambda optimizer, module: LinearWarmupCosineAnnealingLR(
+                optimizer,
+                warmup_steps=max(
+                    1,
+                    int(
+                        0.01
+                        * getattr(module.trainer, "estimated_stepping_batches", 100)
+                    ),
+                ),
+                max_steps=getattr(module.trainer, "estimated_stepping_batches", 1000),
+                warmup_start_lr=1e-5,
+            ),
+            "interval": "epoch",
+        },
+    }
+
     world_model_module = spt.Module(
         model=world_model,
         sigreg=SIGReg(**cfg.loss.sigreg.kwargs),
         forward=partial(lejepa_forward_bips, cfg=cfg),
-        optim={
-            "model_opt": {
-                "modules": "model",
-                "optimizer": dict(cfg.optimizer),
-                "interval": "epoch",
-            }
-        },
+        optim=optimizers,
     )
 
     # 4. Logger & Callbacks
@@ -209,18 +227,36 @@ def run(cfg):
     if cfg.wandb.enabled:
         logger = WandbLogger(**cfg.wandb.config)
 
-    run_dir = Path("./outputs/skeleton_v1").absolute()
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # 5. Data Loading (90/10 Split Parity)
+    rnd_gen = torch.Generator().manual_seed(cfg.seed)
+    train_set, val_set = spt.data.random_split(
+        dataset, lengths=[cfg.train_split, 1 - cfg.train_split], generator=rnd_gen
+    )
 
-    # 5. Data Loading
     train_loader = torch.utils.data.DataLoader(
-        dataset,
+        train_set,
         batch_size=cfg.loader.batch_size,
         num_workers=cfg.loader.num_workers,
         shuffle=True,
         pin_memory=True,
+        drop_last=True,
+        persistent_workers=cfg.loader.num_workers > 0,
+        generator=rnd_gen,
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        val_set,
+        batch_size=cfg.loader.batch_size,
+        num_workers=cfg.loader.num_workers,
+        shuffle=False,
+        pin_memory=True,
+        drop_last=False,
         persistent_workers=cfg.loader.num_workers > 0,
     )
+
+    run_id = cfg.get("subdir") or "gr1_skeleton_official"
+    run_dir = Path("./outputs", run_id).absolute()
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     # 6. Lightning Launch
     trainer = pl.Trainer(
@@ -230,15 +266,24 @@ def run(cfg):
         callbacks=[
             SkeletonImportanceCallback(),
             ModelObjectCallBack(
-                dirpath=run_dir, filename="skeleton_lewm", epoch_interval=1
+                dirpath=run_dir,
+                filename="skeleton_lewm",
+                epoch_interval=cfg.get("save_interval", 1),
             ),
             MetricsCallback(log_every_n_steps=1),
-            ModelCheckpoint(dirpath=run_dir / "checkpoints", every_n_epochs=1),
+            ModelCheckpoint(
+                dirpath=run_dir / "checkpoints",
+                every_n_epochs=cfg.get("save_interval", 1),
+            ),
         ],
     )
 
     print(f"🚀 Launching BiPS Training Loop (Batch Size: {cfg.loader.batch_size})...")
-    trainer.fit(model=world_model_module, train_dataloaders=train_loader)
+    trainer.fit(
+        model=world_model_module,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+    )
 
 
 if __name__ == "__main__":

@@ -1,70 +1,77 @@
 import torch
-import numpy as np
+import os
 from lewm.lewm_data_plugin import LEWMDataPlugin
-import torchvision.transforms.functional as TF
 
 
 class SkeletonDataPlugin(LEWMDataPlugin):
     """
-    Subclass of LEWMDataPlugin that loads both RGB and Skeletal Mask streams.
-    Stacks them into a 4-channel [T, V, 4, H, W] tensor for training.
+    High-Efficiency Tiled Skeleton Data Plugin.
+    Decodes a single [RGB | Skeleton] video per view, halving I/O and decoder overhead.
     """
 
     def __init__(self, *args, **kwargs):
-        # 1. Expand keys_to_load to include skeletal masks
-        # This tells the base class to decode them as video streams
+        # Intercept keys_to_load to use tiled videos
         if "keys_to_load" in kwargs:
-            base_keys = kwargs["keys_to_load"]
-            self.view_names = [k for k in base_keys if "world_" in k]
-            skel_keys = [f"{k}_skeleton" for k in self.view_names]
-            kwargs["keys_to_load"] = base_keys + skel_keys
+            keys = kwargs["keys_to_load"]
+            self.base_views = [
+                k
+                for k in keys
+                if k
+                in [
+                    "world_center",
+                    "world_left",
+                    "world_right",
+                    "world_top",
+                    "world_wrist",
+                ]
+            ]
+            # Replace original views with _tiled versions
+            new_keys = [k for k in keys if k not in self.base_views]
+            for view in self.base_views:
+                new_keys.append(f"{view}_tiled")
+            kwargs["keys_to_load"] = new_keys
+        else:
+            self.base_views = ["world_center"]
 
         super().__init__(*args, **kwargs)
 
-        # 2. Register skeleton mappings so base class knows where to find .mp4s
-        for view in self.view_names:
-            skel_key = f"observation.images.{view}_skeleton"
-            self.key_map[f"{view}_skeleton"] = skel_key
+        # Cache tiled mapping
+        self.tiled_keys = {vn: f"{vn}_tiled" for vn in self.base_views}
+        print(f"🚀 Tiled SkeletonDataPlugin initialized for views: {self.base_views}")
 
     def __getitem__(self, idx):
-        # A. Call base loader (Now decodes BOTH RGB and Skeleton videos natively)
+        # A. Call base loader (Decodes the tiled videos natively)
         batch = super().__getitem__(idx)
 
-        # B. View Fusion (Multi-View stacking into 4-channel pixels)
+        # B. View Splitting and Fusion
         if self.use_multi_view:
             fused_views = []
-            for vn in self.view_names:
-                # The base class has already decoded and resized these
-                rgb_key = vn
-                skel_key = f"{vn}_skeleton"
+            for vn in self.base_views:
+                tiled_key = self.tiled_keys[vn]
+                tiled_tensor = batch.get(tiled_key)
 
-                if rgb_key in batch:
-                    rgb = batch[rgb_key]
-                    if rgb.dtype == torch.uint8:
-                        rgb = rgb.float() / 255.0
+                if tiled_tensor is None:
+                    continue
 
-                    if skel_key in batch:
-                        skel = batch[skel_key]
-                        if skel.dtype == torch.uint8:
-                            skel = skel.float() / 255.0
-                    else:
-                        # Fallback: Zero-mask if skeleton is missing
-                        skel = torch.zeros(
-                            (rgb.shape[0], 1, rgb.shape[2], rgb.shape[3]),
-                            device=rgb.device,
-                            dtype=rgb.dtype,
-                        )
+                # Standardize to float32 [0,1]
+                if tiled_tensor.dtype == torch.uint8:
+                    tiled_tensor = tiled_tensor.float() / 255.0
 
-                    # Ensure shapes match (base class handles this, but for safety)
-                    if skel.shape[1] != 1:
-                        # Skeleton is likely RGB (3-channel), take mean
-                        skel = skel.mean(dim=1, keepdim=True)
+                # Horizontal Split: [T, C, H, 2*W] -> [RGB(480) | Skel(480)]
+                # The image width is 960 (480*2)
+                mid = tiled_tensor.shape[-1] // 2
+                rgb = tiled_tensor[..., :mid]
+                skel_3ch = tiled_tensor[..., mid:]
 
-                    fused = torch.cat([rgb, skel], dim=1)  # [T, 4, H, W]
-                    fused_views.append(fused)
+                # Convert 3-channel skeleton (saved as BGR/RGB) to 1-channel mask
+                skel = skel_3ch.mean(dim=1, keepdim=True)
+
+                # Concatenate along channel dimension: [T, 4, H, W]
+                fused = torch.cat([rgb, skel], dim=1)
+                fused_views.append(fused)
 
             if fused_views:
-                # [T, V, 4, H, W]
+                # Update pixels with fused 4-channel multi-view tensor [T, V, 4, H, W]
                 batch["pixels"] = torch.stack(fused_views, dim=1)
 
         return batch
