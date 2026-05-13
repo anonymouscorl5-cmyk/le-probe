@@ -18,7 +18,13 @@ REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-LEWM_ROOT = os.path.join(REPO_ROOT, "lewm", "le_wm")
+# Add the 'lewm' directory itself to allow direct imports like train_lewm.py does
+LEWM_DIR = os.path.join(REPO_ROOT, "lewm")
+if LEWM_DIR not in sys.path:
+    sys.path.append(LEWM_DIR)
+
+# Also add the le_wm submodule for its internal direct imports (utils, module)
+LEWM_ROOT = os.path.join(LEWM_DIR, "le_wm")
 if LEWM_ROOT not in sys.path:
     sys.path.append(LEWM_ROOT)
 # -------------------------------------------------------
@@ -28,8 +34,8 @@ from lewm.train_lewm import lejepa_forward, RewardPredictor
 from lewm.skeleton.encoder import get_skeleton_encoder
 from lewm.skeleton.data import SkeletonDataPlugin
 from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
-from lewm.metrics import MetricsCallback
-from lewm.utils import get_img_preprocessor, ModelObjectCallBack
+from metrics import MetricsCallback
+from utils import get_img_preprocessor, ModelObjectCallBack
 
 # Submodule direct imports
 from module import ARPredictor, SIGReg
