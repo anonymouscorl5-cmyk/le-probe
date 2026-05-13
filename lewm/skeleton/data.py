@@ -26,17 +26,17 @@ class SkeletonDataPlugin(LEWMDataPlugin):
             ]
         ]
 
-        # 2. Setup key_map to point these views to the tiled video files
-        if "key_map" not in kwargs:
-            kwargs["key_map"] = {}
+        # Initialize base class
+        super().__init__(*args, **kwargs)
 
+        # 2. Setup key_map to point these views to the tiled video files
+        # We modify self.key_map AFTER super().__init__ because the base class
+        # hardcodes its own key_map and doesn't take it in kwargs.
         for view in self.base_views:
             # We map 'world_center' to 'observation.images.world_center_tiled'
             # The base class will find the video for the tiled folder
             # but store it under the key 'world_center' in the flat batch.
-            kwargs["key_map"][view] = f"observation.images.{view}_tiled"
-
-        super().__init__(*args, **kwargs)
+            self.key_map[view] = f"observation.images.{view}_tiled"
 
         # 3. Wrap transform to handle splitting before standard transforms run
         self.orig_transform = self.transform

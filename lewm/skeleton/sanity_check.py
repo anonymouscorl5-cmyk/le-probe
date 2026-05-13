@@ -10,12 +10,13 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 # --------------------------
 
-from lewm.skeleton.encoder import get_skeleton_encoder
+from lewm.multi_view_encoder import get_multi_view_encoder
+from lewm.skeleton.encoder import patch_vit_for_skeleton
 from lewm.skeleton.data import SkeletonDataPlugin
 
 
-def test_encoder_handshake():
-    print("\n🧪 [TEST 1] Testing Encoder Handshake & Zero-Init...")
+def test_encoder_patching():
+    print("\n🧪 [TEST 1] Testing Encoder Patching & Zero-Init...")
     cfg = OmegaConf.create(
         {
             "encoder_scale": "tiny",
@@ -23,19 +24,24 @@ def test_encoder_handshake():
             "img_size": 224,
             "num_views": 5,
             "fusion_type": "linear",
+            "wm": {"embed_dim": 192},
         }
     )
 
-    encoder = get_skeleton_encoder(cfg)
+    # 1. Start with 3-channel
+    encoder = get_multi_view_encoder(cfg)
+
+    # 2. Patch to 4-channel
+    patch_vit_for_skeleton(encoder.backbone)
 
     # Create mock input: (B=1, T=1, V=5, C=4, H=224, W=224)
     mock_input = torch.randn(1, 1, 5, 4, 224, 224)
 
-    # 1. Baseline: Skeleton channel is zero
+    # A. Baseline: Skeleton channel is zero
     input_zero_skel = mock_input.clone()
     input_zero_skel[:, :, :, 3, :, :] = 0.0
 
-    # 2. Augmented: Skeleton channel is random
+    # B. Augmented: Skeleton channel is random
     input_with_skel = mock_input.clone()
     input_with_skel[:, :, :, 3, :, :] = torch.randn_like(
         input_with_skel[:, :, :, 3, :, :]
@@ -57,17 +63,18 @@ def test_encoder_handshake():
         )
 
 
-def test_data_plugin():
-    print("\n🧪 [TEST 2] Testing SkeletonDataPlugin Fusion...")
+def test_data_plugin_tiled_config():
+    print("\n🧪 [TEST 2] Testing Tiled Data Configuration...")
     try:
         cfg = {
             "repo_id": "vedpatwardhan/gr1_pickup_grasp",
-            "keys_to_load": ["world_center"],
+            "keys_to_load": ["world_center", "world_left"],
             "num_steps": 1,
             "use_multi_view": True,
             "img_size": 224,
         }
 
+        # Initialize (This should no longer crash)
         plugin = SkeletonDataPlugin(
             repo_id=cfg["repo_id"],
             keys_to_load=cfg["keys_to_load"],
@@ -76,21 +83,36 @@ def test_data_plugin():
             img_size=cfg["img_size"],
         )
 
-        print(f"  - Plugin Root: {plugin.root}")
-        sample_skel_path = plugin._get_video_path(
-            0, "observation.images.world_center_skeleton"
-        )
-        print(f"  - Sample Skeleton Path: {sample_skel_path}")
-        if sample_skel_path.exists():
-            print("  ✅ SUCCESS: Skeleton video found.")
+        # Check key mapping
+        target = "world_center"
+        mapped = plugin.key_map.get(target)
+        expected = "observation.images.world_center_tiled"
+
+        print(f"  - Map Check: {target} -> {mapped}")
+        if mapped == expected:
+            print(f"  ✅ SUCCESS: Key mapping correctly redirects to {expected}")
         else:
-            print("  ⚠️ NOTE: Skeleton videos not found at path.")
+            print(
+                f"  ❌ FAILURE: Key mapping incorrect. Got {mapped}, expected {expected}"
+            )
+
+        # Check transform wrapping
+        if (
+            hasattr(plugin, "orig_transform")
+            and plugin.transform.__name__ == "tiled_transform_wrapper"
+        ):
+            print("  ✅ SUCCESS: Transform is correctly wrapped.")
+        else:
+            print("  ❌ FAILURE: Transform not wrapped correctly.")
 
     except Exception as e:
         print(f"  ❌ PLUGIN FAILED: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
-    print("🚀 [STARTING SANITY CHECK]")
-    test_encoder_handshake()
-    test_data_plugin()
+    print("🚀 [STARTING SKELETON SANITY CHECK]")
+    test_encoder_patching()
+    test_data_plugin_tiled_config()
