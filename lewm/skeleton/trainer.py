@@ -212,7 +212,17 @@ def run(cfg):
     run_dir = Path("./outputs/skeleton_v1").absolute()
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # 5. Lightning Launch
+    # 5. Data Loading
+    train_loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=cfg.loader.batch_size,
+        num_workers=cfg.loader.num_workers,
+        shuffle=True,
+        pin_memory=True,
+        persistent_workers=cfg.loader.num_workers > 0,
+    )
+
+    # 6. Lightning Launch
     trainer = pl.Trainer(
         **cfg.trainer,
         default_root_dir=run_dir,
@@ -227,8 +237,8 @@ def run(cfg):
         ],
     )
 
-    print("🚀 Launching BiPS Training Loop...")
-    trainer.fit(model=world_model_module, train_dataloaders=dataset)
+    print(f"🚀 Launching BiPS Training Loop (Batch Size: {cfg.loader.batch_size})...")
+    trainer.fit(model=world_model_module, train_dataloaders=train_loader)
 
 
 if __name__ == "__main__":
