@@ -99,7 +99,6 @@ def lejepa_forward_bips(self, batch, stage, cfg):
             skeleton_mask = (pixels[:, :, :, 3:, :, :] > 0.1).float()
             pixels[:, :, :, :3, :, :] *= 1.0 - skeleton_mask
 
-    batch["pixels"] = pixels
     return lejepa_forward(self, batch, stage, cfg)
 
 
@@ -163,7 +162,9 @@ def run(cfg):
                 setattr(cfg.wm, f"{clean_name}_dim", col_dim)
                 print(f"📊 Auto-detected {col} dimension ({clean_name}_dim): {col_dim}")
 
-    dataset.transform = spt.data.transforms.Compose(*transforms)
+    # Wrap standard transforms back into the Skeleton wrapper
+    dataset.orig_transform = spt.data.transforms.Compose(*transforms)
+    dataset.transform = dataset.tiled_transform_wrapper
 
     # 2. Architecture Initialization
     # We initialize as 3-channel first to allow loading pre-trained LeWM weights
@@ -295,6 +296,9 @@ def run(cfg):
         **cfg.trainer,
         default_root_dir=run_dir,
         logger=logger,
+        log_every_n_steps=1,
+        num_sanity_val_steps=1,
+        enable_checkpointing=True,
         callbacks=[
             SkeletonImportanceCallback(),
             ModelObjectCallBack(

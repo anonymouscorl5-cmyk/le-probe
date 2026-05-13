@@ -68,8 +68,23 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                 tensor = nested_batch["observation"]["images"][view]
                 path = ["observation", "images", view]
 
+        # A. Split Tiled Videos into RGB + Skeleton
+        skeletons = {}
+        for view in self.base_views:
+            path = None
+            tensor = None
+            if view in nested_batch:
+                tensor = nested_batch[view]
+                path = [view]
+            elif (
+                "observation" in nested_batch
+                and "images" in nested_batch["observation"]
+                and view in nested_batch["observation"]["images"]
+            ):
+                tensor = nested_batch["observation"]["images"][view]
+                path = ["observation", "images", view]
+
             if tensor is not None and tensor.shape[-1] > tensor.shape[-2]:
-                # 1. Split [T, C, H, 2*W] -> [RGB | Skel]
                 mid = tensor.shape[-1] // 2
                 rgb = tensor[..., :mid]
                 skel_3ch = tensor[..., mid:]
@@ -113,8 +128,11 @@ class SkeletonDataPlugin(LEWMDataPlugin):
 
                 # Fuse! [T, 3, H, W] + [T, 1, H, W] -> [T, 4, H, W]
                 fused = torch.cat([rgb, skel.to(rgb.device)], dim=1)
-
-                d[path[-1]] = fused
+                # Update the nested batch with the fused tensor
+                d_fuse = nested_batch
+                for p in path[:-1]:
+                    d_fuse = d_fuse[p]
+                d_fuse[path[-1]] = fused
 
         return nested_batch
 
