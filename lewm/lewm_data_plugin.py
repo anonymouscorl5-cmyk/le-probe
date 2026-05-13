@@ -230,9 +230,13 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
 
                 # Manual resize immediately after decoding to keep performance gains
                 # This reduces IPC overhead significantly.
-                batch[target_key] = TF.resize(
-                    frames.data, [self.img_size, self.img_size], antialias=True
-                ).byte()
+                # Skip resizing for tiled videos (handled in post-processing by specific plugins)
+                if "_tiled" in image_key:
+                    batch[target_key] = frames.data.byte()
+                else:
+                    batch[target_key] = TF.resize(
+                        frames.data, [self.img_size, self.img_size], antialias=True
+                    ).byte()
             elif target_key not in batch:
                 # Handle vector keys (state, proprio, etc.)
                 source_key = self.key_map.get(target_key, target_key)
