@@ -7,6 +7,8 @@ import lightning as pl
 import stable_pretraining as spt
 from functools import partial
 from pathlib import Path
+import torch.nn.functional as F
+from einops import rearrange
 from omegaconf import OmegaConf, open_dict
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -83,18 +85,36 @@ def lejepa_forward_bips(self, batch, stage, cfg):
     """
     Augmented JEPA forward pass with Bi-Directional Perceptual Shaping (BiPS).
     """
+    # 1. GPU-Side Skeleton Processing (Vectorized)
+    if "skeletons_raw" in batch:
+        skels_raw = batch["skeletons_raw"]  # [B, T, V, 3, H_orig, W_orig]
+        B, T, V, C, H_orig, W_orig = skels_raw.shape
+        img_size = cfg.img_size
+
+        # A. Mean to 1-ch and Normalize
+        skel = skels_raw.float().mean(dim=3, keepdim=True) / 255.0  # [B, T, V, 1, H, W]
+
+        # B. Efficient Vectorized Resize (GPU)
+        skel = rearrange(skel, "b t v c h w -> (b t v) c h w")
+        skel = torch.nn.functional.interpolate(
+            skel, size=(img_size, img_size), mode="bilinear", align_corners=False
+        )
+        skel = rearrange(skel, "(b t v) c h w -> b t v c h w", b=B, t=T, v=V)
+
+        # C. Fuse into 4th channel
+        # batch['pixels'] is [B, T, V, 3, H, W] (from dataloader)
+        batch["pixels"] = torch.cat([batch["pixels"], skel], dim=3)
+
     pixels = batch["pixels"]  # [B, T, V, 4, H, W]
 
     if stage == "train":
         rand = torch.rand(1).item()
 
-        # 1. Skeletal Dropout (10%): Force reliance on geometry
-        # By zeroing out RGB, we force the latent manifold to ground itself in the 4th channel.
+        # 2. Skeletal Dropout (10%): Force reliance on geometry
         if rand < 0.10:
             pixels[:, :, :, :3, :, :] = 0.0
 
-        # 2. Structural Reliance (5%): Force hallucination of interactions
-        # We mask RGB patches only where the skeleton exists, forcing texture reconstruction from priors.
+        # 3. Structural Reliance (5%): Force hallucination of interactions
         elif rand < 0.15:
             skeleton_mask = (pixels[:, :, :, 3:, :, :] > 0.1).float()
             pixels[:, :, :, :3, :, :] *= 1.0 - skeleton_mask
@@ -165,6 +185,9 @@ def run(cfg):
     # Wrap standard transforms back into the Skeleton wrapper
     dataset.orig_transform = spt.data.transforms.Compose(*transforms)
     dataset.transform = dataset.tiled_transform_wrapper
+
+    # 💾 MEMORY SAFETY: Clear cache before forking workers (Match train_lewm.py parity)
+    dataset.clear_cache()
 
     # 2. Architecture Initialization
     # We initialize as 3-channel first to allow loading pre-trained LeWM weights

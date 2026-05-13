@@ -1,3 +1,6 @@
+import time
+import os
+import csv
 import torch
 import torchvision.transforms.functional as TF
 from lewm.lewm_data_plugin import LEWMDataPlugin
@@ -30,46 +33,49 @@ class SkeletonDataPlugin(LEWMDataPlugin):
         super().__init__(*args, **kwargs)
 
         # 2. Setup key_map to point these views to the tiled video files
-        # We modify self.key_map AFTER super().__init__ because the base class
-        # hardcodes its own key_map and doesn't take it in kwargs.
         for view in self.base_views:
-            # We map 'world_center' to 'observation.images.world_center_tiled'
-            # The base class will find the video for the tiled folder
-            # but store it under the key 'world_center' in the flat batch.
             self.key_map[view] = f"observation.images.{view}_tiled"
 
         # 3. Wrap transform to handle splitting before standard transforms run
         self.orig_transform = self.transform
         self.transform = self.tiled_transform_wrapper
+
+        # 4. Profiling Setup
+        self.profile_csv = "dataloader_profile.csv"
+
         print(
             f"🚀 Tiled SkeletonDataPlugin initialized (Wrapped Transform) for views: {self.base_views}"
         )
+
+    def _log_profile(self, idx, metrics_dict):
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info else 0
+        file_exists = (
+            os.path.exists(self.profile_csv) and os.path.getsize(self.profile_csv) > 0
+        )
+
+        with open(self.profile_csv, "a", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["timestamp", "worker_id", "idx"]
+                + sorted(metrics_dict.keys()),
+            )
+            if not file_exists:
+                writer.writeheader()
+
+            row = {"timestamp": time.time(), "worker_id": worker_id, "idx": idx}
+            row.update(metrics_dict)
+            writer.writerow(row)
 
     def tiled_transform_wrapper(self, nested_batch):
         """
         Intercepts the transform call to split tiled videos and handle 4-channel fusion.
         """
+        t0 = time.perf_counter()
         skeletons = {}
-
-        # A. Pre-Transform: Split Tiled Data
-        for view in self.base_views:
-            path = None
-            tensor = None
-
-            # Look for the tensor in nested batch
-            if view in nested_batch:
-                tensor = nested_batch[view]
-                path = [view]
-            elif (
-                "observation" in nested_batch
-                and "images" in nested_batch["observation"]
-                and view in nested_batch["observation"]["images"]
-            ):
-                tensor = nested_batch["observation"]["images"][view]
-                path = ["observation", "images", view]
 
         # A. Split Tiled Videos into RGB + Skeleton
-        skeletons = {}
+        t_split_s = time.perf_counter()
         for view in self.base_views:
             path = None
             tensor = None
@@ -86,74 +92,83 @@ class SkeletonDataPlugin(LEWMDataPlugin):
 
             if tensor is not None and tensor.shape[-1] > tensor.shape[-2]:
                 mid = tensor.shape[-1] // 2
-                rgb = tensor[..., :mid]
-                skel_3ch = tensor[..., mid:]
+                rgb = tensor[..., :mid].clone()
+                skeletons[view] = tensor[..., mid:].clone()  # Raw uint8 [T, 3, H, W]
 
-                # 2. Store RGB back (Still uint8, will be resized/normed by orig_transform)
+                # 2. Store RGB back
                 d = nested_batch
                 for p in path[:-1]:
                     d = d[p]
                 d[path[-1]] = rgb
+        t_split_e = time.perf_counter()
 
-                # 3. Process Skeleton (mean to 1-ch, float [0,1])
-                skel = skel_3ch.float().mean(dim=1, keepdim=True) / 255.0
-                # Resize to target img_size immediately
-                skel = TF.resize(skel, [self.img_size, self.img_size], antialias=True)
-                skeletons[view] = skel
-
+        t_orig_s = time.perf_counter()
         # B. Run Original Transforms (Resizing, Normalization, etc. on RGB)
         if self.orig_transform:
             nested_batch = self.orig_transform(nested_batch)
+        t_orig_e = time.perf_counter()
 
-        # C. Post-Transform: Fuse Skeleton as 4th Channel
+        # C. Post-Transform: Attach raw skeletons for GPU fusion
+        t_attach_s = time.perf_counter()
         for view, skel in skeletons.items():
-            # Find the transformed RGB
-            path = None
-            rgb = None
-            if view in nested_batch:
-                rgb = nested_batch[view]
-                path = [view]
-            elif (
-                "observation" in nested_batch
-                and "images" in nested_batch["observation"]
-                and view in nested_batch["observation"]["images"]
-            ):
-                rgb = nested_batch["observation"]["images"][view]
-                path = ["observation", "images", view]
+            nested_batch[f"{view}_skel_raw"] = skel
+        t_attach_e = time.perf_counter()
 
-            if rgb is not None:
-                # Standardize RGB to float if needed (usually it's float after transform)
-                if rgb.dtype == torch.uint8:
-                    rgb = rgb.float() / 255.0
-
-                # Fuse! [T, 3, H, W] + [T, 1, H, W] -> [T, 4, H, W]
-                fused = torch.cat([rgb, skel.to(rgb.device)], dim=1)
-                # Update the nested batch with the fused tensor
-                d_fuse = nested_batch
-                for p in path[:-1]:
-                    d_fuse = d_fuse[p]
-                d_fuse[path[-1]] = fused
+        # Attach timing info to batch for __getitem__ to log
+        if "_profile" not in nested_batch:
+            nested_batch["_profile"] = {}
+        nested_batch["_profile"]["split_tiled_ms"] = (t_split_e - t_split_s) * 1000
+        nested_batch["_profile"]["orig_trans_ms"] = (t_orig_e - t_orig_s) * 1000
+        nested_batch["_profile"]["attach_skel_ms"] = (t_attach_e - t_attach_s) * 1000
 
         return nested_batch
 
     def __getitem__(self, idx):
-        # Call base loader (which now calls tiled_transform_wrapper)
-        batch = super().__getitem__(idx)
+        start_time = time.perf_counter()
 
-        # Handle multi-view stacking for the fused 4-channel pixels
+        # 1. Base Loading (Video Decoding)
+        batch = super().__getitem__(idx)
+        load_time = time.perf_counter()
+
+        # 2. Multi-view Stacking
+        stack_start = time.perf_counter()
         if self.use_multi_view:
             fused_views = []
+            fused_skels = []
             for vn in self.base_views:
-                # Look for fused keys in flat batch (super().__getitem__ flattens it)
-                # flattened keys from nest_dict: 'observation.images.world_center'
+                # RGB Views
                 key = f"observation.images.{vn}"
                 if key in batch:
                     fused_views.append(batch[key])
                 elif vn in batch:
                     fused_views.append(batch[vn])
 
+                # Raw Skeleton Views
+                skel_key = f"{vn}_skel_raw"
+                if skel_key in batch:
+                    fused_skels.append(batch[skel_key])
+                    del batch[skel_key]
+
             if fused_views:
-                # Update pixels with fused 4-channel multi-view tensor [T, V, 4, H, W]
                 batch["pixels"] = torch.stack(fused_views, dim=1)
+
+            if fused_skels:
+                batch["skeletons_raw"] = torch.stack(fused_skels, dim=1)
+        stack_end = time.perf_counter()
+
+        # 3. Logging
+        total_time_ms = (time.perf_counter() - start_time) * 1000
+
+        # Collect all metrics from nested _profile
+        metrics = batch.get("_profile", {}).copy()
+        metrics["super_getitem_total_ms"] = (load_time - start_time) * 1000
+        metrics["multiview_stack_ms"] = (stack_end - stack_start) * 1000
+        metrics["TOTAL_getitem_ms"] = total_time_ms
+
+        self._log_profile(idx, metrics)
+
+        # Cleanup internal profile keys
+        if "_profile" in batch:
+            del batch["_profile"]
 
         return batch
