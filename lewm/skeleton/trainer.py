@@ -36,7 +36,7 @@ from lewm.skeleton.data import SkeletonDataPlugin
 from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
 from metrics import MetricsCallback
 from utils import get_img_preprocessor, ModelObjectCallBack
-from spt.optim.lr_scheduler import LinearWarmupCosineAnnealingLR
+from stable_pretraining.optim.lr_scheduler import LinearWarmupCosineAnnealingLR
 
 # Submodule direct imports
 from module import ARPredictor, SIGReg
