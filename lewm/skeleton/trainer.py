@@ -31,9 +31,10 @@ if LEWM_ROOT not in sys.path:
 
 # Project Imports
 from lewm.train_lewm import lejepa_forward, RewardPredictor, SIGReg
-from lewm.skeleton.encoder import get_skeleton_encoder
 from lewm.skeleton.data import SkeletonDataPlugin
 from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
+from lewm.multi_view_encoder import get_multi_view_encoder
+from lewm.skeleton.encoder import patch_vit_for_skeleton
 from metrics import MetricsCallback
 from utils import get_img_preprocessor, ModelObjectCallBack
 from stable_pretraining.optim.lr_scheduler import LinearWarmupCosineAnnealingLR
@@ -173,8 +174,10 @@ def run(cfg):
 
     dataset.transform = spt.data.transforms.Compose(*transforms)
 
-    # 2. Architecture Initialization (4-channel expanded backbone)
-    encoder = get_skeleton_encoder(cfg)
+    # 2. Architecture Initialization
+    # We initialize as 3-channel first to allow loading pre-trained LeWM weights
+    print("🧬 Initializing Base 3-Channel Architecture...")
+    encoder = get_multi_view_encoder(cfg)
     hidden_dim = encoder.config.hidden_size
     embed_dim = cfg.wm.get("embed_dim", hidden_dim)
     effective_act_dim = cfg.data.dataset.frameskip * cfg.wm.action_dim
@@ -194,7 +197,45 @@ def run(cfg):
     )
     world_model.reward_head = RewardPredictor(input_dim=embed_dim, hidden_dim=512)
 
-    # 4. Training Module setup with BiPS Forward
+    # 3. 💾 SAFE WEIGHT TRANSFER (Pre-trained Baseline)
+    ckpt_path = cfg.get("ckpt_path")
+    if ckpt_path:
+        ckpt_path = str(ckpt_path).strip("\"'")
+        print(f"🧬 SAFE TRANSFER: Loading pre-trained weights from {ckpt_path}...")
+        try:
+            checkpoint = torch.load(ckpt_path, map_location="cpu")
+            state_dict = checkpoint.get("state_dict", checkpoint)
+
+            # Key Mapping Bridge (Handle Late Fusion Nesting if needed)
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                new_key = k.replace("model.", "") if k.startswith("model.") else k
+                # Multi-View mapping: encoder.* -> encoder.backbone.*
+                if new_key.startswith("encoder.") and not new_key.startswith(
+                    "encoder.backbone."
+                ):
+                    new_key = new_key.replace("encoder.", "encoder.backbone.", 1)
+                new_state_dict[new_key] = v
+
+            model_dict = world_model.state_dict()
+            filtered_dict = {
+                k: v
+                for k, v in new_state_dict.items()
+                if k in model_dict and v.shape == model_dict[k].shape
+            }
+            msg = world_model.load_state_dict(filtered_dict, strict=False)
+            print(
+                f"✅ Safe Transfer: Loaded {len(filtered_dict)} layers from baseline."
+            )
+        except Exception as e:
+            print(f"⚠️ Safe Transfer Failed: {e}. Starting from scratch.")
+
+    # 4. 🦾 SKELETON PATCHING (Expand to 4 Channels)
+    print("🦴 PATCHING: Expanding backbone to 4 channels (BiPS)...")
+    patch_vit_for_skeleton(encoder.backbone)
+    print("🦾 Skeleton-Prior Encoder ready with Zero-Init 4th channel.")
+
+    # 5. Training Module setup with BiPS Forward
     optimizers = {
         "model_opt": {
             "modules": "model",
