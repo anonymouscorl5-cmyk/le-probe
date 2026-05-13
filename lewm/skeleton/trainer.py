@@ -1,3 +1,5 @@
+import os
+import sys
 import torch
 import hydra
 import lightning as pl
@@ -8,13 +10,22 @@ from omegaconf import OmegaConf, open_dict
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 
+# --- Path Stabilization (Matching train_lewm.py) ---
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+LEWM_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "le_wm"))
+if LEWM_ROOT not in sys.path:
+    sys.path.append(LEWM_ROOT)
+# --------------------------------------------------
+
 # Project Imports
 from lewm.train_lewm import lejepa_forward, RewardPredictor
 from lewm.skeleton.encoder import get_skeleton_encoder
 from lewm.skeleton.data import SkeletonDataPlugin
-from lewm.le_wm.module import ARPredictor
+from lewm.le_wm.module import ARPredictor, SIGReg
 from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
-from lewm.le_wm.jepa import SIGReg
 from lewm.metrics import MetricsCallback
 from lewm.utils import ModelObjectCallBack
 
