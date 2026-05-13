@@ -7,7 +7,7 @@ import cv2
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # --- Path Stabilization ---
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
