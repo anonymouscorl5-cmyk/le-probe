@@ -194,15 +194,20 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
 
         # 3. Direct Video Decoding (High Performance)
         for target_key in self.keys_to_load:
-            # Handle specific camera views or generic 'pixels'
-            if "images" in target_key or target_key in [
-                "pixels",
-                "world_center",
-                "world_left",
-                "world_right",
-                "world_top",
-                "world_wrist",
-            ]:
+            # Handle specific camera views, generic 'pixels', or skeletal priors
+            if (
+                "images" in target_key
+                or "_skeleton" in target_key
+                or target_key
+                in [
+                    "pixels",
+                    "world_center",
+                    "world_left",
+                    "world_right",
+                    "world_top",
+                    "world_wrist",
+                ]
+            ):
                 # If target_key is 'pixels', default to 'world_center' for loading
                 # unless use_multi_view is enabled (handled in post-processing)
                 source_key = "world_center" if target_key == "pixels" else target_key
