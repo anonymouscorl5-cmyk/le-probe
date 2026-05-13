@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import numpy as np
 import hydra
 import lightning as pl
 import stable_pretraining as spt
@@ -11,29 +12,27 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 
 # --- Path Stabilization (Robust Repo Root Targeting) ---
-# We go up two levels from lewm/skeleton/trainer.py to reach le-probe root.
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-# Also add the le_wm submodule for its internal direct imports (utils, module)
 LEWM_ROOT = os.path.join(REPO_ROOT, "lewm", "le_wm")
 if LEWM_ROOT not in sys.path:
     sys.path.append(LEWM_ROOT)
 # -------------------------------------------------------
 
-# Project Imports (Using absolute package paths to avoid collisions with dataset/skeleton)
+# Project Imports
 from lewm.train_lewm import lejepa_forward, RewardPredictor
 from lewm.skeleton.encoder import get_skeleton_encoder
 from lewm.skeleton.data import SkeletonDataPlugin
 from lewm.gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
 from lewm.metrics import MetricsCallback
+from lewm.utils import get_img_preprocessor, ModelObjectCallBack
 
-# Submodule direct imports (after adding LEWM_ROOT to sys.path)
+# Submodule direct imports
 from module import ARPredictor, SIGReg
-from utils import ModelObjectCallBack
 
 
 class SkeletonImportanceCallback(pl.Callback):
@@ -100,7 +99,7 @@ def lejepa_forward_bips(self, batch, stage, cfg):
 def run(cfg):
     print("🦾 Starting Skeleton-Prior Augmented Training (BiPS)...")
 
-    # 1. Data Ingestion setup
+    # 1. Data Ingestion & Transformation setup
     repo_id = cfg.data.dataset.get("repo_id", "vedpatwardhan/gr1_pickup_grasp")
     keys_to_load = [
         "observation.state",
@@ -120,6 +119,49 @@ def run(cfg):
         use_multi_view=True,
         img_size=cfg.img_size,
     )
+
+    # Apply Image Preprocessors & Standard Normalization (Z-Score)
+    transforms = []
+    with open_dict(cfg):
+        for col in keys_to_load:
+            # A. Image Preprocessing (Includes skeleton keys if present)
+            if any(k in col for k in ["pixels", "images", "world_"]):
+                transforms.append(
+                    get_img_preprocessor(source=col, target=col, img_size=cfg.img_size)
+                )
+                # Handle the generated skeleton stream as well
+                if "world_" in col:
+                    transforms.append(
+                        get_img_preprocessor(
+                            source=f"{col}_skeleton",
+                            target=f"{col}_skeleton",
+                            img_size=cfg.img_size,
+                        )
+                    )
+            else:
+                # B. State/Action Z-Score Normalization
+                col_data = dataset.get_col_data(col)
+                data_tensor = torch.from_numpy(np.array(col_data))
+                data_tensor = data_tensor[~torch.isnan(data_tensor).any(dim=1)]
+                mean = data_tensor.mean(0, keepdim=True).clone()
+                std = data_tensor.std(0, keepdim=True).clone()
+
+                def norm_fn(x, m=mean, s=std):
+                    return ((x - m) / (s + 1e-8)).float()
+
+                transforms.append(
+                    spt.data.transforms.WrapTorchTransform(
+                        norm_fn, source=col, target=col
+                    )
+                )
+
+                # C. DYNAMIC DIMENSION DETECTION
+                col_dim = dataset.get_dim(col)
+                clean_name = col.split(".")[-1]
+                setattr(cfg.wm, f"{clean_name}_dim", col_dim)
+                print(f"📊 Auto-detected {col} dimension ({clean_name}_dim): {col_dim}")
+
+    dataset.transform = spt.data.transforms.Compose(*transforms)
 
     # 2. Architecture Initialization (4-channel expanded backbone)
     encoder = get_skeleton_encoder(cfg)
