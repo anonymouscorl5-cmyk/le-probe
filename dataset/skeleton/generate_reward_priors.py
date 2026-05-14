@@ -3,8 +3,7 @@ import sys
 import numpy as np
 import mujoco
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
+import shutil
 from PIL import Image, ImageDraw
 from pathlib import Path
 from tqdm import tqdm
@@ -104,9 +103,12 @@ def process_chunk(df_chunk, views, img_size=480):
     return pd.DataFrame(results)
 
 
-def _process_chunk_wrapper(args):
-    """Helper for imap multiprocessing"""
-    return process_chunk(*args)
+def _process_and_save_chunk(chunk, views, output_path):
+    """Worker function that processes a chunk and saves it immediately to disk"""
+    processed_df = process_chunk(chunk, views)
+    processed_df.to_parquet(output_path)
+    # Return nothing to keep main process RAM empty
+    return str(output_path)
 
 
 def main(input_path, output_path, repo_id=None, num_cores=4):
@@ -136,31 +138,41 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
     chunk_count = num_cores * 4
     chunks = np.array_split(df, chunk_count)
 
-    # Wrapper for imap (which only takes 1 arg)
-    task_args = [(chunk, views) for chunk in chunks]
+    # 3. Staging Pattern: Process and save individual chunks
+    temp_dir = Path("temp_skel_chunks")
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    temp_dir.mkdir()
 
-    # Initialize PyArrow writer for incremental saving
-    writer = None
+    print(f"🏗️ Staging {chunk_count} chunks to {temp_dir}...")
 
-    with Pool(num_cores) as p, tqdm(
-        total=len(df), desc="🎥 Processing Skeletons"
-    ) as pbar:
-        for chunk_df in p.imap(_process_chunk_wrapper, task_args):
-            table = pa.Table.from_pandas(chunk_df)
-            if writer is None:
-                writer = pq.ParquetWriter(output_path, table.schema)
+    # Update wrapper to include output path
+    staged_tasks = []
+    for i, chunk in enumerate(chunks):
+        out_f = temp_dir / f"chunk_{i:04d}.parquet"
+        staged_tasks.append((chunk, views, out_f))
 
-            writer.write_table(table)
-            pbar.update(len(chunk_df))
+    with Pool(num_cores) as p:
+        # We use starmap here for simplicity since we're writing to disk anyway
+        list(
+            tqdm(
+                p.starmap(_process_and_save_chunk, staged_tasks),
+                total=len(chunks),
+                desc="🎥 Processing Skeletons",
+            )
+        )
 
-            # Help GC clear the memory
-            del chunk_df
-            del table
+    # 4. Coalesce
+    print("🖇️ Coalescing staged chunks...")
+    chunk_files = sorted(list(temp_dir.glob("*.parquet")))
+    final_df = pd.concat([pd.read_parquet(f) for f in chunk_files])
 
-    if writer:
-        writer.close()
+    print(f"💾 Saving Final Dataset: {output_path}")
+    final_df.to_parquet(output_path)
 
-    print(f"✅ Done! Dataset saved to {output_path}")
+    # Cleanup
+    shutil.rmtree(temp_dir)
+    print("✅ Done! Skeletal-Prior dataset finalized.")
 
 
 if __name__ == "__main__":
