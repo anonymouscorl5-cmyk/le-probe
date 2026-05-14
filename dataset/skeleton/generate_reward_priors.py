@@ -137,14 +137,13 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
     # Wrapper for imap (which only takes 1 arg)
     task_args = [(chunk, views) for chunk in chunks]
 
-    with Pool(num_cores) as p:
-        processed_chunks = list(
-            tqdm(
-                p.imap(_process_chunk_wrapper, task_args),
-                total=len(chunks),
-                desc="🎥 Processing Skeletons",
-            )
-        )
+    with Pool(num_cores) as p, tqdm(
+        total=len(df), desc="🎥 Processing Skeletons"
+    ) as pbar:
+        processed_chunks = []
+        for chunk_df in p.imap(_process_chunk_wrapper, task_args):
+            processed_chunks.append(chunk_df)
+            pbar.update(len(chunk_df))
 
     final_df = pd.concat(processed_chunks)
 
