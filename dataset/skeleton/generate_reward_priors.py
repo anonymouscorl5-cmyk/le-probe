@@ -96,7 +96,7 @@ def worker_task(chunk_data):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--input", type=str, required=True, help="Path to input dataset.parquet"
+        "--repo_id", type=str, required=True, help="HF Repo ID to download dataset"
     )
     parser.add_argument(
         "--output_dir",
@@ -104,32 +104,32 @@ def main():
         default="dataset_skel_frames",
         help="Dir to save .pt frames",
     )
-    parser.add_argument(
-        "--repo_id", type=str, help="HF Repo ID to download if input missing"
-    )
     parser.add_argument("--cores", type=int, default=4)
     args = parser.parse_args()
 
-    # 1. Load Data
-    input_path = Path(args.input)
-    if not input_path.exists() and args.repo_id:
-        print(f"📥 Downloading {args.repo_id}...")
-        snapshot_download(repo_id=args.repo_id, repo_type="dataset", local_dir=".")
+    # 1. Download and Locate Parquet
+    local_dir = Path(args.repo_id.split("/")[-1])
+    print(f"📥 Syncing dataset from HF: {args.repo_id}...")
+    snapshot_download(repo_id=args.repo_id, repo_type="dataset", local_dir=local_dir)
 
-    df = pd.read_parquet(input_path)
-    print(f"📊 Loaded {len(df)} frames.")
+    parquet_matches = list(local_dir.rglob("dataset.parquet"))
+    if not parquet_matches:
+        raise FileNotFoundError(f"🚨 Could not find dataset.parquet inside {local_dir}")
 
-    # 2. Setup Directories
+    parquet_path = parquet_matches[0]
+    df = pd.read_parquet(parquet_path)
+    print(f"📊 Loaded {len(df)} frames from {parquet_path}")
+
+    # 2. Setup Output Directories
     out_dir = Path(args.output_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
 
-    # 3. Save Metadata (Small scalar columns)
+    # 3. Save Metadata
     meta_cols = ["progress", "episode_index", "frame_index"]
     metadata = {col: df[col].values.tolist() for col in meta_cols if col in df.columns}
     torch.save(metadata, out_dir / "metadata.pt")
-    print(f"💾 Metadata saved to {out_dir / 'metadata.pt'}")
 
     # 4. Multiprocess Frame Generation
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
