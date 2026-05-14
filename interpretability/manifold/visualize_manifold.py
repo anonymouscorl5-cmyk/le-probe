@@ -51,6 +51,7 @@ def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html")
     data = torch.load(input_file, weights_only=False)
     latents = data["latents"]
     indices = data["frame_indices"]
+    ep_indices = data.get("episode_indices", None)
 
     print(f"📉 Reducing dimensions using {method.upper()}...")
     if method.lower() == "pca":
@@ -67,6 +68,12 @@ def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html")
     print(f"🖌 Applying color mapping...")
     colors = [interpolate_color(idx) for idx in indices]
 
+    # Create descriptive hover labels
+    hover_text = []
+    for i, idx in enumerate(indices):
+        ep_idx = ep_indices[i] if ep_indices is not None else (i // 32)
+        hover_text.append(f"Ep: {ep_idx} | Fr: {idx}")
+
     # Create the 3D Scatter plot
     fig = go.Figure(
         data=[
@@ -76,7 +83,7 @@ def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html")
                 z=reduced_data[:, 2],
                 mode="markers",
                 marker=dict(size=3, color=colors, opacity=0.6),
-                text=[f"Frame: {idx}" for idx in indices],
+                text=hover_text,
                 hoverinfo="text",
             )
         ]

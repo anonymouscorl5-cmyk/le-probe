@@ -78,6 +78,7 @@ def harvest_manifold(
 
     all_latents = []
     all_indices = []
+    all_episode_indices = []
 
     # 3. Calculate processing scope
     total_frames = len(data_plugin)
@@ -144,8 +145,12 @@ def harvest_manifold(
                 # Fetch frame indices for this batch
                 start_idx = i * B
                 end_idx = min((i + 1) * B, len(data_plugin.frame_indices))
+
                 batch_indices = data_plugin.frame_indices[start_idx:end_idx]
                 all_indices.append(batch_indices.numpy())
+
+                batch_ep_indices = data_plugin.episode_indices[start_idx:end_idx]
+                all_episode_indices.append(batch_ep_indices.numpy())
 
     finally:
         data_plugin.clear_cache()
@@ -154,9 +159,14 @@ def harvest_manifold(
     latents = np.concatenate(all_latents, axis=0)  # (N, T, D)
     latents = latents.reshape(-1, latents.shape[-1])  # (N*T, D)
     indices = np.concatenate(all_indices, axis=0)  # (N*T,)
+    episode_indices = np.concatenate(all_episode_indices, axis=0)  # (N*T,)
 
     print(f"💾 Saving manifold data...")
-    data = {"latents": latents, "frame_indices": indices}
+    data = {
+        "latents": latents,
+        "frame_indices": indices,
+        "episode_indices": episode_indices,
+    }
     torch.save(data, output_path)
     print(f"✨ Manifold data saved to {output_path}")
 
