@@ -193,9 +193,21 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
     if writer:
         writer.close()
 
+    # 5. Final Integrity Audit
+    print("🔎 Performing Final Integrity Audit...")
+    final_meta = pq.read_metadata(output_path)
+    final_rows = final_meta.num_rows
+
+    if final_rows != len(df):
+        raise RuntimeError(
+            f"🚨 INTEGRITY FAILURE: Input has {len(df)} frames but output has {final_rows}!"
+        )
+
     # Cleanup
     shutil.rmtree(temp_dir)
-    print(f"✅ Done! Final dataset saved to {output_path}")
+    print(
+        f"✅ Done! Final dataset saved to {output_path} ({final_rows}/{len(df)} frames verified)"
+    )
 
 
 if __name__ == "__main__":

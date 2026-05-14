@@ -177,6 +177,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, required=True)
     parser.add_argument("--snapshots", type=str, required=True)
     parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--lr", type=float, default=1e-4)
     args = parser.parse_args()
 
-    train_reward_head_skel(args.ckpt, args.snapshots, args.epochs)
+    train_reward_head_skel(args.ckpt, args.snapshots, args.epochs, args.lr)
