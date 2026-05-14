@@ -38,13 +38,18 @@ def train_reward_head_skel(
     print(f"🚀 [SKELETAL REWARD TUNING] Training on {device}")
 
     # 1. Load Dataset
-    local_dir = "gr1_reward_pred_data"
+    local_dir = repo_id
     # We expect the upgraded parquet file here
     parquet_file = Path(local_dir) / "dataset_skel.parquet"
 
     if not parquet_file.exists():
-        print(f"📂 Upgraded dataset missing. Fetching base from HF: {repo_id}...")
-        snapshot_download(repo_id=repo_id, repo_type="dataset", local_dir=local_dir)
+        if "/" in repo_id:
+            print(f"📂 Upgraded dataset missing. Fetching base from HF: {repo_id}...")
+            snapshot_download(repo_id=repo_id, repo_type="dataset", local_dir=local_dir)
+        else:
+            raise FileNotFoundError(
+                f"🚨 Could not find {parquet_file}. Ensure you are in the correct directory or provide a valid repo_id."
+            )
         # Note: User must run generate_reward_priors.py if dataset_skel.parquet is still missing
         if not parquet_file.exists():
             # Check if it was just downloaded as dataset.parquet
