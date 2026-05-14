@@ -134,6 +134,9 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
     print(f"📦 [REWARD PRIOR GENERATOR] Loading: {parquet_file}")
     df = pd.read_parquet(parquet_file)
 
+    if "cube_qpos" in df.columns:
+        df = df.drop(columns=["cube_qpos"])
+
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
 
     # Split into more chunks for smoother progress tracking
@@ -168,18 +171,19 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
     print("🖇️ Coalescing staged chunks (Memory Efficient)...")
 
     chunk_files = sorted(list(temp_dir.glob("*.parquet")))
-    writer = None
+
+    # --- Schema Hardening ---
+    # Establish a master schema from the first chunk to ensure consistency
+    sample_df = pd.read_parquet(chunk_files[0])
+    master_schema = pa.Table.from_pandas(sample_df).schema
+    writer = pq.ParquetWriter(output_path, master_schema)
+    # ------------------------
 
     for f in tqdm(chunk_files, desc="Merging"):
-        # Read one chunk into RAM
         chunk_df = pd.read_parquet(f)
-        table = pa.Table.from_pandas(chunk_df)
 
-        # Initialize final writer on first chunk
-        if writer is None:
-            writer = pq.ParquetWriter(output_path, table.schema)
-
-        # Write to final file
+        # Force the chunk to match the master schema
+        table = pa.Table.from_pandas(chunk_df, schema=master_schema)
         writer.write_table(table)
 
         # CLEAR RAM IMMEDIATELY
