@@ -46,12 +46,18 @@ def interpolate_color(idx):
     return f"rgb({int(color[0])}, {int(color[1])}, {int(color[2])})"
 
 
-def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html"):
+def visualize_manifold(
+    input_file, method="pca", output_html="manifold_3d.html", highlight_episodes=None
+):
     print(f"🎨 Loading manifold data from {input_file}...")
     data = torch.load(input_file, weights_only=False)
     latents = data["latents"]
     indices = data["frame_indices"]
     ep_indices = data.get("episode_indices", None)
+
+    # Ensure ep_indices exists
+    if ep_indices is None:
+        ep_indices = np.array([i // 32 for i in range(len(indices))])
 
     print(f"📉 Reducing dimensions using {method.upper()}...")
     if method.lower() == "pca":
@@ -66,33 +72,72 @@ def visualize_manifold(input_file, method="pca", output_html="manifold_3d.html")
     reduced_data = reducer.fit_transform(latents)
 
     print(f"🖌 Applying color mapping...")
-    colors = [interpolate_color(idx) for idx in indices]
+    colors = np.array([interpolate_color(idx) for idx in indices])
 
     # Create descriptive hover labels
-    hover_text = []
-    for i, idx in enumerate(indices):
-        ep_idx = ep_indices[i] if ep_indices is not None else (i // 32)
-        hover_text.append(f"Ep: {ep_idx} | Fr: {idx}")
+    hover_text = np.array(
+        [f"Ep: {ep_indices[i]} | Fr: {indices[i]}" for i in range(len(indices))]
+    )
 
-    # Create the 3D Scatter plot
-    fig = go.Figure(
-        data=[
+    # Split data for highlighting
+    fig = go.Figure()
+
+    if highlight_episodes:
+        mask = np.isin(ep_indices, highlight_episodes)
+        bg_mask = ~mask
+
+        # Background Trace
+        fig.add_trace(
+            go.Scatter3d(
+                x=reduced_data[bg_mask, 0],
+                y=reduced_data[bg_mask, 1],
+                z=reduced_data[bg_mask, 2],
+                mode="markers",
+                name="Manifold",
+                marker=dict(size=2, color=colors[bg_mask], opacity=0.4),
+                text=hover_text[bg_mask],
+                hoverinfo="text",
+            )
+        )
+
+        # Highlight Trace
+        fig.add_trace(
+            go.Scatter3d(
+                x=reduced_data[mask, 0],
+                y=reduced_data[mask, 1],
+                z=reduced_data[mask, 2],
+                mode="markers",
+                name=f"Highlighted Ep: {highlight_episodes}",
+                marker=dict(
+                    size=3,
+                    color=colors[mask],
+                    opacity=1.0,
+                    line=dict(color="black", width=3),
+                ),
+                text=hover_text[mask],
+                hoverinfo="text",
+            )
+        )
+    else:
+        # Single trace if no highlights
+        fig.add_trace(
             go.Scatter3d(
                 x=reduced_data[:, 0],
                 y=reduced_data[:, 1],
                 z=reduced_data[:, 2],
                 mode="markers",
+                name="Manifold",
                 marker=dict(size=3, color=colors, opacity=0.6),
                 text=hover_text,
                 hoverinfo="text",
             )
-        ]
-    )
+        )
 
     fig.update_layout(
         title=f"LeWM Latent Manifold (3D {method.upper()})",
         scene=dict(xaxis_title="Comp 1", yaxis_title="Comp 2", zaxis_title="Comp 3"),
         margin=dict(l=0, r=0, b=0, t=40),
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
     )
 
     print(f"💾 Saving visualization to {output_html}...")
@@ -107,6 +152,9 @@ if __name__ == "__main__":
         "--method", type=str, choices=["pca", "tsne", "umap"], default="pca"
     )
     parser.add_argument("--output", type=str, default="manifold_3d.html")
+    parser.add_argument(
+        "--highlight", type=int, nargs="+", help="Episode IDs to highlight"
+    )
     args = parser.parse_args()
 
-    visualize_manifold(args.input, args.method, args.output)
+    visualize_manifold(args.input, args.method, args.output, args.highlight)
