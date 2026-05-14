@@ -3,6 +3,8 @@ import sys
 import numpy as np
 import mujoco
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from PIL import Image, ImageDraw
 from pathlib import Path
 from tqdm import tqdm
@@ -137,19 +139,28 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
     # Wrapper for imap (which only takes 1 arg)
     task_args = [(chunk, views) for chunk in chunks]
 
+    # Initialize PyArrow writer for incremental saving
+    writer = None
+
     with Pool(num_cores) as p, tqdm(
         total=len(df), desc="🎥 Processing Skeletons"
     ) as pbar:
-        processed_chunks = []
         for chunk_df in p.imap(_process_chunk_wrapper, task_args):
-            processed_chunks.append(chunk_df)
+            table = pa.Table.from_pandas(chunk_df)
+            if writer is None:
+                writer = pq.ParquetWriter(output_path, table.schema)
+
+            writer.write_table(table)
             pbar.update(len(chunk_df))
 
-    final_df = pd.concat(processed_chunks)
+            # Help GC clear the memory
+            del chunk_df
+            del table
 
-    print(f"💾 Saving Upgraded Dataset: {output_path}")
-    final_df.to_parquet(output_path)
-    print("✅ Done! Dataset is now Skeletal-Prior fused.")
+    if writer:
+        writer.close()
+
+    print(f"✅ Done! Dataset saved to {output_path}")
 
 
 if __name__ == "__main__":
