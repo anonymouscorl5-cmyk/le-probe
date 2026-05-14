@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from pathlib import Path
@@ -60,10 +62,12 @@ def train_reward_head_skel(
                 )
                 sys.exit(1)
 
-    print(f"📊 Loading Skeletal Parquet: {parquet_file}...")
-    df = pd.read_parquet(parquet_file)
+    # 2. Metadata Extraction (Low RAM)
+    print(f"📊 Analyzing Skeletal Parquet (Lazy Loading): {parquet_file}...")
+    table_meta = pq.read_table(parquet_file, columns=["progress"])
+    meta_df = table_meta.to_pandas()
 
-    # 2. Initialize Mapper & Model
+    # 3. Initialize Mapper & Model
     mapper = GoalMapper(
         model_path=checkpoint_path,
         dataset_root=local_dir,
@@ -94,15 +98,25 @@ def train_reward_head_skel(
 
     # 3. Flexible N-Channel Dataset
     class SkeletalParquetDataset(Dataset):
-        def __init__(self, dataframe, transform):
-            self.df = dataframe
+        def __init__(self, parquet_path, meta_df, transform, use_multi_view=True):
+            self.parquet_path = parquet_path
+            self.meta_df = meta_df
             self.transform = transform
+            self.use_multi_view = use_multi_view
+            # Store the index values for fast filtering
+            self.indices = meta_df.index.values
 
         def __len__(self):
-            return len(self.df)
+            return len(self.meta_df)
 
         def __getitem__(self, idx):
-            row = self.df.iloc[idx]
+            # Read exactly one row using the index filter
+            target_idx = int(self.indices[idx])
+            table = pq.read_table(
+                self.parquet_path, filters=[("__index_level_0__", "==", target_idx)]
+            )
+            row = table.to_pandas().iloc[0]
+
             cam_keys = (
                 [
                     "world_center",
@@ -111,27 +125,24 @@ def train_reward_head_skel(
                     "world_top",
                     "world_wrist",
                 ]
-                if use_multi_view
+                if self.use_multi_view
                 else ["world_center"]
             )
 
             views = []
             for vn in cam_keys:
                 raw_img = row[f"observation.images.{vn}"]
-                # Stack all available channels (Expects 4: R, G, B, S)
+                # Reconstruct (H, W, 4)
                 img_np = np.stack(
                     [np.array(c.tolist(), dtype=np.uint8) for c in raw_img], axis=-1
                 )
-
-                # Apply transform (Note: Transform must be channel-agnostic or handle 4ch)
-                # Our get_img_preprocessor handles this by treating 'pixels' as a tensor
                 transformed = self.transform({"pixels": img_np})
                 views.append(transformed["pixels"])
 
             img_pixels = torch.stack(views, dim=0).unsqueeze(0)  # (1, V, C, H, W)
             return img_pixels, torch.tensor([row["progress"]], dtype=torch.float32)
 
-    dataset = SkeletalParquetDataset(df, mapper.transform)
+    dataset = SkeletalParquetDataset(parquet_file, meta_df, mapper.transform)
     train_ds, val_ds = torch.utils.data.random_split(
         dataset, [int(0.9 * len(dataset)), len(dataset) - int(0.9 * len(dataset))]
     )
