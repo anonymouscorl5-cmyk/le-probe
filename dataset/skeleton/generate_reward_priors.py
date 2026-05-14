@@ -1,0 +1,165 @@
+import os
+import sys
+import numpy as np
+import mujoco
+import pandas as pd
+from PIL import Image, ImageDraw
+from pathlib import Path
+from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
+from huggingface_hub import snapshot_download
+import argparse
+
+# --- Path Stabilization ---
+REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_DIR not in sys.path:
+    sys.path.insert(0, REPO_DIR)
+# --------------------------
+
+from gr1_config import SCENE_PATH, COMPACT_WIRE_JOINTS
+from gr1_protocol import StandardScaler
+from dataset.skeleton.projection_utils import (
+    get_projection_matrix,
+    project_point,
+    is_allowed_action_chain,
+)
+
+
+def process_chunk(df_chunk, views, img_size=480):
+    """
+    Processes a chunk of the Parquet dataframe to add skeletal priors.
+    """
+    model = mujoco.MjModel.from_xml_path(SCENE_PATH)
+    data = mujoco.mj_data(model)
+    unscaler = StandardScaler()
+
+    # Initialize Camera matrices
+    cam_data = {}
+    for view in views:
+        cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, view)
+        K = get_projection_matrix(cam_id, model, img_size, img_size)
+        # Note: We'll compute t/R inside the loop as they might depend on scene updates
+        cam_data[view] = {"id": cam_id, "K": K}
+
+    results = []
+    for _, row in df_chunk.iterrows():
+        # 1. Update MuJoCo state
+        unscaled = unscaler.unscale_action(row["observation.state"])
+        data.qpos[:] = model.qpos0
+
+        # Set root height (standard for this protocol)
+        root_jnt_adr = model.jnt_qposadr[
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "root")
+        ]
+        data.qpos[root_jnt_adr : root_jnt_adr + 3] = [0.0, 0.0, 0.95]
+
+        for j, n in enumerate(COMPACT_WIRE_JOINTS):
+            j_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n)
+            if j_id != -1:
+                data.qpos[model.jnt_qposadr[j_id]] = unscaled[j]
+
+        mujoco.mj_forward(model, data)
+        current_xpos = data.xpos.copy()
+
+        # 2. Render skeletons for each view
+        for view in views:
+            cam_id = cam_data[view]["id"]
+            K = cam_data[view]["K"]
+
+            # Correct Coordinate System (MuJoCo -> OpenCV)
+            t_cam = data.cam_xpos[cam_id]
+            R_cam = data.cam_xmat[cam_id].reshape(3, 3) @ np.array(
+                [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+            )
+
+            mask = Image.new("L", (img_size, img_size), 0)
+            draw = ImageDraw.Draw(mask)
+
+            for b_id in range(1, model.nbody):
+                p_id = model.body_parentid[b_id]
+                if is_allowed_action_chain(b_id, model) and is_allowed_action_chain(
+                    p_id, model
+                ):
+                    ps, _ = project_point(current_xpos[b_id], K, R_cam, t_cam)
+                    pp, _ = project_point(current_xpos[p_id], K, R_cam, t_cam)
+                    if ps is not None and pp is not None:
+                        draw.line([tuple(ps), tuple(pp)], fill=255, width=2)
+
+            # 3. Append to Parquet image list
+            # The Parquet stores images as list of lists (usually 3 for RGB)
+            # We append the skeleton as the 4th element.
+            skel_array = np.array(mask, dtype=np.uint8)
+
+            col_name = f"observation.images.{view}"
+            if col_name in row:
+                img_list = list(row[col_name])
+                if len(img_list) == 3:
+                    img_list.append(skel_array.tolist())
+                    row[col_name] = img_list
+
+        results.append(row)
+
+    return pd.DataFrame(results)
+
+
+def main(input_path, output_path, repo_id=None):
+    # 1. HF Snapshot Support
+    parquet_file = Path(input_path)
+    if not parquet_file.exists() and repo_id:
+        print(f"📂 Dataset not found at {input_path}. Fetching from HF: {repo_id}...")
+        local_dir = os.path.dirname(input_path) or "."
+        snapshot_download(repo_id=repo_id, repo_type="dataset", local_dir=local_dir)
+        # Re-verify after download
+        if not parquet_file.exists():
+            # Sometimes snapshots put things in subdirs, check recursively
+            matches = list(Path(local_dir).rglob("dataset.parquet"))
+            if matches:
+                parquet_file = matches[0]
+            else:
+                raise FileNotFoundError(
+                    f"❌ Failed to find dataset.parquet in {local_dir} after download."
+                )
+
+    print(f"📦 [REWARD PRIOR GENERATOR] Loading: {parquet_file}")
+    df = pd.read_parquet(parquet_file)
+
+    views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
+    num_cores = max(1, cpu_count() - 2)
+
+    print(f"🚀 Processing {len(df)} frames across {num_cores} cores...")
+
+    # Split into chunks for parallel processing
+    chunks = np.array_split(df, num_cores)
+
+    with Pool(num_cores) as p:
+        processed_chunks = list(
+            tqdm(
+                p.starmap(process_chunk, [(chunk, views) for chunk in chunks]),
+                total=len(chunks),
+                desc="Chunks",
+            )
+        )
+
+    final_df = pd.concat(processed_chunks)
+
+    print(f"💾 Saving Upgraded Dataset: {output_parquet}")
+    final_df.to_parquet(output_parquet)
+    print("✅ Done! Dataset is now Skeletal-Prior fused.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--input", type=str, required=True, help="Path to input dataset.parquet"
+    )
+    parser.add_argument("--output", type=str, help="Path to save upgraded parquet")
+    parser.add_argument(
+        "--repo_id", type=str, help="HF Repo ID to download if input missing"
+    )
+    args = parser.parse_args()
+
+    out_path = (
+        args.output if args.output else args.input.replace(".parquet", "_skel.parquet")
+    )
+
+    main(args.input, out_path, args.repo_id)
