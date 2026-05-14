@@ -102,6 +102,11 @@ def process_chunk(df_chunk, views, img_size=480):
     return pd.DataFrame(results)
 
 
+def _process_chunk_wrapper(args):
+    """Helper for imap multiprocessing"""
+    return process_chunk(*args)
+
+
 def main(input_path, output_path, repo_id=None, num_cores=4):
     # 1. HF Snapshot Support
     parquet_file = Path(input_path)
@@ -125,17 +130,19 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
 
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
 
-    print(f"🚀 Processing {len(df)} frames across {num_cores} cores...")
+    # Split into more chunks for smoother progress tracking
+    chunk_count = num_cores * 4
+    chunks = np.array_split(df, chunk_count)
 
-    # Split into chunks for parallel processing
-    chunks = np.array_split(df, num_cores)
+    # Wrapper for imap (which only takes 1 arg)
+    task_args = [(chunk, views) for chunk in chunks]
 
     with Pool(num_cores) as p:
         processed_chunks = list(
             tqdm(
-                p.starmap(process_chunk, [(chunk, views) for chunk in chunks]),
+                p.imap(_process_chunk_wrapper, task_args),
                 total=len(chunks),
-                desc="Chunks",
+                desc="🎥 Processing Skeletons",
             )
         )
 
