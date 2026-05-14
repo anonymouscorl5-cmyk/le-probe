@@ -9,6 +9,7 @@ from functools import partial
 from pathlib import Path
 import torch.nn.functional as F
 from einops import rearrange
+from huggingface_hub import hf_hub_download
 from omegaconf import OmegaConf, open_dict
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -212,60 +213,54 @@ def run(cfg):
     )
     world_model.reward_head = RewardPredictor(input_dim=embed_dim, hidden_dim=512)
 
-    # 3. 💾 WEIGHT LOADING (Safe Transfer or True Resume)
+    # 3. 💾 WEIGHT INITIALIZATION (Resume vs. Cold Start)
     ckpt_path = cfg.get("ckpt_path")
-    is_resume = False
 
     if ckpt_path:
+        # --- BRANCH 1: RESUME MODE ---
+        # We are resuming an existing 4-channel skeletal run.
         ckpt_path = str(ckpt_path).strip("\"'")
-        print(f"🧬 Loading weights from {ckpt_path}...")
-        try:
-            checkpoint = torch.load(ckpt_path, map_location="cpu")
-            state_dict = checkpoint.get("state_dict", checkpoint)
-
-            # Check if the checkpoint already contains 4-channel weights (is it a skeletal run?)
-            proj_key = (
-                "model.encoder.backbone.embeddings.patch_embeddings.projection.weight"
-            )
-            is_resume = proj_key in state_dict and state_dict[proj_key].shape[1] == 4
-            if is_resume:
-                print(
-                    f"🔄 RESUME MODE: Found 4-channel weights in {ckpt_path}. "
-                    "Preparing architecture for true resume..."
-                )
-            else:
-                # Key Mapping Bridge (Handle Late Fusion Nesting if needed)
-                new_state_dict = {}
-                for k, v in state_dict.items():
-                    new_key = k.replace("model.", "") if k.startswith("model.") else k
-                    # Multi-View mapping: encoder.* -> encoder.backbone.*
-                    if new_key.startswith("encoder.") and not new_key.startswith(
-                        "encoder.backbone."
-                    ):
-                        new_key = new_key.replace("encoder.", "encoder.backbone.", 1)
-                    new_state_dict[new_key] = v
-
-                model_dict = world_model.state_dict()
-                filtered_dict = {
-                    k: v
-                    for k, v in new_state_dict.items()
-                    if k in model_dict and v.shape == model_dict[k].shape
-                }
-                world_model.load_state_dict(filtered_dict, strict=False)
-                print(
-                    f"✅ Safe Transfer: Loaded {len(filtered_dict)} "
-                    "layers from baseline."
-                )
-        except Exception as e:
-            print(f"⚠️ Safe Transfer Failed: {e}. Starting from scratch.")
-
-    # 4. 🦾 SKELETON PATCHING
-    if is_resume:
-        print("🔄 RESUME MODE: Expanding backbone to 4 channels to match checkpoint...")
+        print(f"🔄 RESUME MODE: Restoring full state from {ckpt_path}")
+        print("🦾 Architecture confirmed for 4-channel Resume.")
     else:
+        # --- BRANCH 2: DEFAULT MODE ---
+        # Starting a new experiment from Epoch 0. Warm-start from baseline.
+        print("📥 Downloading official lewm-cube baseline from HF...")
+        weights_path = hf_hub_download(
+            repo_id="quentinll/lewm-cube", filename="weights.pt"
+        )
+        state_dict = torch.load(weights_path, map_location="cpu")
+
+        print("🧠 DEFAULT MODE: Transferring 3-channel manipulation baseline...")
+        model_dict = world_model.state_dict()
+        new_state_dict = {}
+        is_multi_view = cfg.get("use_multi_view", True)
+
+        for k, v in state_dict.items():
+            new_key = k.replace("model.", "") if k.startswith("model.") else k
+            # Map encoder.* -> encoder.backbone.* for Late Fusion parity
+            if (
+                is_multi_view
+                and new_key.startswith("encoder.")
+                and not new_key.startswith("encoder.backbone.")
+            ):
+                new_key = new_key.replace("encoder.", "encoder.backbone.", 1)
+            new_state_dict[new_key] = v
+
+        filtered_dict = {
+            k: v
+            for k, v in new_state_dict.items()
+            if k in model_dict and v.shape == model_dict[k].shape
+        }
+        world_model.load_state_dict(filtered_dict, strict=False)
+        print(
+            f"✅ Baseline Loaded: Transferred {len(filtered_dict)} layers from lewm-cube."
+        )
+
+        # Patching is ONLY required for cold starts to move from 3ch to 4ch
         print("🦴 PATCHING: Expanding backbone to 4 channels (BiPS)...")
-    patch_vit_for_skeleton(encoder.backbone)
-    print("🦾 Skeleton-Prior Encoder architecture ready.")
+        patch_vit_for_skeleton(encoder.backbone)
+        print("🦾 Skeleton-Prior Encoder architecture ready (Warm-started).")
 
     # 5. Training Module setup with BiPS Forward
     optimizers = {
@@ -359,7 +354,7 @@ def run(cfg):
         model=world_model_module,
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
-        ckpt_path=ckpt_path if is_resume else None,
+        ckpt_path=ckpt_path,
     )
 
 
