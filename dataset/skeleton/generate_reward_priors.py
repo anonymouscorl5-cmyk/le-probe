@@ -102,7 +102,7 @@ def process_chunk(df_chunk, views, img_size=480):
     return pd.DataFrame(results)
 
 
-def main(input_path, output_path, repo_id=None):
+def main(input_path, output_path, repo_id=None, num_cores=4):
     # 1. HF Snapshot Support
     parquet_file = Path(input_path)
     if not parquet_file.exists() and repo_id:
@@ -124,7 +124,6 @@ def main(input_path, output_path, repo_id=None):
     df = pd.read_parquet(parquet_file)
 
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
-    num_cores = max(1, cpu_count() - 2)
 
     print(f"🚀 Processing {len(df)} frames across {num_cores} cores...")
 
@@ -142,8 +141,8 @@ def main(input_path, output_path, repo_id=None):
 
     final_df = pd.concat(processed_chunks)
 
-    print(f"💾 Saving Upgraded Dataset: {output_parquet}")
-    final_df.to_parquet(output_parquet)
+    print(f"💾 Saving Upgraded Dataset: {output_path}")
+    final_df.to_parquet(output_path)
     print("✅ Done! Dataset is now Skeletal-Prior fused.")
 
 
@@ -156,10 +155,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--repo_id", type=str, help="HF Repo ID to download if input missing"
     )
+    parser.add_argument(
+        "--cores", type=int, default=4, help="Number of CPU cores for processing"
+    )
     args = parser.parse_args()
 
     out_path = (
         args.output if args.output else args.input.replace(".parquet", "_skel.parquet")
     )
 
-    main(args.input, out_path, args.repo_id)
+    main(args.input, out_path, args.repo_id, args.cores)
