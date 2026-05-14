@@ -261,11 +261,11 @@ def run(cfg):
 
     # 4. 🦾 SKELETON PATCHING
     if is_resume:
-        print("🦾 Architecture confirmed for 4-channel Checkpoint loading.")
+        print("🔄 RESUME MODE: Expanding backbone to 4 channels to match checkpoint...")
     else:
         print("🦴 PATCHING: Expanding backbone to 4 channels (BiPS)...")
-        patch_vit_for_skeleton(encoder.backbone)
-        print("🦾 Skeleton-Prior Encoder ready with Zero-Init 4th channel.")
+    patch_vit_for_skeleton(encoder.backbone)
+    print("🦾 Skeleton-Prior Encoder architecture ready.")
 
     # 5. Training Module setup with BiPS Forward
     optimizers = {
