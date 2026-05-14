@@ -30,7 +30,7 @@ def process_chunk(df_chunk, views, img_size=480):
     Processes a chunk of the Parquet dataframe to add skeletal priors.
     """
     model = mujoco.MjModel.from_xml_path(SCENE_PATH)
-    data = mujoco.mj_data(model)
+    data = mujoco.MjData(model)
     unscaler = StandardScaler()
 
     # Initialize Camera matrices
