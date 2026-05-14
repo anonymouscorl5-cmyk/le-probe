@@ -4,6 +4,8 @@ import numpy as np
 import mujoco
 import pandas as pd
 import shutil
+import pyarrow as pa
+import pyarrow.parquet as pq
 from PIL import Image, ImageDraw
 from pathlib import Path
 from tqdm import tqdm
@@ -162,17 +164,34 @@ def main(input_path, output_path, repo_id=None, num_cores=4):
             )
         )
 
-    # 4. Coalesce
-    print("🖇️ Coalescing staged chunks...")
-    chunk_files = sorted(list(temp_dir.glob("*.parquet")))
-    final_df = pd.concat([pd.read_parquet(f) for f in chunk_files])
+    # 4. Coalesce (Stream-to-Disk to save RAM)
+    print("🖇️ Coalescing staged chunks (Memory Efficient)...")
 
-    print(f"💾 Saving Final Dataset: {output_path}")
-    final_df.to_parquet(output_path)
+    chunk_files = sorted(list(temp_dir.glob("*.parquet")))
+    writer = None
+
+    for f in tqdm(chunk_files, desc="Merging"):
+        # Read one chunk into RAM
+        chunk_df = pd.read_parquet(f)
+        table = pa.Table.from_pandas(chunk_df)
+
+        # Initialize final writer on first chunk
+        if writer is None:
+            writer = pq.ParquetWriter(output_path, table.schema)
+
+        # Write to final file
+        writer.write_table(table)
+
+        # CLEAR RAM IMMEDIATELY
+        del chunk_df
+        del table
+
+    if writer:
+        writer.close()
 
     # Cleanup
     shutil.rmtree(temp_dir)
-    print("✅ Done! Skeletal-Prior dataset finalized.")
+    print(f"✅ Done! Final dataset saved to {output_path}")
 
 
 if __name__ == "__main__":
