@@ -135,6 +135,27 @@ class GoalMapper:
             f"💎 Goal Set: Episode {episode_idx}, Frame {frame_idx} (Latent Shape: {self.goal_latent.shape})"
         )
 
+    def encode_goal_from_pixels(self, pixels):
+        """
+        Directly encodes a goal from a pre-processed pixel tensor.
+        Input 'pixels' should be (C, H, W) or (V, C, H, W).
+        """
+        with torch.no_grad():
+            if pixels.ndim == 3:
+                # (C, H, W) -> (1, 1, 1, C, H, W)
+                pixels_batch = pixels.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                if self.use_multi_view:
+                    pixels_batch = pixels_batch.repeat(1, 1, self.num_views, 1, 1, 1)
+            elif pixels.ndim == 4:
+                # (V, C, H, W) -> (1, 1, V, C, H, W)
+                pixels_batch = pixels.unsqueeze(0).unsqueeze(0)
+            else:
+                raise ValueError(f"Invalid pixels shape: {pixels.shape}")
+
+            output = self.model.encode({"pixels": pixels_batch.to(self.device)})
+            self.goal_latent = output["emb"].detach()
+            return self.goal_latent
+
     def get_cost(self, info_dict, action_candidates):
         """
         CEM PLANNING ENTRYPOINT:

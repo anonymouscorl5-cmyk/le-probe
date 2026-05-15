@@ -29,6 +29,7 @@ CORTEX_GR1 = RESEARCH_DIR.parent
 sys.path.append(str(CORTEX_GR1))
 sys.path.append(str(CORTEX_GR1 / "lewm/le_wm"))
 
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lewm.goal_mapper import GoalMapper
 from stable_worldmodel.solver import CEMSolver
 
@@ -53,6 +54,7 @@ def run_diagnostic(
     use_multi_view=False,
     use_skeleton=False,
     skel_frames_dir=None,
+    dataset_root=".",
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🔬 Running Full-Spectrum Diagnostic on {device}...")
@@ -75,7 +77,7 @@ def run_diagnostic(
     # 2. Setup Vectorized Agent & Solver
     mapper = GoalMapper(
         model_path,
-        dataset_root=".",
+        dataset_root=dataset_root,
         use_multi_view=use_multi_view,
         num_views=5 if use_multi_view else 1,
         use_skeleton=use_skeleton,
@@ -179,8 +181,18 @@ if __name__ == "__main__":
     parser.add_argument("--batch", type=int, default=10)
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
     parser.add_argument("--skel_frames", type=str, default=None)
     args = parser.parse_args()
+
+    # Resolve Dataset Root Dynamically
+    try:
+        ds = LeRobotDataset(args.dataset)
+        resolved_root = ds.root
+        print(f"📦 Local Dataset detected: {resolved_root}")
+    except Exception:
+        resolved_root = "."
+
     run_diagnostic(
         args.model,
         args.gallery,
@@ -188,4 +200,5 @@ if __name__ == "__main__":
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
         skel_frames_dir=args.skel_frames,
+        dataset_root=resolved_root,
     )

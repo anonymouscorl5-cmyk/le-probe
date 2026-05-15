@@ -17,6 +17,7 @@ LEWM_DIR = ROOT_DIR / "lewm"
 if str(LEWM_DIR) not in sys.path:
     sys.path.append(str(LEWM_DIR))
 
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lewm.goal_mapper import GoalMapper
 from lewm.lewm_data_plugin import LEWMDataPlugin
 from lewm.skeleton.data import SkeletonDataPlugin
@@ -38,10 +39,18 @@ def harvest_manifold(
 
     print(f"🚀 Initializing Manifold Harvest | Device: {device}")
 
-    # 1. Load Model
+    # 1. Resolve Dataset Root
+    try:
+        ds = LeRobotDataset(dataset_repo)
+        resolved_root = ds.root
+        print(f"📦 Local Dataset detected: {resolved_root}")
+    except Exception:
+        resolved_root = "."
+
+    # 2. Load Model
     mapper = GoalMapper(
         model_path=model_path,
-        dataset_root=".",
+        dataset_root=resolved_root,
         use_multi_view=use_multi_view,
         fusion_type=fusion_type,
         num_views=5 if use_multi_view else 1,

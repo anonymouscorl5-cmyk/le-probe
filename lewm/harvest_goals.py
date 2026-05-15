@@ -18,8 +18,7 @@ import torch
 import argparse
 import numpy as np
 from pathlib import Path
-from tqdm import tqdm
-from huggingface_hub import snapshot_download
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # Resolve project paths dynamically
 RESEARCH_DIR = Path(__file__).parent.absolute()
@@ -28,22 +27,21 @@ if str(CORTEX_GR1) not in sys.path:
     sys.path.append(str(CORTEX_GR1))
 
 from lewm.goal_mapper import GoalMapper
-from lewm.goal_utils import get_episode_video_path, extract_frame_at_index
-from lewm.skeleton.skeletal_utils import get_skeletal_diagnostic_frames
+from lewm.lewm_data_plugin import LEWMDataPlugin
+from lewm.skeleton.data import SkeletonDataPlugin
 
 REPO_ID = "vedpatwardhan/gr1_pickup_grasp"
 
 
 def harvest(
     model_path,
-    dataset_root,
+    repo_id,
     output_path,
     use_multi_view=False,
     use_skeleton=False,
-    skel_frames_dir=None,
 ):
     """
-    Sweeps the dataset and encodes success states.
+    Sweeps the dataset and encodes success states using the DataPlugin engine.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🚜 Harvesting Success States to {output_path}...")
@@ -51,51 +49,66 @@ def harvest(
     # 1. Initialize Mapper
     mapper = GoalMapper(
         model_path,
-        dataset_root,
+        dataset_root=None,
         use_multi_view=use_multi_view,
         num_views=5 if use_multi_view else 1,
         use_skeleton=use_skeleton,
-        skel_frames_dir=skel_frames_dir,
     )
+
+    # 2. Initialize Data Engine (Plugin)
+    PluginClass = SkeletonDataPlugin if use_skeleton else LEWMDataPlugin
+    plugin = PluginClass(
+        repo_id=repo_id,
+        keys_to_load=["observation.images.world_center", "action"],
+        num_steps=1,
+        use_multi_view=use_multi_view,
+    )
+    dataset = plugin.dataset
+    num_episodes = dataset.num_episodes
 
     gallery = {"goals": {}, "diagnostics": {}}
 
-    # 2. Sweep Episodes
-    for i in tqdm(range(2000), desc="Harvesting Episodes"):
+    # 3. Sweep Episodes
+    for i in tqdm(range(num_episodes), desc="Harvesting Episodes"):
         try:
-            # 1. Encode the Goal State
-            success = mapper.set_goal(episode_idx=i)
-            if not success:
-                print(f"\n⏹️ End of dataset reached at index {i}")
-                break
+            # A. Identify Success Frame
+            last_global_idx = dataset.episode_data_index["to"][i] - 1
+
+            # B. Fetch via Plugin
+            goal_batch = plugin[last_global_idx]
+            goal_pixels = goal_batch["pixels"]
+
+            # C. Encode
+            mapper.encode_goal_from_pixels(goal_pixels)
             gallery["goals"][i] = mapper.goal_latent.cpu()
 
-            # 2. Capture the Start State (Diagnostic Previews)
-            start_frames = get_skeletal_diagnostic_frames(
-                episode_idx=i,
-                dataset_root=dataset_root,
-                skel_frames_dir=skel_frames_dir,
-                use_skeleton=use_skeleton,
-                mapper=mapper,
-            )
+            # D. Capture Diagnostics (First 3 frames)
+            diag_pixels = []
+            diag_actions = []
+            start_global_idx = dataset.episode_data_index["from"][i]
 
-            # 3. Store full context
-            if start_frames:
+            for f_offset in range(3):
+                idx = start_global_idx + f_offset
+                if idx > last_global_idx:
+                    break
+                batch = plugin[idx]
+                diag_pixels.append(batch["pixels"])
+                diag_actions.append(batch["action"][0])
+
+            if diag_pixels:
                 gallery["diagnostics"][i] = {
-                    "pixels": torch.stack(start_frames).cpu(),
-                    "action": torch.zeros(len(start_frames), 32),
+                    "pixels": torch.stack(diag_pixels).cpu(),
+                    "action": torch.stack(diag_actions).cpu(),
                 }
 
         except Exception as e:
             print(f"⚠️ Error harvesting episode {i}: {e}")
-            break
+            continue
 
-    # 4. Save the Final Artifact
+    # 4. Save
     if gallery["goals"]:
         torch.save(gallery, output_path)
-        print(
-            f"✅ Full Spectrum Gallery saved: {output_path} ({len(gallery['goals'])} episodes)"
-        )
+        print(f"✅ Gallery saved: {output_path} ({len(gallery['goals'])} episodes)")
     else:
         print("❌ Dataset harvest failed.")
 
@@ -103,31 +116,16 @@ def harvest(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default=None,
-        help="Local dataset path (optional, will sync from Hub if missing)",
-    )
+    parser.add_argument("--dataset", type=str, default=REPO_ID)
     parser.add_argument("--output", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
-    parser.add_argument("--skel_frames", type=str, default=None)
     args = parser.parse_args()
-
-    dataset_root = args.dataset
-    if dataset_root is None:
-        # Default to local clone or Hub sync
-        dataset_root = f"le-probe/datasets/{REPO_ID}"
-        if not Path(dataset_root).exists():
-            print(f"📥 Syncing dataset from Hub: {REPO_ID}")
-            dataset_root = snapshot_download(repo_id=REPO_ID, repo_type="dataset")
 
     harvest(
         args.model,
-        dataset_root,
+        args.dataset,
         args.output,
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
-        skel_frames_dir=args.skel_frames,
     )
