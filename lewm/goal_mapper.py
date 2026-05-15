@@ -30,6 +30,8 @@ from lewm.le_wm.utils import get_img_preprocessor
 from lewm.goal_utils import get_goal_pixels, get_episode_video_path
 from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import LateFusionEncoder
+from lewm.skeleton.encoder import patch_vit_for_skeleton
+import torch.nn.functional as F
 
 
 class GoalMapper:
@@ -46,14 +48,19 @@ class GoalMapper:
         use_multi_view=True,
         num_views=5,
         fusion_type="linear",
+        use_skeleton=False,
+        skel_frames_dir=None,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dataset_root = Path(dataset_root)
         self.img_size = img_size
         self.use_multi_view = use_multi_view
         self.num_views = num_views
+        self.use_skeleton = use_skeleton
+        self.skel_frames_dir = Path(skel_frames_dir) if skel_frames_dir else None
 
         # 🎯 OFFICIAL TRAINING TRANSFORMS (Strict Parity)
+        # Note: If use_skeleton=True, we manually handle the 4th channel after transform
         self.transform = get_img_preprocessor(
             source="pixels", target="pixels", img_size=img_size
         )
@@ -62,6 +69,8 @@ class GoalMapper:
         backbone = spt.backbone.utils.vit_hf(
             "tiny", patch_size=14, image_size=224, pretrained=False
         )
+        if self.use_skeleton:
+            backbone = patch_vit_for_skeleton(backbone)
         self.encoder = LateFusionEncoder(
             backbone, embed_dim=192, fusion=fusion_type, num_views=num_views
         )
@@ -129,9 +138,55 @@ class GoalMapper:
                     return False
 
                 # Transform each view individually
-                # Transform expects a dict with 'pixels' as (C, H, W) or (H, W, C)
                 # Goal Utils returns (C, H, W)
-                transformed = self.transform({"pixels": pixels})["pixels"]
+                if self.use_skeleton and self.skel_frames_dir:
+                    # Load from pre-generated skeletal frames
+                    # 1. Find the last frame of this episode in metadata
+                    if not hasattr(self, "_skel_meta"):
+                        self._skel_meta = torch.load(
+                            self.skel_frames_dir / "metadata.pt", weights_only=False
+                        )
+
+                    indices = [
+                        idx
+                        for idx, eid in enumerate(self._skel_meta["episode_index"])
+                        if eid == episode_idx
+                    ]
+                    if not indices:
+                        print(
+                            f"⚠️ Warning: No skeletal frames found for episode {episode_idx}"
+                        )
+                        return False
+
+                    last_idx = indices[-1]
+                    frame_path = self.skel_frames_dir / f"frame_{last_idx:06d}.pt"
+                    frame_data = torch.load(frame_path, weights_only=False)
+                    pixels_4ch = frame_data[cam]  # (4, H, W)
+
+                    rgb = pixels_4ch[:3]
+                    skel = pixels_4ch[3:]
+
+                    transformed = self.transform({"pixels": rgb})["pixels"]
+                    # Resize skel to 224x224
+                    skel_float = skel.float() / 255.0
+                    if skel_float.shape[-2:] != (224, 224):
+                        skel_float = F.interpolate(
+                            skel_float.unsqueeze(0), size=(224, 224), mode="nearest"
+                        ).squeeze(0)
+
+                    transformed = torch.cat([transformed, skel_float], dim=0)
+                else:
+                    video_path = get_episode_video_path(
+                        self.dataset_root, episode_idx, camera_key=cam
+                    )
+                    pixels = get_goal_pixels(video_path)
+                    if pixels is None:
+                        print(
+                            f"⚠️ Warning: Missing view {cam} for episode {episode_idx}"
+                        )
+                        return False
+                    transformed = self.transform({"pixels": pixels})["pixels"]
+
                 views.append(transformed)
 
             # Stack to (V, C, H, W)

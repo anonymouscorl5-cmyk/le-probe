@@ -34,7 +34,14 @@ from lewm.goal_utils import get_episode_video_path, extract_frame_at_index
 REPO_ID = "vedpatwardhan/gr1_pickup_grasp"
 
 
-def harvest(model_path, dataset_root, output_path, use_multi_view=False):
+def harvest(
+    model_path,
+    dataset_root,
+    output_path,
+    use_multi_view=False,
+    use_skeleton=False,
+    skel_frames_dir=None,
+):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 0. Sync Dataset if path is missing or invalid
@@ -42,15 +49,17 @@ def harvest(model_path, dataset_root, output_path, use_multi_view=False):
         print(f"☁️ Syncing dataset from Hugging Face Hub: {REPO_ID}...")
         dataset_root = snapshot_download(repo_id=REPO_ID, repo_type="dataset")
 
-    print(
-        f"🎬 Starting Full Spectrum Harvest (All Episodes) on {device} (Multi-View: {use_multi_view})..."
-    )
+    print(f"🎬 Starting Full Spectrum Harvest (All Episodes) on {device}...")
+    print(f"   - Multi-View: {use_multi_view}")
+    print(f"   - Skeleton: {use_skeleton}")
 
     mapper = GoalMapper(
         model_path,
         dataset_root,
         use_multi_view=use_multi_view,
         num_views=5 if use_multi_view else 1,
+        use_skeleton=use_skeleton,
+        skel_frames_dir=skel_frames_dir,
     )
     gallery = {
         "goals": {},  # {id: goal_latent}
@@ -67,18 +76,50 @@ def harvest(model_path, dataset_root, output_path, use_multi_view=False):
                 break
             gallery["goals"][i] = mapper.goal_latent.cpu()
 
-            # 2. Capture the Start State (Center Frame only for diagnostics)
-            video_path = get_episode_video_path(
-                dataset_root, i, camera_key="observation.images.world_center"
-            )
+            # 2. Capture the Start State (Center Frame for diagnostics)
             start_frames = []
-            for frame_idx in range(3):
-                frame_np = extract_frame_at_index(video_path, frame_idx)
-                if frame_np is None:
-                    continue
-                # Transform expects (C, H, W) in [0, 1]
-                transformed = mapper.transform({"pixels": frame_np})["pixels"]
-                start_frames.append(transformed)
+            if use_skeleton and skel_frames_dir:
+                # Load the first 3 frames of this episode from skeletal priors
+                if not hasattr(mapper, "_skel_meta"):
+                    mapper._skel_meta = torch.load(
+                        Path(skel_frames_dir) / "metadata.pt", weights_only=False
+                    )
+
+                indices = [
+                    idx
+                    for idx, eid in enumerate(mapper._skel_meta["episode_index"])
+                    if eid == i
+                ]
+                for frame_idx in range(min(3, len(indices))):
+                    f_idx = indices[frame_idx]
+                    frame_path = Path(skel_frames_dir) / f"frame_{f_idx:06d}.pt"
+                    frame_data = torch.load(frame_path, weights_only=False)
+                    # Use center camera for diagnostic
+                    pixels_4ch = frame_data["world_center"]  # (4, H, W)
+
+                    rgb = pixels_4ch[:3]
+                    skel = pixels_4ch[3:]
+
+                    transformed = mapper.transform({"pixels": rgb})["pixels"]
+                    # Resize skel to 224x224
+                    skel_float = skel.float() / 255.0
+                    if skel_float.shape[-2:] != (224, 224):
+                        skel_float = torch.nn.functional.interpolate(
+                            skel_float.unsqueeze(0), size=(224, 224), mode="nearest"
+                        ).squeeze(0)
+
+                    full_4ch = torch.cat([transformed, skel_float], dim=0)
+                    start_frames.append(full_4ch)
+            else:
+                video_path = get_episode_video_path(
+                    dataset_root, i, camera_key="observation.images.world_center"
+                )
+                for frame_idx in range(3):
+                    frame_np = extract_frame_at_index(video_path, frame_idx)
+                    if frame_np is None:
+                        continue
+                    transformed = mapper.transform({"pixels": frame_np})["pixels"]
+                    start_frames.append(transformed)
 
             # 3. Store full context
             if start_frames:
@@ -112,5 +153,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--output", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
+    parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--skel_frames", type=str, default=None)
     args = parser.parse_args()
-    harvest(args.model, args.dataset, args.output, use_multi_view=args.multi_view)
+    harvest(
+        args.model,
+        args.dataset,
+        args.output,
+        use_multi_view=args.multi_view,
+        use_skeleton=args.use_skeleton,
+        skel_frames_dir=args.skel_frames,
+    )

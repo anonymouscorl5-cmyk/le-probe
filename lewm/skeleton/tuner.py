@@ -12,7 +12,7 @@ from einops import rearrange
 
 # --- Path Stabilization ---
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "../.."))
 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
@@ -154,7 +154,7 @@ def train_reward_head_skel(
         train_loss = 0
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
             pixels, target = [x.to(device) for x in batch]
-            
+
             optimizer.zero_grad()
             # Forward: Encoder -> Predictor Projector -> Reward Head
             enc_out = model.encoder(pixels).last_hidden_state  # (B, T, D)

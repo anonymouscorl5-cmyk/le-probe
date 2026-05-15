@@ -47,12 +47,17 @@ class MockSpace:
 
 
 def run_diagnostic(
-    model_path, gallery_path="goal_gallery.pth", batch_size=10, use_multi_view=False
+    model_path,
+    gallery_path="goal_gallery.pth",
+    batch_size=10,
+    use_multi_view=False,
+    use_skeleton=False,
+    skel_frames_dir=None,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(
-        f"🔬 Running Full-Spectrum Diagnostic on {device} (Multi-View: {use_multi_view})..."
-    )
+    print(f"🔬 Running Full-Spectrum Diagnostic on {device}...")
+    print(f"   - Multi-View: {use_multi_view}")
+    print(f"   - Skeleton: {use_skeleton}")
 
     if not Path(gallery_path).exists():
         print(f"❌ Error: Gallery not found at {gallery_path}")
@@ -73,6 +78,8 @@ def run_diagnostic(
         dataset_root=".",
         use_multi_view=use_multi_view,
         num_views=5 if use_multi_view else 1,
+        use_skeleton=use_skeleton,
+        skel_frames_dir=skel_frames_dir,
     )
 
     # Initialize frozen_pose for manifold squashing (Offline diagnostic uses zero-pose)
@@ -171,5 +178,14 @@ if __name__ == "__main__":
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
     parser.add_argument("--batch", type=int, default=10)
     parser.add_argument("--multi_view", action="store_true", default=False)
+    parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--skel_frames", type=str, default=None)
     args = parser.parse_args()
-    run_diagnostic(args.model, args.gallery, args.batch, use_multi_view=args.multi_view)
+    run_diagnostic(
+        args.model,
+        args.gallery,
+        args.batch,
+        use_multi_view=args.multi_view,
+        use_skeleton=args.use_skeleton,
+        skel_frames_dir=args.skel_frames,
+    )
