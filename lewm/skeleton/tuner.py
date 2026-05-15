@@ -184,7 +184,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--frames", type=str, required=True)
+    parser.add_argument("--lr", type=int, default=5e-5)
     parser.add_argument("--epochs", type=int, default=10)
     args = parser.parse_args()
 
-    train_reward_head(args.model, args.frames, epochs=args.epochs)
+    train_reward_head(args.model, args.frames, epochs=args.epochs, lr=args.lr)
