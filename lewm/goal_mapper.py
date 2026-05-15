@@ -1,13 +1,3 @@
-"""
-UNIFIED PLANNING AGENT (The "Brain")
-Role: Wrapper for the Oracle World Model and Planning Cost Logic.
-
-This class serves as the primary interface for the CEM Solver. It:
-1. Loads the v17 Oracle weights and maintains the JEPA model instance.
-2. Manages the "Goal Memory" (encoding success frames once).
-3. Implements high-performance windowed rollouts with VRAM de-duplication.
-"""
-
 # --- Path Stabilization ---
 import os
 import sys
@@ -17,203 +7,155 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 # --------------------------
 
-
 import torch
+import torch.nn.functional as F
+from stable_pretraining import data as dt
 from pathlib import Path
 
-# Project-specific imports
-import stable_pretraining as spt
-from jepa import JEPA
-from module import ARPredictor
-from gr1_modules import GR1Embedder, GR1MLP, MultiViewJEPA
-from lewm.le_wm.utils import get_img_preprocessor
-from lewm.goal_utils import get_goal_pixels, get_episode_video_path
-from lewm.train_lewm import RewardPredictor
-from lewm.multi_view_encoder import LateFusionEncoder
-from lewm.skeleton.encoder import patch_vit_for_skeleton
-import torch.nn.functional as F
+try:
+    import torchcodec
+
+    HAS_TORCHCODEC = True
+except ImportError:
+    HAS_TORCHCODEC = False
+
+# Local imports
+from lewm.le_wm.jepa import JEPA
+from lewm.skeleton.utils import load_skeletal_state_dict, reconstruct_4ch_frame
 
 
 class GoalMapper:
     """
-    Utility to map task success (last frame of dataset) to World Model latent embeddings.
-    Used for Zero-Shot Goal-Conditioned MPC.
+    GoalMapper: The Brain Wrapper for LeWM.
+    Handles goal encoding, state prediction, and cost calculation for CEM planning.
     """
 
     def __init__(
         self,
         model_path,
-        dataset_root,
-        img_size=224,
-        use_multi_view=True,
-        num_views=5,
-        fusion_type="linear",
+        dataset_root=".",
+        use_multi_view=False,
+        num_views=1,
         use_skeleton=False,
         skel_frames_dir=None,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dataset_root = Path(dataset_root)
-        self.img_size = img_size
         self.use_multi_view = use_multi_view
         self.num_views = num_views
         self.use_skeleton = use_skeleton
         self.skel_frames_dir = Path(skel_frames_dir) if skel_frames_dir else None
 
-        # 🎯 OFFICIAL TRAINING TRANSFORMS (Strict Parity)
-        # Note: If use_skeleton=True, we manually handle the 4th channel after transform
-        self.transform = get_img_preprocessor(
-            source="pixels", target="pixels", img_size=img_size
-        )
+        # 1. Initialize the Model
+        # We assume the model is a JEPA object or a checkpoint containing it
+        if str(model_path).endswith(".pt") or str(model_path).endswith(".ckpt"):
+            print(f"🧠 Loading Model from Checkpoint: {model_path}")
+            if use_skeleton:
+                self.model = load_skeletal_state_dict(model_path)
+            else:
+                self.model = torch.load(model_path, map_location=self.device)
+        else:
+            # Assume it's a directory or a generic path (not supported here)
+            raise ValueError(f"Unsupported model path: {model_path}")
 
-        # Initialize Model Architecture (Always Wrapped for Parity)
-        backbone = spt.backbone.utils.vit_hf(
-            "tiny", patch_size=14, image_size=224, pretrained=False
-        )
-        if self.use_skeleton:
-            backbone = patch_vit_for_skeleton(backbone)
-        self.encoder = LateFusionEncoder(
-            backbone, embed_dim=192, fusion=fusion_type, num_views=num_views
-        )
-        self.predictor = ARPredictor(
-            num_frames=3,
-            input_dim=192,
-            hidden_dim=192,
-            output_dim=192,
-            depth=6,
-            heads=16,
-            mlp_dim=2048,
-        )
-        self.action_encoder = GR1Embedder(input_dim=32, emb_dim=192)
-        self.projector = GR1MLP(input_dim=192, output_dim=192, hidden_dim=2048)
-        self.projector_proj = GR1MLP(input_dim=192, output_dim=192, hidden_dim=2048)
-
-        self.model = (
-            MultiViewJEPA(
-                encoder=self.encoder,
-                predictor=self.predictor,
-                action_encoder=self.action_encoder,
-                projector=self.projector,
-                pred_proj=self.projector_proj,
-            )
-            .to(self.device)
-            .eval()
-        )
-
-        self.model.reward_head = (
-            RewardPredictor(input_dim=192, hidden_dim=512).to(self.device).eval()
-        )
-
-        # 🧊 Dynamic Freeze Anchor (Initial Pose)
+        self.model.to(self.device).eval()
+        self.goal_latent = None
         self.frozen_pose = None
 
-        # Load Weights
-        print(f"🧠 Loading Oracle Weights: {Path(model_path).name}")
-        checkpoint = torch.load(model_path, map_location=self.device)
-        state_dict = checkpoint.get("state_dict", checkpoint)
-        new_sd = {k.replace("model.", ""): v for k, v in state_dict.items()}
-        self.model.load_state_dict(new_sd, strict=False)
+        # 2. Image Transform (Standard LeWM 224x224)
+        imagenet_stats = dt.dataset_stats.ImageNet
+        self.transform = dt.transforms.Compose(
+            dt.transforms.ToImage(**imagenet_stats, source="pixels", target="pixels"),
+            dt.transforms.Resize(224, source="pixels", target="pixels"),
+        )
 
-    @torch.no_grad()
-    def set_goal(self, episode_idx=0):
-        """
-        Fetches the success state (last frame) from the dataset.
-        In Multi-View mode, it loads all 5 camera views and stacks them.
-        """
-        if self.use_multi_view:
-            cam_keys = [
-                "observation.images.world_center",
-                "observation.images.world_left",
-                "observation.images.world_right",
-                "observation.images.world_top",
-                "observation.images.world_wrist",
-            ]
-            views = []
-            for cam in cam_keys:
-                video_path = get_episode_video_path(
-                    self.dataset_root, episode_idx, camera_key=cam
-                )
-                pixels = get_goal_pixels(video_path)
-                if pixels is None:
-                    print(f"⚠️ Warning: Missing view {cam} for episode {episode_idx}")
-                    return False
+        print(f"✅ GoalMapper initialized (Skeleton: {use_skeleton})")
 
-                # Transform each view individually
-                # Goal Utils returns (C, H, W)
-                if self.use_skeleton and self.skel_frames_dir:
-                    # Load from pre-generated skeletal frames
-                    # 1. Find the last frame of this episode in metadata
-                    if not hasattr(self, "_skel_meta"):
-                        self._skel_meta = torch.load(
-                            self.skel_frames_dir / "metadata.pt", weights_only=False
-                        )
+    def set_goal(self, episode_idx, frame_idx):
+        """Encodes a specific frame from the dataset as the target goal."""
+        # 1. Identify Goal Source
+        # We prefer tiled videos if use_skeleton is True
+        image_key = "world_center"
+        if self.use_skeleton:
+            image_key = "world_center_tiled"
 
-                    indices = [
-                        idx
-                        for idx, eid in enumerate(self._skel_meta["episode_index"])
-                        if eid == episode_idx
-                    ]
-                    if not indices:
-                        print(
-                            f"⚠️ Warning: No skeletal frames found for episode {episode_idx}"
-                        )
-                        return False
+        video_path = (
+            self.dataset_root
+            / "videos"
+            / image_key
+            / "chunk-000"
+            / f"file-{episode_idx:03d}.mp4"
+        )
 
-                    last_idx = indices[-1]
-                    frame_path = self.skel_frames_dir / f"frame_{last_idx:06d}.pt"
-                    frame_data = torch.load(frame_path, weights_only=False)
-                    pixels_4ch = frame_data[cam]  # (4, H, W)
+        if not video_path.exists():
+            # Fallback to non-tiled if tiled is missing
+            video_path = (
+                self.dataset_root
+                / "videos"
+                / "world_center"
+                / "chunk-000"
+                / f"file-{episode_idx:03d}.mp4"
+            )
 
-                    rgb = pixels_4ch[:3]
-                    skel = pixels_4ch[3:]
+        if not video_path.exists():
+            raise FileNotFoundError(f"🚨 Goal video not found: {video_path}")
 
-                    transformed = self.transform({"pixels": rgb})["pixels"]
-                    # Resize skel to 224x224
-                    skel_float = skel.float() / 255.0
-                    if skel_float.shape[-2:] != (224, 224):
-                        skel_float = F.interpolate(
-                            skel_float.unsqueeze(0), size=(224, 224), mode="nearest"
-                        ).squeeze(0)
+        # 2. Decode Goal Frame
+        if not HAS_TORCHCODEC:
+            raise RuntimeError("torchcodec is required for GoalMapper goal loading.")
 
-                    transformed = torch.cat([transformed, skel_float], dim=0)
-                else:
-                    video_path = get_episode_video_path(
-                        self.dataset_root, episode_idx, camera_key=cam
-                    )
-                    pixels = get_goal_pixels(video_path)
-                    if pixels is None:
-                        print(
-                            f"⚠️ Warning: Missing view {cam} for episode {episode_idx}"
-                        )
-                        return False
-                    transformed = self.transform({"pixels": pixels})["pixels"]
+        decoder = torchcodec.decoders.VideoDecoder(str(video_path))
+        frames = decoder.get_frames_at(indices=[frame_idx])
+        raw_frame = frames.data[0]  # (C, H, W)
 
-                views.append(transformed)
-
-            # Stack to (V, C, H, W)
-            processed_pixels = torch.stack(views, dim=0).to(self.device)
-            # Add T=1 and B=1: (1, 1, V, C, H, W)
-            processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0)
+        # 3. Reconstruct & Transform
+        if self.use_skeleton and "_tiled" in video_path.name:
+            full_frame = reconstruct_4ch_frame(raw_frame, transform_fn=self.transform)
         else:
-            video_path = get_episode_video_path(self.dataset_root, episode_idx)
-            pixels = get_goal_pixels(video_path)
+            # Fallback to RGB-only or already 4ch (unlikely from raw video)
+            full_frame = self.transform({"pixels": raw_frame})["pixels"]
+            if self.use_skeleton and full_frame.shape[0] == 3:
+                # Add empty skeleton if model expects 4 channels
+                skel = torch.zeros((1, 224, 224), device=full_frame.device)
+                full_frame = torch.cat([full_frame, skel], dim=0)
 
-            if pixels is None:
-                return False
+        # 4. Encode Goal Latent
+        # Input to model.encode expects (B, T, V, C, H, W)
+        # We simulate a single frame: (1, 1, 1, C, H, W)
+        with torch.no_grad():
+            pixels_batch = full_frame.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            if self.use_multi_view:
+                # Repeat for all views if the model expects multi-view
+                pixels_batch = pixels_batch.repeat(1, 1, self.num_views, 1, 1, 1)
 
-            # Transform and Batch (Force 6D: B, T, V, C, H, W)
-            batch = self.transform({"pixels": pixels})
-            processed_pixels = batch["pixels"].to(self.device)
-            # (C, H, W) -> (1, 1, 1, C, H, W)
-            processed_pixels = processed_pixels.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
-        # 2. Encode to Latent once
-        info = self.model.encode({"pixels": processed_pixels})
-        self.goal_latent = info["emb"].detach()  # (1, 1, D)
+            output = self.model.encode({"pixels": pixels_batch.to(self.device)})
+            self.goal_latent = output["emb"].detach()
 
         print(
-            f"✅ Goal Latent Cached: {self.goal_latent.shape} (Multi-View: {self.use_multi_view})"
+            f"💎 Goal Set: Episode {episode_idx}, Frame {frame_idx} (Latent Shape: {self.goal_latent.shape})"
         )
-        return True
+
+    def get_cost(self, info_dict, action_candidates):
+        """
+        CEM PLANNING ENTRYPOINT:
+        Calculates the distance between predicted future states and the goal.
+        """
+        if self.goal_latent is None:
+            raise ValueError("❌ GoalMapper Error: Goal not set before planning!")
+
+        # 1. Ensure goal_latent is repeated for the sampling dimension (S)
+        # JEPA.rollout expects info_dict to have pixels for initial state encoding
+        # and info_dict['goal_emb'] for cost calculation.
+
+        # goal_latent is (1, 1, D) or (B, 1, D)
+        # We need to expand it for S samples in the criterion
+        info_dict["goal_emb"] = self.goal_latent
+
+        # 2. Rollout the future state predictions
+        info_dict = self.model.rollout(info_dict, action_candidates)
+
+        # 3. Calculate cost (MSE between predicted and goal latent)
+        return self.model.criterion(info_dict)
 
     def predict(self, *args, **kwargs):
         """Proxy to the internal World Model's prediction logic."""
@@ -255,146 +197,13 @@ class GoalMapper:
 
         return actions
 
-    @torch.no_grad()
-    def get_cost(self, obs_dict, actions):
+    def encode(self, pixels):
         """
-        FAST-PATH MPC COST (Ironclad 5D Protocol)
-        Guarantees that the World Model only ever sees 5D (B, T, C, H, W).
+        Standardized encoder entrypoint for world model interaction.
+        Expects pixels: (B, T, V, C, H, W)
         """
-        # 1. Extract and Force 5D Observation
-        raw_pixels = obs_dict["pixels"]
-        B, S = actions.size(0), actions.size(1)
+        return self.model.encode(pixels)
 
-        # Force 6D Protocol: (Batch, T, V, C, H, W)
-        pixels_input = raw_pixels
-        target_ndim = 6
-
-        while pixels_input.ndim > target_ndim:
-            pixels_input = pixels_input[:, 0]  # Squeeze the Sample/S dimensions
-
-        # 2. Optimized Encoding
-        # All samples S share the same history. We encode the batch once.
-        info = self.model.encode({"pixels": pixels_input})
-        init_emb = info["emb"]  # (B, T, D)
-
-        # Expand latents for the solver: (B, T, D) -> (B*S, T, D)
-        curr_emb = init_emb.repeat_interleave(S, dim=0)
-
-        # 3. History Actions Normalization
-        raw_hist_actions = obs_dict.get("action", None)
-        if raw_hist_actions is None:
-            raw_hist_actions = torch.zeros(B, init_emb.size(1), actions.size(-1)).to(
-                self.device
-            )
-
-        hist_actions_5d = raw_hist_actions
-        while hist_actions_5d.ndim > 3:  # (B, S, T, D) -> (B, T, D)
-            hist_actions_5d = hist_actions_5d[:, 0]
-
-        # Flatten to BS space
-        flat_hist_actions = (
-            hist_actions_5d.repeat_interleave(S, dim=0).to(self.device).float()
-        )
-
-        # 4. Prepare Plan Actions (BS, T, D) with MANIFOLD SQUASHING
-        raw_actions = actions.view(B * S, -1, actions.size(-1)).to(self.device).float()
-        flat_plan_actions = self.manifold_squash(raw_actions)
-        all_actions = torch.cat([flat_hist_actions, flat_plan_actions], dim=1)
-
-        # 5. Sliding Window Rollout (Flattened BS space)
-        history_size = init_emb.size(1)
-        T_horizon = actions.size(2)
-
-        # Track all predicted latents for dense costing (BS, T_horizon, D)
-        pred_latents = []
-
-        for t in range(T_horizon):
-            emb_window = curr_emb[:, -history_size:, :]
-            act_window = all_actions[:, t : t + history_size, :]
-
-            act_emb = self.model.action_encoder(act_window)
-            pred_emb = self.model.predict(emb_window, act_emb)
-
-            last_pred = pred_emb[:, -1:, :]
-            curr_emb = torch.cat([curr_emb, last_pred], dim=1)
-            pred_latents.append(last_pred)
-
-        # 6. Optimized Planning Cost Logic
-        # Combine all predictions: (BS, T_horizon, D)
-        all_preds = torch.cat(pred_latents, dim=1)
-
-        # CHOICE: Use the Reward Head for task-specific optimization
-        with torch.no_grad():
-            # (BS, T_horizon, D) -> (BS, T_horizon, 1) -> (BS, T_horizon)
-            # -----------------------------------------------------------------
-            # 1. PRIMARY REWARD: Predicted Proximity to Cube (0.0 to 10.0)
-            # -----------------------------------------------------------------
-            # Scaled by 10.0 so the ~7.0 delta of an episode translates to
-            # a massive cost reduction, effectively drowning out the smoothness penalty.
-            reward_pred = self.model.reward_head(all_preds).squeeze(-1)
-            reward_weight = 50.0
-            dist = (10.0 - reward_pred) * reward_weight
-
-            # -----------------------------------------------------------------
-            # 2. GLOBAL COMPASS: Euclidean distance to Latent Goal Success
-            # -----------------------------------------------------------------
-            # Provides a steady gradient from any distance, matching the
-            # 'Smart Reward' logic used during training.
-            if self.goal_latent is not None:
-                # all_preds: (BS, T, D), goal_latent: (N_goals, 1, D)
-                # Compare every step in horizon to the final successful goal state
-                # goal_target shape: (N_goals, D) -> (1, N_goals, D)
-                goal_target = (
-                    self.goal_latent.squeeze(1).unsqueeze(0).to(all_preds.dtype)
-                )
-
-                # all_preds shape: (BS, T, D)
-                # We want dist from every step in T to every goal in N_goals
-                # To do this efficiently, we flatten BS * T
-                flat_preds = all_preds.reshape(-1, all_preds.size(-1))  # (BS*T, D)
-
-                # dists shape: (BS*T, N_goals)
-                dists_to_latents = torch.cdist(flat_preds, goal_target.squeeze(0))
-
-                # Reshape back to (BS, T, N_goals), find min goal dist per step
-                # Shape: (BS, T)
-                min_latent_dist_per_step = (
-                    dists_to_latents.view(all_preds.size(0), all_preds.size(1), -1)
-                    .min(dim=-1)
-                    .values
-                )
-
-                # Global Compass Weight: Reduce to 0.5 to let the Reward Head lead.
-                dist = dist + min_latent_dist_per_step * 0.5
-
-            # Reduce dist to (BS,) by averaging over horizon
-            dist = dist.mean(dim=-1)
-
-            # -----------------------------------------------------------------
-            # 3. PHYSICAL GRACE: Smoothness Penalty (STABILIZED)
-            # -----------------------------------------------------------------
-            # a. Jitter from Last Real Pose (Start of plan)
-            # flat_hist_actions: (BS, T_hist, D)
-            last_real_action = flat_hist_actions[:, -1, :]
-            jump_start = torch.mean(
-                (flat_plan_actions[:, 0, :] - last_real_action) ** 2, dim=-1
-            )
-
-            # b. Delta within the Plan Horizon (BS, T-1, D)
-            if T_horizon > 1:
-                jitters = torch.mean(
-                    (flat_plan_actions[:, 1:, :] - flat_plan_actions[:, :-1, :]) ** 2,
-                    dim=-1,
-                )
-                jump_internal = torch.mean(jitters, dim=1)
-            else:
-                jump_internal = 0.0
-
-            # 3. Physical Grace (Smoothness Penalty)
-            # High weight = more fluid, professional movement
-            # Low weight = violent, jerky 'glitchy' movement
-            smoothness_weight = 100.0
-            dist = dist + (jump_start + jump_internal) * smoothness_weight
-
-        # 7. Unflatten back to (B, S) for the Solver
-        return dist.view(B, S)
+    def project(self, x):
+        """Standardized projection entrypoint."""
+        return self.model.projector(x)

@@ -27,6 +27,7 @@ from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
 from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import LateFusionEncoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
+from lewm.skeleton.utils import load_skeletal_state_dict, reconstruct_4ch_frame
 from module import ARPredictor, SIGReg
 
 
@@ -47,20 +48,22 @@ class SkeletalFrameDataset(Dataset):
     def __len__(self):
         return self.num_frames
 
+    def _transform_adapter(self, batch):
+        if self.transform:
+            return {"pixels": self.transform(batch["pixels"])}
+        return batch
+
     def __getitem__(self, idx):
         frame_path = self.frames_dir / f"frame_{idx:06d}.pt"
         frame_tensors = torch.load(frame_path, weights_only=False)
         views = []
         for vn in self.cam_keys:
             pixel_4ch = frame_tensors[vn]
-            rgb = pixel_4ch[:3]
-            skel = pixel_4ch[3:]
-            if self.transform:
-                transformed_rgb = self.transform(rgb)
-            else:
-                transformed_rgb = rgb.float() / 255.0
-            skel_float = skel.float() / 255.0
-            views.append(torch.cat([transformed_rgb, skel_float], dim=0))
+            # Use centralized reconstruct_4ch_frame
+            views.append(
+                reconstruct_4ch_frame(pixel_4ch, transform_fn=self._transform_adapter)
+            )
+
         img_pixels = torch.stack(views, dim=0).unsqueeze(0)
         reward = torch.tensor([self.metadata["progress"][idx]], dtype=torch.float32)
         return img_pixels, reward
@@ -106,15 +109,8 @@ def train_reward_head_skel(
     model.reward_head = RewardPredictor(input_dim=192, hidden_dim=512)
 
     # 2. Load Weights
-    cp = Path(checkpoint_path).absolute()
-    if not cp.exists():
-        print(f"❌ ERROR: Checkpoint not found at: {cp}")
-        sys.exit(1)
-
-    print(f"🧠 Loading Weights: {cp.name}")
-    checkpoint = torch.load(str(cp), map_location=device, weights_only=False)
-    state_dict = checkpoint.get("state_dict", checkpoint)
-    new_sd = {k.replace("model.", ""): v for k, v in state_dict.items()}
+    print(f"🧠 Loading Weights: {Path(checkpoint_path).name}")
+    new_sd = load_skeletal_state_dict(checkpoint_path, device=device)
     msg = model.load_state_dict(new_sd, strict=False)
     print(
         f"✅ Loaded weights. Missing: {len(msg.missing_keys)}, Unexpected: {len(msg.unexpected_keys)}"
@@ -188,7 +184,8 @@ def train_reward_head_skel(
 
     # 4. Save
     output_path = "gr1_reward_tuned_v31_skel.ckpt"
-    full_ckpt = torch.load(str(cp), map_location="cpu", weights_only=False)
+    # Note: We reload original to keep other metadata if needed, or just save the model
+    full_ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     full_ckpt["state_dict"] = {
         f"model.{k}": v.cpu() for k, v in model.state_dict().items()
     }

@@ -33,6 +33,7 @@ from gymnasium.spaces import Box
 from lewm.goal_mapper import GoalMapper
 from stable_worldmodel.solver.cem import CEMSolver
 from gr1_protocol import StandardScaler
+from lewm.skeleton.utils import reconstruct_4ch_frame
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -56,14 +57,19 @@ class MockSpace:
 
 class LEWMInferenceServer:
     def __init__(
-        self, model_path, gallery_path="goal_gallery.pth", use_multi_view=False
+        self,
+        model_path,
+        gallery_path="goal_gallery.pth",
+        use_multi_view=False,
+        use_skeleton=False,
     ):
         print(
-            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}) ---"
+            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}) ---"
         )
         self.scaler = StandardScaler()
         self.initial_pose = None
         self.use_multi_view = use_multi_view
+        self.use_skeleton = use_skeleton
 
         gallery_file = Path(gallery_path)
         if not gallery_file.exists():
@@ -82,6 +88,7 @@ class LEWMInferenceServer:
             dataset_root=".",
             use_multi_view=use_multi_view,
             num_views=5 if use_multi_view else 1,
+            use_skeleton=use_skeleton,
         )
 
         # 3. Load Entire Gallery into Brain (Omni-Goal mode)
@@ -136,18 +143,42 @@ class LEWMInferenceServer:
                     ]
                     views = []
                     for k in cam_keys:
-                        raw_img = unpack_np(req.get(k))
-                        # Transform to (C, H, W)
-                        transformed = self.agent.transform({"pixels": raw_img})
-                        views.append(transformed["pixels"])
+                        raw_img_np = unpack_np(req.get(k))
+                        # (H, W, C) -> (C, H, W)
+                        raw_img = (
+                            torch.from_numpy(raw_img_np).permute(2, 0, 1).to(DEVICE)
+                        )
+
+                        if self.use_skeleton:
+                            transformed = reconstruct_4ch_frame(
+                                raw_img, transform_fn=self.agent.transform
+                            )
+                        else:
+                            transformed = self.agent.transform({"pixels": raw_img})[
+                                "pixels"
+                            ]
+
+                        views.append(transformed)
 
                     # Current frame is (V, C, H, W)
                     current_pixels = torch.stack(views, dim=0).to(DEVICE)
                 else:
-                    raw_image = unpack_np(req.get("observation.images.world_center"))
-                    transformed = self.agent.transform({"pixels": raw_image})
+                    raw_image_np = unpack_np(req.get("observation.images.world_center"))
+                    raw_image = (
+                        torch.from_numpy(raw_image_np).permute(2, 0, 1).to(DEVICE)
+                    )
+
+                    if self.use_skeleton:
+                        transformed = reconstruct_4ch_frame(
+                            raw_image, transform_fn=self.agent.transform
+                        )
+                    else:
+                        transformed = self.agent.transform({"pixels": raw_image})[
+                            "pixels"
+                        ]
+
                     # Current frame is (1, C, H, W) for single-view consistency
-                    current_pixels = transformed["pixels"].unsqueeze(0).to(DEVICE)
+                    current_pixels = transformed.unsqueeze(0).to(DEVICE)
 
                 raw_sim_state = unpack_np(req.get("state"))
 
@@ -318,8 +349,12 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
+    parser.add_argument("--use_skeleton", action="store_true", default=False)
     args = parser.parse_args()
     server = LEWMInferenceServer(
-        args.model, args.gallery, use_multi_view=args.multi_view
+        args.model,
+        args.gallery,
+        use_multi_view=args.multi_view,
+        use_skeleton=args.use_skeleton,
     )
     server.run()

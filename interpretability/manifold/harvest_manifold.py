@@ -19,6 +19,7 @@ if str(LEWM_DIR) not in sys.path:
 
 from lewm.goal_mapper import GoalMapper
 from lewm.lewm_data_plugin import LEWMDataPlugin
+from lewm.skeleton.data import SkeletonDataPlugin
 
 
 def harvest_manifold(
@@ -29,6 +30,7 @@ def harvest_manifold(
     num_workers=4,
     use_multi_view=True,
     fusion_type="linear",
+    use_skeleton=False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     output_path = Path(output_file).resolve()
@@ -43,6 +45,7 @@ def harvest_manifold(
         use_multi_view=use_multi_view,
         fusion_type=fusion_type,
         num_views=5 if use_multi_view else 1,
+        use_skeleton=use_skeleton,
     )
     model = mapper.model.to(device).eval()
 
@@ -60,12 +63,20 @@ def harvest_manifold(
     else:
         keys_to_load += ["pixels"]
 
-    data_plugin = LEWMDataPlugin(
-        repo_id=dataset_repo,
-        keys_to_load=keys_to_load,
-        num_steps=1,
-        use_multi_view=use_multi_view,
-    )
+    if use_skeleton:
+        data_plugin = SkeletonDataPlugin(
+            repo_id=dataset_repo,
+            keys_to_load=keys_to_load,
+            num_steps=1,
+            use_multi_view=use_multi_view,
+        )
+    else:
+        data_plugin = LEWMDataPlugin(
+            repo_id=dataset_repo,
+            keys_to_load=keys_to_load,
+            num_steps=1,
+            use_multi_view=use_multi_view,
+        )
     data_plugin.clear_cache()
 
     dataloader = DataLoader(
@@ -188,6 +199,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--multi_view", action="store_true", default=True)
     parser.add_argument("--fusion", type=str, default="linear")
+    parser.add_argument("--use_skeleton", action="store_true", default=False)
     args = parser.parse_args()
 
     harvest_manifold(
@@ -197,4 +209,5 @@ if __name__ == "__main__":
         num_episodes=args.episodes,
         use_multi_view=args.multi_view,
         fusion_type=args.fusion,
+        use_skeleton=args.use_skeleton,
     )
