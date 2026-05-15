@@ -108,8 +108,12 @@ class GoalMapper:
 
                 # Load weights (handles model. prefix)
                 sd = raw_data.get("state_dict", raw_data)
-                # Strip model. prefix if present
-                clean_sd = {k.replace("model.", ""): v for k, v in sd.items()}
+                # Strip model. prefix and filter out training-only sigreg keys
+                clean_sd = {}
+                for k, v in sd.items():
+                    clean_key = k.replace("model.", "") if k.startswith("model.") else k
+                    if not clean_key.startswith("sigreg."):
+                        clean_sd[clean_key] = v
                 self.model.load_state_dict(clean_sd, strict=True)
             else:
                 self.model = raw_data
@@ -226,27 +230,65 @@ class GoalMapper:
             self.goal_latent = output["emb"].detach()
             return self.goal_latent
 
-    def get_cost(self, info_dict, action_candidates):
+    @torch.no_grad()
+    @torch.no_grad()
+    def get_cost(self, obs_dict, action_candidates):
         """
-        CEM PLANNING ENTRYPOINT:
-        Calculates the distance between predicted future states and the goal.
+        PRECISION PLANNING COST (Manifold-Aligned)
+        Handles 7D MPC inputs by flattening Batch/Samples for library compatibility.
         """
         if self.goal_latent is None:
             raise ValueError("❌ GoalMapper Error: Goal not set before planning!")
 
-        # 1. Ensure goal_latent is repeated for the sampling dimension (S)
-        # JEPA.rollout expects info_dict to have pixels for initial state encoding
-        # and info_dict['goal_emb'] for cost calculation.
+        # 1. Flatten Batch and Samples to satisfy the 6D Library requirement
+        # pixels: (B, S, T, V, C, H, W) -> (B*S, T, V, C, H, W)
+        pixels = obs_dict["pixels"].to(self.device)
+        B, S, T_obs, V, C, H, W = pixels.shape
+        flat_pixels = pixels.reshape(B * S, T_obs, V, C, H, W)
 
-        # goal_latent is (1, 1, D) or (B, 1, D)
-        # We need to expand it for S samples in the criterion
-        info_dict["goal_emb"] = self.goal_latent
+        # Actions: (B, S, T_plan, D) -> (B*S, T_plan, D)
+        actions = action_candidates.to(self.device)
+        T_plan = actions.size(2)
+        flat_actions = actions.reshape(B * S, T_plan, -1)
 
-        # 2. Rollout the future state predictions
-        info_dict = self.model.rollout(info_dict, action_candidates)
+        # 2. Execute Prediction Rollout (Using 6D Flattened Tensors)
+        info_dict = {
+            "pixels": flat_pixels,
+            "action": obs_dict.get("action", torch.zeros_like(actions[:, :, :1]))
+            .reshape(B * S, -1, actions.size(-1))
+            .to(self.device),
+            "goal_emb": self.goal_latent,  # (B, 1, D) - will be handled by criterion or manual logic
+        }
 
-        # 3. Calculate cost (MSE between predicted and goal latent)
-        return self.model.criterion(info_dict)
+        info_dict = self.model.rollout(info_dict, flat_actions)
+
+        # 3. Unfold Results back to (B, S)
+        # predicted_emb: (B*S, T_plan, D) -> (B, S, T_plan, D)
+        pred_latents = info_dict["predicted_emb"].reshape(B, S, T_plan, -1)
+        _, _, _, D_feat = pred_latents.shape
+
+        # 4. Smart Cost Calculation
+        # a. PRIMARY REWARD: Tuned Reward Head (Task Progress)
+        flat_preds = pred_latents.reshape(-1, D_feat)
+        reward_pred = self.model.reward_head(flat_preds).reshape(B, S, T_plan)
+        reward_cost = (10.0 - reward_pred).mean(dim=-1) * 50.0
+
+        # b. GLOBAL COMPASS: Latent Euclidean Distance
+        # Expand goal_latent (B, 1, D) to (B, S, T_plan, D)
+        goal_expanded = (
+            self.goal_latent.unsqueeze(1).unsqueeze(1).expand(B, S, T_plan, D_feat)
+        )
+        latent_cost = F.mse_loss(pred_latents, goal_expanded, reduction="none").mean(
+            dim=(2, 3)
+        )
+
+        # c. PHYSICAL GRACE: Smoothness Penalty
+        jitters = (actions[:, :, 1:] - actions[:, :, :-1]).pow(2).mean(dim=(2, 3))
+        smoothness_weight = 100.0
+
+        total_cost = reward_cost + (latent_cost * 0.5) + (jitters * smoothness_weight)
+
+        return total_cost
 
     def predict(self, *args, **kwargs):
         """Proxy to the internal World Model's prediction logic."""

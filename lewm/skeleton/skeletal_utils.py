@@ -15,8 +15,12 @@ def load_skeletal_state_dict(checkpoint_path, device="cpu"):
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint)
 
-    # Strip 'model.' prefix if present
-    new_sd = {k.replace("model.", ""): v for k, v in state_dict.items()}
+    # Strip 'model.' prefix and filter out training-only regularizers (sigreg)
+    new_sd = {}
+    for k, v in state_dict.items():
+        clean_key = k.replace("model.", "") if k.startswith("model.") else k
+        if not clean_key.startswith("sigreg."):
+            new_sd[clean_key] = v
     return new_sd
 
 
