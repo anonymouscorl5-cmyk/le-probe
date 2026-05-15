@@ -27,7 +27,7 @@ from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
 from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import LateFusionEncoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
-from lewm.skeleton.utils import load_skeletal_state_dict, reconstruct_4ch_frame
+from lewm.skeleton.skeletal_utils import load_skeletal_state_dict, reconstruct_4ch_frame
 from module import ARPredictor, SIGReg
 
 

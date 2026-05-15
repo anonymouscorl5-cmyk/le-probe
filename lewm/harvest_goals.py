@@ -29,7 +29,7 @@ if str(CORTEX_GR1) not in sys.path:
 
 from lewm.goal_mapper import GoalMapper
 from lewm.goal_utils import get_episode_video_path, extract_frame_at_index
-from lewm.skeleton.utils import get_skeletal_diagnostic_frames
+from lewm.skeleton.skeletal_utils import get_skeletal_diagnostic_frames
 
 REPO_ID = "vedpatwardhan/gr1_pickup_grasp"
 

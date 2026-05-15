@@ -33,7 +33,7 @@ from gymnasium.spaces import Box
 from lewm.goal_mapper import GoalMapper
 from stable_worldmodel.solver.cem import CEMSolver
 from gr1_protocol import StandardScaler
-from lewm.skeleton.utils import reconstruct_4ch_frame
+from lewm.skeleton.skeletal_utils import reconstruct_4ch_frame
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

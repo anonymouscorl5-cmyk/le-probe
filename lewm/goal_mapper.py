@@ -21,7 +21,7 @@ except ImportError:
 
 # Local imports
 from lewm.le_wm.jepa import JEPA
-from lewm.skeleton.utils import load_skeletal_state_dict, reconstruct_4ch_frame
+from lewm.skeleton.skeletal_utils import load_skeletal_state_dict, reconstruct_4ch_frame
 
 
 class GoalMapper:
