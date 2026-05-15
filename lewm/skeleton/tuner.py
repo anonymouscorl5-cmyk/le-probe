@@ -26,6 +26,7 @@ for p in [LEWM_DIR, LEWM_ROOT]:
 
 from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
 from lewm.train_lewm import RewardPredictor
+from module import ARPredictor
 from lewm.skeleton.encoder import patch_vit_for_skeleton
 from lewm.skeleton.skeletal_utils import load_skeletal_state_dict, reconstruct_4ch_frame
 from lewm.multi_view_encoder import get_multi_view_encoder
@@ -109,18 +110,28 @@ def train_reward_head(
 
     world_model = MultiViewJEPA(
         encoder=encoder,
-        predictor=None,  # Not needed for reward tuning
-        action_encoder=None,
-        projector=None,
-        pred_proj=None,
+        predictor=ARPredictor(
+            num_frames=3,
+            input_dim=192,
+            hidden_dim=encoder.config.hidden_size,
+            output_dim=encoder.config.hidden_size,
+            depth=6,
+            heads=16,
+            mlp_dim=2048,
+        ),
+        action_encoder=GR1Embedder(input_dim=32, emb_dim=192),
+        projector=GR1MLP(
+            input_dim=encoder.config.hidden_size, output_dim=192, hidden_dim=2048
+        ),
+        pred_proj=GR1MLP(
+            input_dim=encoder.config.hidden_size, output_dim=192, hidden_dim=2048
+        ),
     )
-    world_model.reward_head = RewardPredictor(
-        input_dim=encoder.config.hidden_size, hidden_dim=512
-    )
+    world_model.reward_head = RewardPredictor(input_dim=192, hidden_dim=512)
 
     # Load weights (handles model. prefix)
     sd = load_skeletal_state_dict(model_path, device=device)
-    world_model.load_state_dict(sd, strict=False)
+    world_model.load_state_dict(sd, strict=True)
     world_model.to(device)
 
     # 2. Load Dataset

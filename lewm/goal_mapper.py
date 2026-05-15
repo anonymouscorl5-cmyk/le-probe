@@ -21,8 +21,9 @@ except ImportError:
 
 # Local imports
 from lewm.le_wm.jepa import JEPA
+from lewm.le_wm.module import ARPredictor
 from lewm.skeleton.skeletal_utils import reconstruct_4ch_frame
-from lewm.gr1_modules import MultiViewJEPA
+from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
 from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import get_multi_view_encoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
@@ -59,7 +60,6 @@ class GoalMapper:
                 print(
                     "🧬 Checkpoint detected as Dict. Instantiating MultiViewJEPA backbone..."
                 )
-                # Default Skeletal Config (matching tuner.py)
                 cfg = OmegaConf.create(
                     {
                         "backbone": "vit_tiny_patch14_224",
@@ -69,28 +69,48 @@ class GoalMapper:
                         "fusion_type": "linear",
                         "encoder_scale": "tiny",
                         "patch_size": 14,
+                        "wm": {"history_size": 3, "action_dim": 32},
+                        "predictor": {
+                            "depth": 6,
+                            "heads": 16,
+                            "mlp_dim": 2048,
+                            "dim_head": 64,
+                        },
                     }
                 )
                 encoder = get_multi_view_encoder(cfg)
                 if use_skeleton:
                     patch_vit_for_skeleton(encoder.backbone)
 
+                hidden_dim = encoder.config.hidden_size
+                embed_dim = 192  # Standard LeWM embedding dim
+
                 self.model = MultiViewJEPA(
                     encoder=encoder,
-                    predictor=None,
-                    action_encoder=None,
-                    projector=None,
-                    pred_proj=None,
+                    predictor=ARPredictor(
+                        num_frames=cfg.wm.history_size,
+                        input_dim=embed_dim,
+                        hidden_dim=hidden_dim,
+                        output_dim=hidden_dim,
+                        **cfg.predictor,
+                    ),
+                    action_encoder=GR1Embedder(input_dim=32, emb_dim=embed_dim),
+                    projector=GR1MLP(
+                        input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048
+                    ),
+                    pred_proj=GR1MLP(
+                        input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048
+                    ),
                 )
                 self.model.reward_head = RewardPredictor(
-                    input_dim=encoder.config.hidden_size, hidden_dim=512
+                    input_dim=embed_dim, hidden_dim=512
                 )
 
                 # Load weights (handles model. prefix)
                 sd = raw_data.get("state_dict", raw_data)
                 # Strip model. prefix if present
                 clean_sd = {k.replace("model.", ""): v for k, v in sd.items()}
-                self.model.load_state_dict(clean_sd, strict=False)
+                self.model.load_state_dict(clean_sd, strict=True)
             else:
                 self.model = raw_data
         else:
