@@ -114,7 +114,7 @@ def train_reward_head(
         projector=None,
         pred_proj=None,
     )
-    world_model.reward_predictor = RewardPredictor(
+    world_model.reward_head = RewardPredictor(
         input_dim=encoder.config.hidden_size, hidden_dim=512
     )
 
@@ -139,7 +139,7 @@ def train_reward_head(
     )
 
     # 3. Tuning Loop
-    optimizer = torch.optim.Adam(world_model.reward_predictor.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(world_model.reward_head.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
     print(f"🔥 Starting Skeletal Tuning | Epochs: {epochs}")
@@ -156,7 +156,7 @@ def train_reward_head(
                 emb = world_model.encode({"pixels": pixels})["emb"]  # (B, 1, D)
                 emb = emb.squeeze(1)
 
-            pred = world_model.reward_predictor(emb)
+            pred = world_model.reward_head(emb)
             loss = criterion(pred, progress)
             loss.backward()
             optimizer.step()
@@ -170,7 +170,7 @@ def train_reward_head(
                 pixels = pixels.to(device)
                 progress = progress.to(device).float()
                 emb = world_model.encode({"pixels": pixels})["emb"].squeeze(1)
-                pred = world_model.reward_predictor(emb)
+                pred = world_model.reward_head(emb)
                 val_loss += criterion(pred, progress).item()
 
         print(
@@ -182,7 +182,7 @@ def train_reward_head(
     # Update only the reward head parts
     current_sd = world_model.state_dict()
     for k, v in current_sd.items():
-        if "reward_predictor" in k:
+        if "reward_head" in k:
             # Inject into the full state dict, preserving the prefix logic
             full_sd[k] = v
 
