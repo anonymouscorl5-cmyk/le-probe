@@ -1,68 +1,68 @@
+import os
+import sys
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-import numpy as np
 from tqdm import tqdm
+from torchvision import transforms
 import argparse
-import sys
-import os
+import stable_pretraining as spt
+from einops import rearrange
 
 # --- Path Stabilization ---
-CURRENT_FILE = Path(__file__).resolve()
-ROOT_DIR = CURRENT_FILE.parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 
-from lewm.goal_mapper import GoalMapper
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+LEWM_DIR = os.path.join(REPO_ROOT, "lewm")
+LEWM_ROOT = os.path.join(LEWM_DIR, "le_wm")
+for p in [LEWM_DIR, LEWM_ROOT]:
+    if p not in sys.path:
+        sys.path.append(p)
+
+from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
+from lewm.train_lewm import RewardPredictor
+from lewm.multi_view_encoder import LateFusionEncoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
+from module import ARPredictor, SIGReg
 
 
 class SkeletalFrameDataset(Dataset):
-    """
-    Dataset that loads pre-computed [RGB+S] 4-channel frames from individual .pt files.
-    """
-
-    def __init__(self, frames_dir, transform, use_multi_view=True):
+    def __init__(self, frames_dir, transform=None):
         self.frames_dir = Path(frames_dir)
         self.transform = transform
-        self.use_multi_view = use_multi_view
-
-        # Load metadata
-        self.metadata = torch.load(self.frames_dir / "metadata.pt")
+        self.metadata = torch.load(self.frames_dir / "metadata.pt", weights_only=False)
         self.num_frames = len(self.metadata["progress"])
-
         self.cam_keys = (
-            ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
-            if use_multi_view
-            else ["world_center"]
+            "world_center",
+            "world_left",
+            "world_right",
+            "world_top",
+            "world_wrist",
         )
 
     def __len__(self):
         return self.num_frames
 
     def __getitem__(self, idx):
-        # Load the pre-computed 4-channel tensors for this frame
         frame_path = self.frames_dir / f"frame_{idx:06d}.pt"
-        frame_tensors = torch.load(frame_path)  # Dict of {view_name: Tensor[4, H, W]}
-
+        frame_tensors = torch.load(frame_path, weights_only=False)
         views = []
         for vn in self.cam_keys:
-            # frame_tensors[vn] is already [4, H, W]
-            # Convert back to (H, W, 4) for the standard transform if needed,
-            # or pass directly if transform supports it.
-            # Most transforms expect PIL or numpy (H, W, C).
-            img_np = frame_tensors[vn].permute(1, 2, 0).numpy()
-
-            # Apply standard ViT preprocessing
-            transformed = self.transform({"pixels": img_np})["pixels"]
-            views.append(transformed)
-
-        # Stack into (V, C, H, W) then add T=1: (1, V, C, H, W)
+            pixel_4ch = frame_tensors[vn]
+            rgb = pixel_4ch[:3]
+            skel = pixel_4ch[3:]
+            if self.transform:
+                transformed_rgb = self.transform(rgb)
+            else:
+                transformed_rgb = rgb.float() / 255.0
+            skel_float = skel.float() / 255.0
+            views.append(torch.cat([transformed_rgb, skel_float], dim=0))
         img_pixels = torch.stack(views, dim=0).unsqueeze(0)
         reward = torch.tensor([self.metadata["progress"][idx]], dtype=torch.float32)
-
         return img_pixels, reward
 
 
@@ -72,102 +72,138 @@ def train_reward_head_skel(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 [SKELETAL REWARD TUNING] Device: {device}")
 
-    # 1. Initialize Mapper & Model
-    mapper = GoalMapper(
-        model_path=checkpoint_path,
-        dataset_root=".",
-        use_multi_view=True,
-        fusion_type="linear",
-        num_views=5,
+    # 1. Architecture Assembly
+    print("🏗️  Building Multi-View Architecture...")
+    backbone = spt.backbone.utils.vit_hf(
+        "tiny", patch_size=14, image_size=224, pretrained=False, use_mask_token=False
+    )
+    backbone = patch_vit_for_skeleton(backbone)
+    encoder = LateFusionEncoder(backbone, embed_dim=192, fusion="linear", num_views=5)
+
+    predictor = ARPredictor(
+        num_frames=3,
+        depth=6,
+        heads=16,
+        mlp_dim=2048,
+        input_dim=192,
+        hidden_dim=192,
+        output_dim=192,
+        dim_head=64,
+        dropout=0.1,
     )
 
-    print("🩹 Patching model backbone for 4-channel skeletal input...")
-    mapper.model.encoder.backbone = patch_vit_for_skeleton(
-        mapper.model.encoder.backbone
-    )
+    action_encoder = GR1Embedder(input_dim=32, smoothed_dim=256, emb_dim=192)
+    projector = GR1MLP(input_dim=192, output_dim=192, hidden_dim=2048)
+    pred_proj = GR1MLP(input_dim=192, output_dim=192, hidden_dim=2048)
 
-    # Reload weights
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model = MultiViewJEPA(
+        encoder=encoder,
+        predictor=predictor,
+        action_encoder=action_encoder,
+        projector=projector,
+        pred_proj=pred_proj,
+    )
+    model.reward_head = RewardPredictor(input_dim=192, hidden_dim=512)
+
+    # 2. Load Weights
+    cp = Path(checkpoint_path).absolute()
+    if not cp.exists():
+        print(f"❌ ERROR: Checkpoint not found at: {cp}")
+        sys.exit(1)
+
+    print(f"🧠 Loading Weights: {cp.name}")
+    checkpoint = torch.load(str(cp), map_location=device, weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint)
     new_sd = {k.replace("model.", ""): v for k, v in state_dict.items()}
-    mapper.model.load_state_dict(new_sd, strict=False)
+    msg = model.load_state_dict(new_sd, strict=False)
+    print(
+        f"✅ Loaded weights. Missing: {len(msg.missing_keys)}, Unexpected: {len(msg.unexpected_keys)}"
+    )
 
-    model = mapper.model.to(device)
+    model = model.to(device)
 
-    # Freeze everything except reward head
+    # 3. Freeze & Setup
     for param in model.parameters():
         param.requires_grad = False
     for param in model.reward_head.parameters():
         param.requires_grad = True
 
-    # 2. Dataset & Loader
-    dataset = SkeletalFrameDataset(frames_dir, mapper.transform)
-    print(f"📊 Dataset initialized with {len(dataset)} frames from {frames_dir}")
+    transform = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),
+            transforms.ConvertImageDtype(torch.float32),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
 
+    dataset = SkeletalFrameDataset(frames_dir, transform)
     train_ds, val_ds = torch.utils.data.random_split(
         dataset, [int(0.9 * len(dataset)), len(dataset) - int(0.9 * len(dataset))]
     )
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True, num_workers=2
     )
-    val_loader = DataLoader(val_ds, batch_size=batch_size, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
 
-    optimizer = optim.AdamW(model.reward_head.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.reward_head.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
-    # 3. Training Loop
+    print(f"📈 Starting training for {epochs} epochs...")
     for epoch in range(epochs):
         model.train()
         train_loss = 0
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
-        for imgs, rewards in pbar:
-            imgs, rewards = imgs.to(device), rewards.to(device)
-
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+            pixels, target = [x.to(device) for x in batch]
+            
             optimizer.zero_grad()
-            # Actions are not used for reward head tuning in this mode, pass dummy
-            dummy_actions = torch.zeros(imgs.shape[0], 1, 6).to(device)
+            # Forward: Encoder -> Predictor Projector -> Reward Head
+            enc_out = model.encoder(pixels).last_hidden_state  # (B, T, D)
+            b, t, d = enc_out.shape
+            features = rearrange(enc_out, "b t d -> (b t) d")
+            features = model.pred_proj(features)
+            features = rearrange(features, "(b t) d -> b t d", b=b, t=t)
 
-            with torch.amp.autocast("cuda"):
-                pred_reward = model.predict_reward(
-                    {"pixels": imgs, "action": dummy_actions}
-                )
-                loss = criterion(pred_reward, rewards)
-
+            pred = model.reward_head(features).squeeze(-1)
+            loss = criterion(pred, target)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
-            pbar.set_postfix({"loss": loss.item()})
 
-        # Validation
         model.eval()
         val_loss = 0
         with torch.no_grad():
-            for imgs, rewards in val_loader:
-                imgs, rewards = imgs.to(device), rewards.to(device)
-                dummy_actions = torch.zeros(imgs.shape[0], 1, 6).to(device)
-                pred = model.predict_reward({"pixels": imgs, "action": dummy_actions})
-                val_loss += criterion(pred, rewards).item()
+            for batch in val_loader:
+                pixels, target = [x.to(device) for x in batch]
+                enc_out = model.encoder(pixels).last_hidden_state
+                b, t, d = enc_out.shape
+                features = rearrange(enc_out, "b t d -> (b t) d")
+                features = model.pred_proj(features)
+                features = rearrange(features, "(b t) d -> b t d", b=b, t=t)
 
+                pred = model.reward_head(features).squeeze(-1)
+                val_loss += criterion(pred, target).item()
         print(
             f"✅ Epoch {epoch+1} | Train Loss: {train_loss/len(train_loader):.6f} | Val Loss: {val_loss/len(val_loader):.6f}"
         )
 
     # 4. Save
     output_path = "gr1_reward_tuned_v31_skel.ckpt"
-    full_ckpt = torch.load(checkpoint_path, map_location="cpu")
-    full_ckpt["state_dict"] = {k: v.cpu() for k, v in model.state_dict().items()}
+    full_ckpt = torch.load(str(cp), map_location="cpu", weights_only=False)
+    full_ckpt["state_dict"] = {
+        f"model.{k}": v.cpu() for k, v in model.state_dict().items()
+    }
     torch.save(full_ckpt, output_path)
     print(f"✨ Skeletal Reward Model saved to {output_path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", type=str, required=True, help="Path to v31 backbone")
-    parser.add_argument(
-        "--frames", type=str, required=True, help="Path to dataset_skel_frames dir"
-    )
+    parser.add_argument("--ckpt", type=str, required=True)
+    parser.add_argument("--frames", type=str, required=True)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--batch_size", type=int, default=32)
     args = parser.parse_args()
-
-    train_reward_head_skel(args.ckpt, args.frames, args.epochs, args.lr)
+    train_reward_head_skel(
+        args.ckpt, args.frames, args.epochs, args.lr, args.batch_size
+    )

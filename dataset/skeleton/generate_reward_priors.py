@@ -2,14 +2,13 @@ import os
 import sys
 import numpy as np
 import mujoco
-import pandas as pd
-import shutil
 import torch
+import shutil
 from PIL import Image, ImageDraw
 from pathlib import Path
 from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
-from huggingface_hub import snapshot_download
+from multiprocessing import Pool
+from datasets import load_dataset
 import argparse
 
 # --- Path Stabilization ---
@@ -20,23 +19,48 @@ if REPO_DIR not in sys.path:
 from gr1_config import SCENE_PATH, COMPACT_WIRE_JOINTS
 from gr1_protocol import StandardScaler
 
+# --- Global Worker Context ---
+# This is populated once per worker process to avoid initialization overhead
+_worker_context = {}
 
-def process_frame(row, views, model, data, unscaler):
-    """Processes a single frame and returns the 4-channel tensors"""
-    qpos = row["observation.state"]
-    qpos_raw = unscaler.unscale(np.array(qpos).reshape(1, -1), "observation.state")[0]
+
+def init_worker(repo_id, views, output_dir):
+    """Initializes the plugin and MuJoCo model once per process"""
+    _worker_context["ds"] = load_dataset(repo_id, split="train")
+    _worker_context["model"] = mujoco.MjModel.from_xml_path(SCENE_PATH)
+    _worker_context["data"] = mujoco.MjData(_worker_context["model"])
+    _worker_context["unscaler"] = StandardScaler()
+    _worker_context["views"] = views
+    _worker_context["out_dir"] = Path(output_dir)
+
+
+def process_frame_task(idx):
+    """Processes a single frame index using the worker's cached context"""
+    ds = _worker_context["ds"]
+    model = _worker_context["model"]
+    data = _worker_context["data"]
+    unscaler = _worker_context["unscaler"]
+    views = _worker_context["views"]
+    out_dir = _worker_context["out_dir"]
+
+    row = ds[idx]
+
+    # 1. Proprioception
+    qpos = np.array(row["observation.state"])
+    qpos_raw = unscaler.unscale_action(qpos)
 
     data.qpos[: len(qpos_raw)] = qpos_raw
     mujoco.mj_forward(model, data)
 
     frame_data = {}
     for view_name in views:
-        # 1. Get RGB
-        raw_pixels = row[f"observation.images.{view_name}"]
-        rgb = np.array(raw_pixels, dtype=np.uint8)
+        # 2. Get RGB (Handle both HWC and CHW formats from datasets)
+        rgb = np.array(row[f"observation.images.{view_name}"], dtype=np.uint8)
+        if rgb.shape[0] == 3:
+            rgb = rgb.transpose(1, 2, 0)
         H, W, _ = rgb.shape
 
-        # 2. Render Skeleton
+        # 3. Render Skeleton
         mask = Image.new("L", (W, H), 0)
         draw = ImageDraw.Draw(mask)
 
@@ -71,33 +95,18 @@ def process_frame(row, views, model, data, unscaler):
             if p1 and p2:
                 draw.line([p1, p2], fill=255, width=2)
 
-        # 3. Stack into 4-channel tensor [C, H, W]
+        # 4. Stack into 4-channel tensor [C, H, W]
         skel = np.array(mask, dtype=np.uint8)
         combined = np.concatenate([rgb, skel[..., None]], axis=-1)
-        # Convert to torch tensor immediately
         frame_data[view_name] = torch.from_numpy(combined).permute(2, 0, 1)
 
-    return frame_data
-
-
-def worker_task(chunk_data):
-    """Worker process that handles a chunk of frames"""
-    df_chunk, views, output_dir, start_idx = chunk_data
-    model = mujoco.MjModel.from_xml_path(SCENE_PATH)
-    data = mujoco.MjData(model)
-    unscaler = StandardScaler()
-
-    for i, (_, row) in enumerate(df_chunk.iterrows()):
-        frame_tensors = process_frame(row, views, model, data, unscaler)
-        frame_idx = start_idx + i
-        torch.save(frame_tensors, output_dir / f"frame_{frame_idx:06d}.pt")
+    torch.save(frame_data, out_dir / f"frame_{idx:06d}.pt")
+    return idx
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--repo_id", type=str, required=True, help="HF Repo ID to download dataset"
-    )
+    parser.add_argument("--repo_id", type=str, required=True, help="HF Repo ID")
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -107,18 +116,11 @@ def main():
     parser.add_argument("--cores", type=int, default=4)
     args = parser.parse_args()
 
-    # 1. Download and Locate Parquet
-    local_dir = Path(args.repo_id.split("/")[-1])
-    print(f"📥 Syncing dataset from HF: {args.repo_id}...")
-    snapshot_download(repo_id=args.repo_id, repo_type="dataset", local_dir=local_dir)
-
-    parquet_matches = list(local_dir.rglob("dataset.parquet"))
-    if not parquet_matches:
-        raise FileNotFoundError(f"🚨 Could not find dataset.parquet inside {local_dir}")
-
-    parquet_path = parquet_matches[0]
-    df = pd.read_parquet(parquet_path)
-    print(f"📊 Loaded {len(df)} frames from {parquet_path}")
+    # 1. Initialize Dataset
+    print(f"📥 Loading dataset via HuggingFace: {args.repo_id}...")
+    ds = load_dataset(args.repo_id, split="train")
+    num_frames = len(ds)
+    print(f"📊 Dataset loaded: {num_frames} frames.")
 
     # 2. Setup Output Directories
     out_dir = Path(args.output_dir)
@@ -127,31 +129,44 @@ def main():
     out_dir.mkdir(parents=True)
 
     # 3. Save Metadata
-    meta_cols = ["progress", "episode_index", "frame_index"]
-    metadata = {col: df[col].values.tolist() for col in meta_cols if col in df.columns}
+    print("💾 Saving metadata...")
+    progress = ds["progress"] if "progress" in ds.column_names else ([0.0] * num_frames)
+    ep_idx = (
+        ds["episode_index"]
+        if "episode_index" in ds.column_names
+        else ([0] * num_frames)
+    )
+
+    if "frame_index" in ds.column_names:
+        f_idx = ds["frame_index"]
+    elif "step" in ds.column_names:
+        f_idx = ds["step"]
+    else:
+        f_idx = list(range(num_frames))
+
+    metadata = {
+        "progress": progress,
+        "episode_index": ep_idx,
+        "frame_index": f_idx,
+    }
     torch.save(metadata, out_dir / "metadata.pt")
 
     # 4. Multiprocess Frame Generation
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
-    chunks = np.array_split(df, args.cores)
 
-    start_indices = [0]
-    for c in chunks[:-1]:
-        start_indices.append(start_indices[-1] + len(c))
+    print(f"🚀 Processing {num_frames} frames across {args.cores} cores...")
 
-    task_args = [
-        (chunks[i], views, out_dir, start_indices[i]) for i in range(len(chunks))
-    ]
+    # Using Pool with initializer ensures setup happens only once per process
+    with Pool(
+        processes=args.cores,
+        initializer=init_worker,
+        initargs=(args.repo_id, views, out_dir),
+    ) as p:
+        # chunksize=5 for a responsive progress bar with good efficiency
+        results = p.imap_unordered(process_frame_task, range(num_frames), chunksize=5)
 
-    print(f"🚀 Generating {len(df)} skeletal frames across {args.cores} cores...")
-    with Pool(args.cores) as p:
-        list(
-            tqdm(
-                p.imap_unordered(worker_task, task_args),
-                total=len(chunks),
-                desc="Processing",
-            )
-        )
+        for _ in tqdm(results, total=num_frames, desc="Rendering Skeletons"):
+            pass
 
     print(f"✅ Success! All frames saved to {out_dir}")
 
