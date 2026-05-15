@@ -77,9 +77,10 @@ def harvest(
             # B. Fetch via Plugin
             goal_batch = plugin[last_global_idx]
             goal_pixels = goal_batch["pixels"]
+            goal_skeleton = goal_batch.get("skeleton")
 
             # C. Encode
-            mapper.encode_goal_from_pixels(goal_pixels)
+            mapper.encode_goal_from_pixels(goal_pixels, skeleton=goal_skeleton)
             gallery["goals"][i] = mapper.goal_latent.cpu()
 
             # D. Capture Diagnostics (First 3 frames)
@@ -92,7 +93,13 @@ def harvest(
                 if idx > last_global_idx:
                     break
                 batch = plugin[idx]
-                diag_pixels.append(batch["pixels"])
+
+                # Fuse for diagnostics if in skeletal mode
+                diag_p = batch["pixels"]
+                if use_skeleton and "skeleton" in batch:
+                    diag_p = torch.cat([diag_p, batch["skeleton"]], dim=0)
+
+                diag_pixels.append(diag_p)
                 diag_actions.append(batch["action"][0])
 
             if diag_pixels:

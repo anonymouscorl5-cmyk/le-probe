@@ -91,9 +91,9 @@ def train_reward_head(
             "fusion_type": "linear",
             "num_views": 5 if use_multi_view else 1,
             "img_size": 224,
-            "patch_size": 16,
+            "patch_size": 14,
             "encoder_scale": "tiny",
-            "backbone": "vit_tiny_patch16_224",
+            "backbone": "vit_tiny_patch14_224",
         }
     )
 
@@ -114,7 +114,7 @@ def train_reward_head(
         projector=None,
         pred_proj=None,
     )
-    world_model.reward_head = RewardPredictor(
+    world_model.reward_predictor = RewardPredictor(
         input_dim=encoder.config.hidden_size, hidden_dim=512
     )
 
@@ -139,7 +139,7 @@ def train_reward_head(
     )
 
     # 3. Tuning Loop
-    optimizer = torch.optim.Adam(world_model.reward_head.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(world_model.reward_predictor.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
     print(f"🔥 Starting Skeletal Tuning | Epochs: {epochs}")
@@ -156,7 +156,7 @@ def train_reward_head(
                 emb = world_model.encode({"pixels": pixels})["emb"]  # (B, 1, D)
                 emb = emb.squeeze(1)
 
-            pred = world_model.reward_head(emb)
+            pred = world_model.reward_predictor(emb)
             loss = criterion(pred, progress)
             loss.backward()
             optimizer.step()
@@ -170,17 +170,25 @@ def train_reward_head(
                 pixels = pixels.to(device)
                 progress = progress.to(device).float()
                 emb = world_model.encode({"pixels": pixels})["emb"].squeeze(1)
-                pred = world_model.reward_head(emb)
+                pred = world_model.reward_predictor(emb)
                 val_loss += criterion(pred, progress).item()
 
         print(
             f"📈 Epoch {epoch+1}: Train Loss: {train_loss/len(train_loader):.6f} | Val Loss: {val_loss/len(val_loader):.6f}"
         )
 
-    # 4. Save Artifact
+    # 4. Save Artifact (Merge with original to preserve full 213MB model)
+    full_sd = load_skeletal_state_dict(model_path, device=device)
+    # Update only the reward head parts
+    current_sd = world_model.state_dict()
+    for k, v in current_sd.items():
+        if "reward_predictor" in k:
+            # Inject into the full state dict, preserving the prefix logic
+            full_sd[k] = v
+
     out_name = Path(model_path).stem + "_reward_calibrated.ckpt"
-    torch.save(world_model.state_dict(), out_name)
-    print(f"✨ Calibrated Skeletal Model saved: {out_name}")
+    torch.save(full_sd, out_name)
+    print(f"✨ Calibrated Full Model saved: {out_name} (213MB)")
 
 
 if __name__ == "__main__":

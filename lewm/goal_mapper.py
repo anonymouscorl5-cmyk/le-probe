@@ -135,12 +135,23 @@ class GoalMapper:
             f"💎 Goal Set: Episode {episode_idx}, Frame {frame_idx} (Latent Shape: {self.goal_latent.shape})"
         )
 
-    def encode_goal_from_pixels(self, pixels):
+    def encode_goal_from_pixels(self, pixels, skeleton=None):
         """
         Directly encodes a goal from a pre-processed pixel tensor.
         Input 'pixels' should be (C, H, W) or (V, C, H, W).
+        If 'skeleton' is provided, it is fused into the 4th channel.
         """
         with torch.no_grad():
+            # 1. Handle Skeletal Fusion
+            if self.use_skeleton and skeleton is not None:
+                # pixels: (3, H, W), skeleton: (1, H, W) -> (4, H, W)
+                if pixels.ndim == 3:
+                    pixels = torch.cat([pixels, skeleton], dim=0)
+                elif pixels.ndim == 4:
+                    # (V, 3, H, W) + (V, 1, H, W) -> (V, 4, H, W)
+                    pixels = torch.cat([pixels, skeleton], dim=1)
+
+            # 2. Batching
             if pixels.ndim == 3:
                 # (C, H, W) -> (1, 1, 1, C, H, W)
                 pixels_batch = pixels.unsqueeze(0).unsqueeze(0).unsqueeze(0)
@@ -152,6 +163,7 @@ class GoalMapper:
             else:
                 raise ValueError(f"Invalid pixels shape: {pixels.shape}")
 
+            # 3. Encode
             output = self.model.encode({"pixels": pixels_batch.to(self.device)})
             self.goal_latent = output["emb"].detach()
             return self.goal_latent
