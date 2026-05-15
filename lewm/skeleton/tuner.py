@@ -177,18 +177,29 @@ def train_reward_head(
             f"📈 Epoch {epoch+1}: Train Loss: {train_loss/len(train_loader):.6f} | Val Loss: {val_loss/len(val_loader):.6f}"
         )
 
-    # 4. Save Artifact (Merge with original to preserve full 213MB model)
-    full_sd = load_skeletal_state_dict(model_path, device=device)
-    # Update only the reward head parts
+    # 4. Save Artifact (Preserve full Lightning Checkpoint structure for 213MB parity)
+    raw_ckpt = torch.load(model_path, map_location=device)
     current_sd = world_model.state_dict()
+
+    # Surgical injection into the correct key ('state_dict' or root)
+    target_sd = raw_ckpt.get("state_dict", raw_ckpt)
+
+    # Sync keys (handle model. prefix)
+    updated_keys = 0
     for k, v in current_sd.items():
         if "reward_head" in k:
-            # Inject into the full state dict, preserving the prefix logic
-            full_sd[k] = v
+            # Check if we need to add back the 'model.' prefix
+            target_k = k if k in target_sd else f"model.{k}"
+            if target_k in target_sd:
+                target_sd[target_k] = v
+                updated_keys += 1
 
     out_name = Path(model_path).stem + "_reward_calibrated.ckpt"
-    torch.save(full_sd, out_name)
-    print(f"✨ Calibrated Full Model saved: {out_name} (213MB)")
+    torch.save(raw_ckpt, out_name)
+    print(f"✨ Calibrated Heavy Model saved: {out_name} (213MB)")
+    print(
+        f"✅ Injection Audit: Successfully updated {updated_keys}/{len(target_sd)} reward_head keys."
+    )
 
 
 if __name__ == "__main__":

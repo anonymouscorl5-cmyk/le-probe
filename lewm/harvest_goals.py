@@ -15,10 +15,10 @@ if ROOT_DIR not in sys.path:
 
 
 import torch
+from tqdm import tqdm
 import argparse
 import numpy as np
 from pathlib import Path
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # Resolve project paths dynamically
 RESEARCH_DIR = Path(__file__).parent.absolute()
@@ -57,27 +57,53 @@ def harvest(
 
     # 2. Initialize Data Engine (Plugin)
     PluginClass = SkeletonDataPlugin if use_skeleton else LEWMDataPlugin
+    keys = ["observation.images.world_center", "action"]
+    if use_multi_view:
+        keys = [
+            "observation.images.world_center",
+            "observation.images.world_left",
+            "observation.images.world_right",
+            "observation.images.world_top",
+            "observation.images.world_wrist",
+            "action",
+        ]
+
     plugin = PluginClass(
         repo_id=repo_id,
-        keys_to_load=["observation.images.world_center", "action"],
+        keys_to_load=keys,
         num_steps=1,
         use_multi_view=use_multi_view,
     )
-    dataset = plugin.dataset
-    num_episodes = dataset.num_episodes
+    dataset = plugin.lerobot_dataset
+    num_episodes = plugin.lerobot_dataset.num_episodes
 
     gallery = {"goals": {}, "diagnostics": {}}
 
     # 3. Sweep Episodes
     for i in tqdm(range(num_episodes), desc="Harvesting Episodes"):
         try:
-            # A. Identify Success Frame
-            last_global_idx = dataset.episode_data_index["to"][i] - 1
+            # A. Identify Success Frame (Manual boundary calculation for robustness)
+            indices = (plugin.episode_indices == i).nonzero(as_tuple=True)[0]
+            if len(indices) == 0:
+                raise ValueError(
+                    f"🚨 Integrity Error: Episode {i} exists in metadata but has 0 frames in the dataset!"
+                )
+
+            start_global_idx = indices[0].item()
+            last_global_idx = indices[-1].item()
 
             # B. Fetch via Plugin
             goal_batch = plugin[last_global_idx]
-            goal_pixels = goal_batch["pixels"]
-            goal_skeleton = goal_batch.get("skeleton")
+            goal_pixels = goal_batch["pixels"].squeeze(0)  # (V, C, H, W) or (C, H, W)
+            goal_skeleton = None
+            if use_skeleton:
+                goal_skeleton = goal_batch.get("skeletons_raw")
+                if goal_skeleton is None:
+                    raise ValueError(
+                        f"🚨 Missing 'skeletons_raw' in episode {i} despite use_skeleton=True!"
+                    )
+                goal_skeleton = goal_skeleton.squeeze(0)  # (V, 1, H, W) or (1, H, W)
+                goal_skeleton = goal_skeleton.float().mean(dim=-3, keepdim=True).byte()
 
             # C. Encode
             mapper.encode_goal_from_pixels(goal_pixels, skeleton=goal_skeleton)
@@ -86,7 +112,6 @@ def harvest(
             # D. Capture Diagnostics (First 3 frames)
             diag_pixels = []
             diag_actions = []
-            start_global_idx = dataset.episode_data_index["from"][i]
 
             for f_offset in range(3):
                 idx = start_global_idx + f_offset
@@ -95,12 +120,21 @@ def harvest(
                 batch = plugin[idx]
 
                 # Fuse for diagnostics if in skeletal mode
-                diag_p = batch["pixels"]
-                if use_skeleton and "skeleton" in batch:
-                    diag_p = torch.cat([diag_p, batch["skeleton"]], dim=0)
+                diag_p = batch["pixels"].squeeze(0)  # (V, C, H, W)
+                if use_skeleton:
+                    diag_skel = batch["skeletons_raw"].squeeze(0)
+                    # Force single-channel (C is always -3)
+                    diag_skel = diag_skel.float().mean(dim=-3, keepdim=True).byte()
+
+                    # Fuse: (V, 3, H, W) + (V, 1, H, W) -> (V, 4, H, W)
+                    if diag_p.ndim == 4:
+                        diag_p = torch.cat([diag_p, diag_skel], dim=1)
+                    else:
+                        # Single view: (3, H, W) + (1, H, W) -> (4, H, W)
+                        diag_p = torch.cat([diag_p, diag_skel], dim=0)
 
                 diag_pixels.append(diag_p)
-                diag_actions.append(batch["action"][0])
+                diag_actions.append(batch["action"].squeeze(0))
 
             if diag_pixels:
                 gallery["diagnostics"][i] = {

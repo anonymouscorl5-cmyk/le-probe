@@ -21,7 +21,12 @@ except ImportError:
 
 # Local imports
 from lewm.le_wm.jepa import JEPA
-from lewm.skeleton.skeletal_utils import load_skeletal_state_dict, reconstruct_4ch_frame
+from lewm.skeleton.skeletal_utils import reconstruct_4ch_frame
+from lewm.gr1_modules import MultiViewJEPA
+from lewm.train_lewm import RewardPredictor
+from lewm.multi_view_encoder import get_multi_view_encoder
+from lewm.skeleton.encoder import patch_vit_for_skeleton
+from omegaconf import OmegaConf
 
 
 class GoalMapper:
@@ -40,22 +45,57 @@ class GoalMapper:
         skel_frames_dir=None,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.dataset_root = Path(dataset_root)
+        self.dataset_root = Path(dataset_root) if dataset_root is not None else None
         self.use_multi_view = use_multi_view
         self.num_views = num_views
         self.use_skeleton = use_skeleton
         self.skel_frames_dir = Path(skel_frames_dir) if skel_frames_dir else None
 
         # 1. Initialize the Model
-        # We assume the model is a JEPA object or a checkpoint containing it
         if str(model_path).endswith(".pt") or str(model_path).endswith(".ckpt"):
             print(f"🧠 Loading Model from Checkpoint: {model_path}")
-            if use_skeleton:
-                self.model = load_skeletal_state_dict(model_path)
+            raw_data = torch.load(model_path, map_location=self.device)
+
+            # If it's a dict, we need to instantiate the architecture
+            if isinstance(raw_data, dict):
+                print(
+                    "🧬 Checkpoint detected as Dict. Instantiating MultiViewJEPA backbone..."
+                )
+                # Default Skeletal Config (matching tuner.py)
+                cfg = OmegaConf.create(
+                    {
+                        "backbone": "vit_tiny_patch14_224",
+                        "use_multi_view": use_multi_view,
+                        "num_views": num_views,
+                        "img_size": 224,
+                        "fusion_type": "late",
+                        "encoder_scale": "tiny",
+                        "patch_size": 14,
+                    }
+                )
+                encoder = get_multi_view_encoder(cfg)
+                if use_skeleton:
+                    patch_vit_for_skeleton(encoder.backbone)
+
+                self.model = MultiViewJEPA(
+                    encoder=encoder,
+                    predictor=None,
+                    action_encoder=None,
+                    projector=None,
+                    pred_proj=None,
+                )
+                self.model.reward_head = RewardPredictor(
+                    input_dim=encoder.config.hidden_size, hidden_dim=512
+                )
+
+                # Load weights (handles model. prefix)
+                sd = raw_data.get("state_dict", raw_data)
+                # Strip model. prefix if present
+                clean_sd = {k.replace("model.", ""): v for k, v in sd.items()}
+                self.model.load_state_dict(clean_sd, strict=False)
             else:
-                self.model = torch.load(model_path, map_location=self.device)
+                self.model = raw_data
         else:
-            # Assume it's a directory or a generic path (not supported here)
             raise ValueError(f"Unsupported model path: {model_path}")
 
         self.model.to(self.device).eval()
