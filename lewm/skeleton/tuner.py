@@ -88,9 +88,11 @@ def train_reward_head(
     cfg = OmegaConf.create(
         {
             "use_multi_view": use_multi_view,
-            "fusion": "linear",
+            "fusion_type": "linear",
             "num_views": 5 if use_multi_view else 1,
             "img_size": 224,
+            "patch_size": 16,
+            "encoder_scale": "tiny",
             "backbone": "vit_tiny_patch16_224",
         }
     )
