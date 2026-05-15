@@ -42,14 +42,12 @@ class GoalMapper:
         use_multi_view=False,
         num_views=1,
         use_skeleton=False,
-        skel_frames_dir=None,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dataset_root = Path(dataset_root) if dataset_root is not None else None
         self.use_multi_view = use_multi_view
         self.num_views = num_views
         self.use_skeleton = use_skeleton
-        self.skel_frames_dir = Path(skel_frames_dir) if skel_frames_dir else None
 
         # 1. Initialize the Model
         if str(model_path).endswith(".pt") or str(model_path).endswith(".ckpt"):
