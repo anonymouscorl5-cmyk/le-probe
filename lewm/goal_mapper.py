@@ -66,7 +66,7 @@ class GoalMapper:
                         "use_multi_view": use_multi_view,
                         "num_views": num_views,
                         "img_size": 224,
-                        "fusion_type": "late",
+                        "fusion_type": "linear",
                         "encoder_scale": "tiny",
                         "patch_size": 14,
                     }

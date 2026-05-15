@@ -57,15 +57,16 @@ def harvest(
 
     # 2. Initialize Data Engine (Plugin)
     PluginClass = SkeletonDataPlugin if use_skeleton else LEWMDataPlugin
-    keys = ["observation.images.world_center", "action"]
+    keys = ["world_center", "action"]
     if use_multi_view:
         keys = [
-            "observation.images.world_center",
-            "observation.images.world_left",
-            "observation.images.world_right",
-            "observation.images.world_top",
-            "observation.images.world_wrist",
+            "observation.state",
             "action",
+            "world_center",
+            "world_left",
+            "world_right",
+            "world_top",
+            "world_wrist",
         ]
 
     plugin = PluginClass(
