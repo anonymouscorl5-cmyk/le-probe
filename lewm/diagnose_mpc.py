@@ -116,33 +116,30 @@ def run_diagnostic(
         # A. Prepare Observation Batch
         pixel_list = []
         latent_list = []
-        for eid in batch_ids:
-            pixels = gallery["diagnostics"][eid]["pixels"]  # Expected: (T, C, H, W)
+        for ep_id in batch_ids:
+            diag_entry = gallery["diagnostics"][ep_id]
+            pixels = diag_entry["pixels"]  # (T, V, C, H, W)
 
-            if use_multi_view:
-                # GoalMapper expects (T, V, C, H, W)
-                # If gallery pixels are (T, C, H, W), we repeat them for 5 views (fallback)
-                if pixels.ndim == 4:
-                    pixels = pixels.unsqueeze(1).repeat(1, 5, 1, 1, 1)
-                elif pixels.ndim == 5:
-                    # Already multi-view (V=5)
-                    pass
-            else:
-                # Single view expects (T, 1, C, H, W)
-                if pixels.ndim == 4:
-                    pixels = pixels.unsqueeze(1)
+            # 1. Handle Multi-View Geometry
+            if use_multi_view and pixels.ndim == 4:
+                pixels = pixels.unsqueeze(1).repeat(1, 5, 1, 1, 1)
+            elif not use_multi_view and pixels.ndim == 4:
+                pixels = pixels.unsqueeze(1)
+
+            # 2. DOUBLE-PADDING CHEAT
+            # Wrap in an extra dimension so library's v[:, 0] preserves 6D
+            pixels = pixels.unsqueeze(0)  # (1, T, V, C, H, W)
 
             pixel_list.append(pixels)
-            latent_list.append(gallery["goals"][eid])
+            latent_list.append(gallery["goals"][ep_id])
 
-        # Pixels: (B, T, V, C, H, W), Latents: (B, 1, 192)
+        # Pixels: (B, 1, T, V, C, H, W), Actions: (B, 1, T, 32), Latents: (B, 1, 192)
         info_dict = {
             "pixels": torch.stack(pixel_list).to(device),
-            "action": torch.zeros(actual_batch_size, 3, 32).to(
-                device
-            ),  # Mock history actions
+            "action": torch.zeros(actual_batch_size, 3, 32).unsqueeze(1).to(device),
         }
-        mapper.goal_latent = torch.stack(latent_list).to(device)
+        # Squeeze out the redundant (1, 1, D) -> (B, 1, D)
+        mapper.goal_latent = torch.stack(latent_list).squeeze(1).to(device)
 
         # B. Initial Cost (Current observations vs Goal)
         with torch.no_grad():

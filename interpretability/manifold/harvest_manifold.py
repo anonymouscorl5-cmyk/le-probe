@@ -52,7 +52,6 @@ def harvest_manifold(
         model_path=model_path,
         dataset_root=resolved_root,
         use_multi_view=use_multi_view,
-        fusion_type=fusion_type,
         num_views=5 if use_multi_view else 1,
         use_skeleton=use_skeleton,
     )
