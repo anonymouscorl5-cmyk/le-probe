@@ -8,6 +8,7 @@ from tqdm import tqdm
 from torchvision import transforms
 import argparse
 import stable_pretraining as spt
+from stable_pretraining import data as dt
 from einops import rearrange
 
 # --- Path Stabilization ---
@@ -28,7 +29,6 @@ from lewm.train_lewm import RewardPredictor
 from lewm.skeleton.encoder import patch_vit_for_skeleton
 from lewm.skeleton.skeletal_utils import load_skeletal_state_dict, reconstruct_4ch_frame
 from lewm.multi_view_encoder import get_multi_view_encoder
-from lewm.goal_mapper import GoalMapper
 from omegaconf import OmegaConf
 
 
@@ -95,11 +95,12 @@ def train_reward_head(
         }
     )
 
-    # Use GoalMapper's transform to ensure ImageNet normalization parity
-    mapper_for_transform = GoalMapper(
-        model_path, dataset_root=None, use_multi_view=use_multi_view, use_skeleton=True
+    # Define standard ImageNet transform directly to avoid GoalMapper dependency crash
+    imagenet_stats = dt.dataset_stats.ImageNet
+    transform = dt.transforms.Compose(
+        dt.transforms.ToImage(**imagenet_stats, source="pixels", target="pixels"),
+        dt.transforms.Resize(224, source="pixels", target="pixels"),
     )
-    transform = mapper_for_transform.transform
 
     encoder = get_multi_view_encoder(cfg)
     patch_vit_for_skeleton(encoder.backbone)
