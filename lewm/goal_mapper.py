@@ -240,38 +240,33 @@ class GoalMapper:
         B, S = actions.size(0), actions.size(1)
         pixels_input = obs_dict["pixels"].to(self.device)
         target_ndim = 7
-        print(f"[GOAL_MAPPER] pixels_input shape before: {pixels_input.shape}")
-        print(f"[GOAL_MAPPER] actions shape before: {actions.shape}")
+
         if pixels_input.ndim > target_ndim:
             # (B, S, 1, T_history, V, C, H, W) -> (B, S, T_history, V, C, H, W)
             pixels_input = pixels_input.squeeze(2)
         if actions.ndim > 4:
             # (1, B, S, T_history, 32) -> (B, S, T_history, 32)
             actions = actions.squeeze(0)
-        print(f"[GOAL_MAPPER] pixels_input shape after: {pixels_input.shape}")
-        print(f"[GOAL_MAPPER] actions shape after: {actions.shape}")
 
         # 2. Optimized Encoding
         # All samples S share the same history. We encode the batch once.
         info = self.model.encode({"pixels": pixels_input[:, 0]})
         init_emb = info["emb"]  # (B, T_history, 192)
-        print(f"[GOAL_MAPPER] init_emb shape: {init_emb.shape}")
         curr_emb = init_emb.repeat_interleave(S, dim=0)  # (B * S, T_history, 192)
-        print(f"[GOAL_MAPPER] curr_emb shape: {curr_emb.shape}")
 
         # 3. History Actions Normalization
         hist_actions = obs_dict.get("action", None)  # (B, S, T_history, 32)
-        print(f"[GOAL_MAPPER] hist_actions shape before: {hist_actions.shape}")
+
         if hist_actions is None:
-            hist_actions = torch.zeros(B, S, actions.size(-1)).to(self.device)
+            hist_actions = torch.zeros(B, S, init_emb.size(1), actions.size(-1)).to(
+                self.device
+            )
         if hist_actions.ndim > 4:
             # (B, S, 1, T_history, 32) -> (B, S, T_history, 32)
             hist_actions = hist_actions.squeeze(2)
-        print(f"[GOAL_MAPPER] hist_actions shape after: {hist_actions.shape}")
 
         # (B, S, T_history, 32) -> (B * S, T_history, 32)
         flat_hist_actions = hist_actions[:, 0].repeat_interleave(S, dim=0)
-        print(f"[GOAL_MAPPER] flat_hist_actions shape: {flat_hist_actions.shape}")
 
         # 4. Prepare Plan Actions (B * S, T, D) with MANIFOLD SQUASHING
         # flat_hist_actions: (B * S, T_history, 32), flat_plan_actions: (B * S, T_horizon, 32)
@@ -280,75 +275,53 @@ class GoalMapper:
             actions.view(B * S, -1, actions.size(-1))
         )
         all_actions = torch.cat([flat_hist_actions, flat_plan_actions], dim=1)
-        print(f"[GOAL_MAPPER] all_actions shape: {all_actions.shape}")
 
         # 5. Sliding Window Rollout (Flattened BS space)
         pred_latents = []
         T_history = flat_hist_actions.size(1)
         T_horizon = flat_plan_actions.size(1)
         for T in range(T_horizon):
-            print(f"============ {T} ============")
             emb_window = curr_emb[:, -T_history:, :]  # (B, T_history, 192)
-            print(f"[GOAL_MAPPER] emb_window shape: {emb_window.shape}")
             act_window = all_actions[:, T : T + T_history, :]  # (B * S, T_history, 32)
-            print(f"[GOAL_MAPPER] act_window shape: {act_window.shape}")
             act_emb = self.model.action_encoder(act_window)  # (B * S, T_history, 192)
-            print(f"[GOAL_MAPPER] act_emb shape: {act_emb.shape}")
             pred_emb = self.model.predict(
                 emb_window, act_emb
             )  # (B * S, T_history, 192)
-            print(f"[GOAL_MAPPER] pred_emb shape: {pred_emb.shape}")
             last_pred = pred_emb[:, -1:, :]  # (B * S, 1, 192)
-            print(f"[GOAL_MAPPER] last_pred shape: {last_pred.shape}")
             curr_emb = torch.cat(
                 [curr_emb, last_pred], dim=1
             )  # (B * S, curr_emb.size(1) + 1, 192)
-            print(f"[GOAL_MAPPER] curr_emb shape: {curr_emb.shape}")
             pred_latents.append(last_pred)
 
         # 6. Optimized Planning Cost Logic
-        print(f"============   ============")
         all_preds = torch.cat(pred_latents, dim=1)  # (B * S, T_horizon, 192)
-        print(f"[GOAL_MAPPER] all_preds shape: {all_preds.shape}")
 
         # 7. Smart Cost Calculation
         # (B * S, T_horizon)
         reward_pred = self.model.reward_head(all_preds).squeeze(-1)
         reward_weight = 50.0
         dist = (10.0 - reward_pred) * reward_weight  # (B * S, T_horizon)
-        print(f"[GOAL_MAPPER] dist shape: {dist.shape}")
 
         # Latent distance cost
         # repeat (current B * S) // (original B * S) times.
         goal_target = self.goal_latent.to(all_preds.dtype).repeat_interleave(
             B * S // (self.goal_latent.size(0) * self.goal_latent.size(1)), dim=0
         )  # (B * S, 1, 192)
-        print(f"[GOAL_MAPPER] goal_target shape: {goal_target.shape}")
 
         # (B * S, T_horizon)
         dists_to_latents = torch.cdist(all_preds, goal_target).squeeze(-1)
-        print(f"[GOAL_MAPPER] dists_to_latents shape: {dists_to_latents.shape}")
-
         # (B * S, 1)
         min_latent_dist_per_step = dists_to_latents.min(dim=-1).values.unsqueeze(-1)
-        print(
-            "[GOAL_MAPPER] min_latent_dist_per_step shape: "
-            f"{min_latent_dist_per_step.shape}"
-        )
 
         # Global Compass Weight: Reduce to 0.5 to let the Reward Head lead.
         dist = dist + min_latent_dist_per_step * 0.5  # (B * S, T_horizon)
-        print(f"[GOAL_MAPPER] dist shape before: {dist.shape}")
         dist = dist.mean(dim=-1)  # (B * S,)
-        print(f"[GOAL_MAPPER] dist shape after: {dist.shape}")
 
         # 8. Smoothness Penalty
         last_real_action = flat_hist_actions[:, -1, :]  # (B * S, 32)
-        print(f"[GOAL_MAPPER] last_real_action shape: {last_real_action.shape}")
         jump_start = torch.mean(
             (flat_plan_actions[:, 0, :] - last_real_action) ** 2, dim=-1
         )  # (B * S,)
-        print(f"[GOAL_MAPPER] jump_start shape: {jump_start.shape}")
 
         # Delta within the Plan Horizon (B * S, T_horizon - 1, D)
         if T_horizon > 1:
@@ -359,11 +332,9 @@ class GoalMapper:
             jump_internal = torch.mean(jitters, dim=1)
         else:
             jump_internal = 0.0
-        print(f"[GOAL_MAPPER] jump_internal shape: {jump_internal.shape}")
 
         smoothness_weight = 100.0
         dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
-        print(f"[GOAL_MAPPER] dist shape 2: {dist.shape}")
 
         return dist.view(B, S)
 
