@@ -265,12 +265,12 @@ class GoalMapper:
         if hist_actions is None:
             hist_actions = torch.zeros(B, S, actions.size(-1)).to(self.device)
         if hist_actions.ndim > 4:
-            # (1, B, S, T_history, 32) -> (B, S, T_history, 32)
-            hist_actions = hist_actions.squeeze(0)
+            # (B, S, 1, T_history, 32) -> (B, S, T_history, 32)
+            hist_actions = hist_actions.squeeze(2)
         print(f"[GOAL_MAPPER] hist_actions shape after: {hist_actions.shape}")
 
         # (B, S, T_history, 32) -> (B * S, T_history, 32)
-        flat_hist_actions = hist_actions.squeeze(1).repeat_interleave(S, dim=0)
+        flat_hist_actions = hist_actions[:, 0].repeat_interleave(S, dim=0)
         print(f"[GOAL_MAPPER] flat_hist_actions shape: {flat_hist_actions.shape}")
 
         # 4. Prepare Plan Actions (B * S, T, D) with MANIFOLD SQUASHING
@@ -286,10 +286,9 @@ class GoalMapper:
         pred_latents = []
         T_history = flat_hist_actions.size(1)
         T_horizon = flat_plan_actions.size(1)
-        curr_emb = init_emb
         for T in range(T_horizon):
             print(f"============ {T} ============")
-            emb_window = curr_emb[:, -T_history:, :]  # (B * S, T_history, 192)
+            emb_window = curr_emb[:, -T_history:, :]  # (B, T_history, 192)
             print(f"[GOAL_MAPPER] emb_window shape: {emb_window.shape}")
             act_window = all_actions[:, T : T + T_history, :]  # (B * S, T_history, 32)
             print(f"[GOAL_MAPPER] act_window shape: {act_window.shape}")
@@ -320,7 +319,10 @@ class GoalMapper:
         print(f"[GOAL_MAPPER] dist shape: {dist.shape}")
 
         # Latent distance cost
-        goal_target = self.goal_latent.to(all_preds.dtype)  # (B * S, 1, 192)
+        # repeat (current B * S) // (original B * S) times.
+        goal_target = self.goal_latent.to(all_preds.dtype).repeat_interleave(
+            B * S // (self.goal_latent.size(0) * self.goal_latent.size(1)), dim=0
+        )  # (B * S, 1, 192)
         print(f"[GOAL_MAPPER] goal_target shape: {goal_target.shape}")
 
         # (B * S, T_horizon)
