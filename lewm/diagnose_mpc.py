@@ -137,7 +137,6 @@ def run_diagnostic(
         }
         # Squeeze out the redundant (B, 1, 1, 192) --> (B, 1, 192)
         mapper.goal_latent = torch.stack(latent_list).squeeze(1).to(device)
-        print(f"[DIAGNOSTIC] Goal latent: {mapper.goal_latent.shape}")
 
         # B. Initial Cost (Current observations vs Goal)
         with torch.no_grad():
