@@ -126,22 +126,23 @@ def run_diagnostic(
             elif pixels.ndim == 4:
                 pixels = pixels.unsqueeze(1)
 
+            pixels = pixels.unsqueeze(0)  # (1, T_history, V, C, H, W)
             pixel_list.append(pixels)
             latent_list.append(gallery["goals"][ep_id])
 
-        # Pixels: (B, T_history, V, C, H, W), Actions: (B, T_history, 32), Latents: (B, 1, 192)
+        # Pixels: (B, 1, T_history, V, C, H, W), Actions: (B, 1, T_history, 32), Latents: (B, 1, 1, 192)
         info_dict = {
             "pixels": torch.stack(pixel_list).to(device),
-            "action": torch.zeros(actual_batch_size, 3, 32).to(device),
+            "action": torch.zeros(actual_batch_size, 1, 3, 32).to(device),
         }
-        # Squeeze out the redundant (B, 1, 1, 192) -> (B, 1, 192)
+        # Squeeze out the redundant (B, 1, 1, 192) --> (B, 1, 192)
         mapper.goal_latent = torch.stack(latent_list).squeeze(1).to(device)
         print(f"[DIAGNOSTIC] Goal latent: {mapper.goal_latent.shape}")
 
         # B. Initial Cost (Current observations vs Goal)
         with torch.no_grad():
             initial_cost = mapper.get_cost(
-                info_dict, torch.zeros(actual_batch_size, 15, 32).to(device)
+                info_dict, torch.zeros(actual_batch_size, 1, 15, 32).to(device)
             )
 
         # C. Vectorized Planning
