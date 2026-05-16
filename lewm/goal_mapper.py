@@ -303,10 +303,14 @@ class GoalMapper:
         dist = (10.0 - reward_pred) * reward_weight  # (B * S, T_horizon)
 
         # Latent distance cost
-        # repeat (current B * S) // (original B * S) times.
-        goal_target = self.goal_latent.to(all_preds.dtype).repeat_interleave(
-            B * S // (self.goal_latent.size(0) * self.goal_latent.size(1)), dim=0
-        )  # (B * S, 1, 192)
+        # repeat (current B * S) // (number of unique goals) times.
+        num_goals = self.goal_latent.view(-1, self.goal_latent.size(-1)).size(0)
+        goal_target = self.goal_latent.view(num_goals, 1, -1).to(all_preds.dtype)
+
+        expansion_factor = (B * S) // num_goals
+        if expansion_factor > 1:
+            goal_target = goal_target.repeat_interleave(expansion_factor, dim=0)
+        # (B * S, 1, 192) or (N_goals, 1, 192) if no expansion needed
 
         # (B * S, T_horizon)
         dists_to_latents = torch.cdist(all_preds, goal_target).squeeze(-1)
