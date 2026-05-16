@@ -118,33 +118,30 @@ def run_diagnostic(
         latent_list = []
         for ep_id in batch_ids:
             diag_entry = gallery["diagnostics"][ep_id]
-            pixels = diag_entry["pixels"]  # (T, V, C, H, W)
+            pixels = diag_entry["pixels"]  # (T_history, V, C, H, W)
 
             # 1. Handle Multi-View Geometry
             if use_multi_view and pixels.ndim == 4:
                 pixels = pixels.unsqueeze(1).repeat(1, 5, 1, 1, 1)
-            elif not use_multi_view and pixels.ndim == 4:
+            elif pixels.ndim == 4:
                 pixels = pixels.unsqueeze(1)
-
-            # 2. DOUBLE-PADDING CHEAT
-            # Wrap in an extra dimension so library's v[:, 0] preserves 6D
-            pixels = pixels.unsqueeze(0)  # (1, T, V, C, H, W)
 
             pixel_list.append(pixels)
             latent_list.append(gallery["goals"][ep_id])
 
-        # Pixels: (B, 1, T, V, C, H, W), Actions: (B, 1, T, 32), Latents: (B, 1, 192)
+        # Pixels: (B, T_history, V, C, H, W), Actions: (B, T_history, 32), Latents: (B, 1, 192)
         info_dict = {
             "pixels": torch.stack(pixel_list).to(device),
-            "action": torch.zeros(actual_batch_size, 3, 32).unsqueeze(1).to(device),
+            "action": torch.zeros(actual_batch_size, 3, 32).to(device),
         }
-        # Squeeze out the redundant (1, 1, D) -> (B, 1, D)
+        # Squeeze out the redundant (B, 1, 1, 192) -> (B, 1, 192)
         mapper.goal_latent = torch.stack(latent_list).squeeze(1).to(device)
+        print(f"[DIAGNOSTIC] Goal latent: {mapper.goal_latent.shape}")
 
         # B. Initial Cost (Current observations vs Goal)
         with torch.no_grad():
             initial_cost = mapper.get_cost(
-                info_dict, torch.zeros(actual_batch_size, 1, 15, 32).to(device)
+                info_dict, torch.zeros(actual_batch_size, 15, 32).to(device)
             )
 
         # C. Vectorized Planning

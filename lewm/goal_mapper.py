@@ -231,64 +231,102 @@ class GoalMapper:
             return self.goal_latent
 
     @torch.no_grad()
-    @torch.no_grad()
-    def get_cost(self, obs_dict, action_candidates):
+    def get_cost(self, obs_dict, actions):
         """
-        PRECISION PLANNING COST (Manifold-Aligned)
-        Handles 7D MPC inputs by flattening Batch/Samples for library compatibility.
+        EVIDENCE-BASED COST CALCULATION (Transparent Adapter)
+        Flattens (B, S) into a single dimension to satisfy the 6D Library requirement.
         """
-        if self.goal_latent is None:
-            raise ValueError("❌ GoalMapper Error: Goal not set before planning!")
+        # 1. Extract and Force 6D Observation (B, T_history, V, C, H, W)
+        B, S = actions.size(0), 1
+        pixels_input = obs_dict["pixels"].to(self.device)
+        target_ndim = 6
+        while pixels_input.ndim > target_ndim:
+            pixels_input = pixels_input.squeeze(
+                0
+            )  # (1, B, T_history, V, C, H, W) -> (B, T_history, V, C, H, W)
+        while actions.ndim > 3:
+            actions = actions.squeeze(0)  # (1, B, T_history, 32) -> (B, T_history, 32)
 
-        # 1. Flatten Batch and Samples to satisfy the 6D Library requirement
-        # pixels: (B, S, T, V, C, H, W) -> (B*S, T, V, C, H, W)
-        pixels = obs_dict["pixels"].to(self.device)
-        B, S, T_obs, V, C, H, W = pixels.shape
-        flat_pixels = pixels.reshape(B * S, T_obs, V, C, H, W)
+        # 2. Optimized Encoding
+        # All samples S share the same history. We encode the batch once.
+        info = self.model.encode({"pixels": pixels_input})
+        init_emb = info["emb"]  # (B, T_history, 192)
 
-        # Actions: (B, S, T_plan, D) -> (B*S, T_plan, D)
-        actions = action_candidates.to(self.device)
-        T_plan = actions.size(2)
-        flat_actions = actions.reshape(B * S, T_plan, -1)
+        # 3. History Actions Normalization
+        hist_actions = obs_dict.get("action", None)  # (B, T_history, 32)
+        if hist_actions is None:
+            hist_actions = torch.zeros(B, init_emb.size(1), actions.size(-1)).to(
+                self.device
+            )
+        while hist_actions.ndim > 3:
+            hist_actions = hist_actions.squeeze(
+                1
+            )  # (B, 1, T_history, D) -> (B, T_history, D)
 
-        # 2. Execute Prediction Rollout (Using 6D Flattened Tensors)
-        info_dict = {
-            "pixels": flat_pixels,
-            "action": obs_dict.get("action", torch.zeros_like(actions[:, :, :1]))
-            .reshape(B * S, -1, actions.size(-1))
-            .to(self.device),
-            "goal_emb": self.goal_latent,  # (B, 1, D) - will be handled by criterion or manual logic
-        }
+        # 4. Prepare Plan Actions (B, T_history, D) with MANIFOLD SQUASHING
+        # actions: (B, T_horizon, 32), hist_actions: (B, T_history, 32)
+        plan_actions = self.manifold_squash(actions)
+        all_actions = torch.cat(
+            [hist_actions, plan_actions], dim=1
+        )  # (B, T_history + T_horizon, 32)
 
-        info_dict = self.model.rollout(info_dict, flat_actions)
+        # 5. Sliding Window Rollout (Flattened BS space)
+        T_history = init_emb.size(1)
+        T_horizon = actions.size(1)
+        pred_latents = []
+        curr_emb = init_emb
+        print(f"[DIAGNOSTIC] Starting temporal rollout (T={T_horizon})...")
+        for t in range(T_horizon):
+            emb_window = curr_emb[:, -T_history:, :]  # (B, T_history, 192)
+            act_window = all_actions[:, t : t + T_history, :]  # (B, T_history, 32)
 
-        # 3. Unfold Results back to (B, S)
-        # predicted_emb: (B*S, T_plan, D) -> (B, S, T_plan, D)
-        pred_latents = info_dict["predicted_emb"].reshape(B, S, T_plan, -1)
-        _, _, _, D_feat = pred_latents.shape
+            act_emb = self.model.action_encoder(act_window)  # (B, T_history, 192)
+            pred_emb = self.model.predict(emb_window, act_emb)  # (B, T_history, 192)
+            last_pred = pred_emb[:, -1:, :]  # (B, 1, 192)
+            curr_emb = torch.cat(
+                [curr_emb, last_pred], dim=1
+            )  # (B, curr_emb.size(1) + 1, 192)
+            pred_latents.append(last_pred)
 
-        # 4. Smart Cost Calculation
-        # a. PRIMARY REWARD: Tuned Reward Head (Task Progress)
-        flat_preds = pred_latents.reshape(-1, D_feat)
-        reward_pred = self.model.reward_head(flat_preds).reshape(B, S, T_plan)
-        reward_cost = (10.0 - reward_pred).mean(dim=-1) * 50.0
+        # 6. Optimized Planning Cost Logic
+        all_preds = torch.cat(pred_latents, dim=1)  # (B, T_horizon, 192)
 
-        # b. GLOBAL COMPASS: Latent Euclidean Distance
-        # Expand goal_latent (B, 1, D) to (B, S, T_plan, D)
-        goal_expanded = (
-            self.goal_latent.unsqueeze(1).unsqueeze(1).expand(B, S, T_plan, D_feat)
-        )
-        latent_cost = F.mse_loss(pred_latents, goal_expanded, reduction="none").mean(
-            dim=(2, 3)
-        )
+        # 7. Smart Cost Calculation
+        reward_pred = self.model.reward_head(all_preds).squeeze(-1)  # (B, T_horizon)
+        reward_weight = 50.0
+        dist = (10.0 - reward_pred) * reward_weight  # (B, T_horizon)
 
-        # c. PHYSICAL GRACE: Smoothness Penalty
-        jitters = (actions[:, :, 1:] - actions[:, :, :-1]).pow(2).mean(dim=(2, 3))
+        # Latent distance cost
+        goal_target = self.goal_latent.to(all_preds.dtype)  # (B, 1, 192)
+        dists_to_latents = torch.cdist(all_preds, goal_target).squeeze(
+            -1
+        )  # (B, T_horizon)
+        min_latent_dist_per_step = dists_to_latents.min(dim=-1).values  # (B, T_horizon)
+
+        # Global Compass Weight: Reduce to 0.5 to let the Reward Head lead.
+        dist = dist + min_latent_dist_per_step * 0.5
+        dist = dist.mean(dim=-1)  # (B,)
+
+        # 8. Smoothness Penalty
+        last_real_action = hist_actions[:, -1, :]  # (B, 32)
+        jump_start = torch.mean(
+            (plan_actions[:, 0, :] - last_real_action) ** 2, dim=-1
+        )  # (B,)
+
+        # Delta within the Plan Horizon (BS, T-1, D)
+        if T_horizon > 1:
+            jitters = torch.mean(
+                (plan_actions[:, 1:, :] - plan_actions[:, :-1, :]) ** 2,
+                dim=-1,
+            )  # (B, T_horizon - 1)
+            jump_internal = torch.mean(jitters, dim=1)
+        else:
+            jump_internal = 0.0
+
         smoothness_weight = 100.0
+        dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
 
-        total_cost = reward_cost + (latent_cost * 0.5) + (jitters * smoothness_weight)
-
-        return total_cost
+        return dist.view(B, S)
 
     def predict(self, *args, **kwargs):
         """Proxy to the internal World Model's prediction logic."""
