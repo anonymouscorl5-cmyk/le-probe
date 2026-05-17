@@ -165,9 +165,9 @@ def run_mission(
                         }
                     )
 
-                    sim.process_target_32(curr_action_raw)
+                    sim.process_target_32(curr_action_norm)
                     sim.dispatch_action(
-                        curr_action_raw,
+                        curr_action_norm,
                         sim.last_target_q,
                         n_steps=50,
                         render_freq=10,
