@@ -242,48 +242,7 @@ class LEWMInferenceServer:
                         torch.from_numpy(raw_image_np).permute(2, 0, 1).to(DEVICE)
                     )
 
-                    if self.use_skeleton:
-                        # Render skeleton for world_center
-                        skel_mask = self.render_skeleton_mask(
-                            view_name="world_center",
-                            raw_sim_state=raw_sim_state,
-                            raw_cube_pos=raw_cube_pos,
-                        )
-                        skel_tensor = (
-                            torch.from_numpy(skel_mask).unsqueeze(0).to(DEVICE)
-                        )
-                        if raw_image.dtype == torch.uint8:
-                            skel_tensor = skel_tensor.to(torch.uint8)
-                        else:
-                            skel_tensor = skel_tensor.float() / 255.0
-
-                        raw_img_4ch = torch.cat([raw_image, skel_tensor], dim=0)
-                        transformed = reconstruct_4ch_frame(
-                            raw_img_4ch, transform_fn=self.agent.transform
-                        )
-
-                        # Inputs Visual Audit Saving Hook
-                        try:
-                            rgb_vis = (
-                                raw_image.permute(1, 2, 0)
-                                .cpu()
-                                .numpy()
-                                .astype(np.uint8)
-                            )
-                            skel_vis = skel_mask
-                            skel_3ch = np.stack([skel_vis] * 3, axis=-1)
-                            side_by_side = np.hstack([rgb_vis, skel_3ch])
-                            audit_path = os.path.join(
-                                self.audit_dir,
-                                f"step_{self.step_counter:03d}_world_center.png",
-                            )
-                            Image.fromarray(side_by_side).save(audit_path)
-                        except Exception as audit_err:
-                            print(f"⚠️ Single-view audit logging failed: {audit_err}")
-                    else:
-                        transformed = self.agent.transform({"pixels": raw_image})[
-                            "pixels"
-                        ]
+                    transformed = self.agent.transform({"pixels": raw_image})["pixels"]
 
                     # Current frame is (1, C, H, W) for single-view consistency
                     current_pixels = transformed.unsqueeze(0).to(DEVICE)

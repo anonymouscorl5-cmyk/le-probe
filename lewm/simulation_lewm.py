@@ -119,6 +119,7 @@ def run_mission(
         use_skeleton=use_skeleton,
     )
     print(f"🚀 Starting Omni-MPC Autonomous Mission: '{instruction}'")
+    sim.reset_env()
 
     # Audit History for Parity verification
     audit_history = []
