@@ -317,8 +317,8 @@ class GoalMapper:
         # (B * S, 1)
         min_latent_dist_per_step = dists_to_latents.min(dim=-1).values.unsqueeze(-1)
 
-        # Global Compass Weight: Reduce to 0.5 to let the Reward Head lead.
-        dist = dist + min_latent_dist_per_step * 0.5  # (B * S, T_horizon)
+        # Global Compass Weight: Increase to 1.5 to pull the robot out of pose-saturation.
+        dist = dist + min_latent_dist_per_step * 1.5  # (B * S, T_horizon)
         dist = dist.mean(dim=-1)  # (B * S,)
 
         # 8. Smoothness Penalty
@@ -337,7 +337,7 @@ class GoalMapper:
         else:
             jump_internal = 0.0
 
-        smoothness_weight = 100.0
+        smoothness_weight = 10.0
         dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
 
         return dist.view(B, S)

@@ -88,7 +88,7 @@ def run_diagnostic(
     solver = CEMSolver(
         model=mapper,
         num_samples=8000,
-        var_scale=1.0,
+        var_scale=0.3,
         n_steps=5,
         topk=100,
         device=device,
@@ -146,11 +146,26 @@ def run_diagnostic(
 
         # C. Vectorized Planning
         outputs = solver.solve(info_dict, init_action=None)
-        final_cost = torch.tensor(outputs["costs"]).to(device)
 
-        # D. Improvement (B, S) -> (B,)
-        imp = (initial_cost.view(-1) - final_cost.view(-1)).cpu().numpy()
+        # solver.solve returns costs for all samples. We want the BEST per batch.
+        # Shape: (B, S) -> find min over S -> (B,)
+        raw_costs = (
+            torch.tensor(outputs["costs"]).to(device).view(actual_batch_size, -1)
+        )
+        best_final_cost = raw_costs.min(dim=1).values
+
+        # D. Improvement (B,)
+        # Positive values mean the planner found a better path than staying still.
+        imp = (initial_cost.view(-1) - best_final_cost).cpu().numpy()
         improvements.extend(imp.tolist())
+
+        if i == 0:
+            # Debug the first robot in the batch
+            # initial_cost and best_final_cost are tensors, we need .item()
+            print(
+                f"   [DEBUG] Batch 0, Robot 0: Initial {initial_cost[0].item():.2f} -> Best Final {best_final_cost[0].item():.2f}"
+            )
+            print(f"   [DEBUG] Improvement: {imp[0].item():.2f}")
 
     # 4. Final Verdict
     avg_imp = np.mean(improvements)
