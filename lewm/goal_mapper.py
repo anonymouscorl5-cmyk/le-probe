@@ -337,7 +337,7 @@ class GoalMapper:
         else:
             jump_internal = 0.0
 
-        smoothness_weight = 10.0
+        smoothness_weight = 100.0
         dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
 
         return dist.view(B, S)

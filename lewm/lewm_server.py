@@ -123,7 +123,7 @@ class LEWMInferenceServer:
         self.agent.goal_latent = torch.stack(goal_list).to(DEVICE)
         print(f"🚀 Brain Prime: Loaded all {len(goal_list)} goals for Omni-MPC.")
 
-        # 4. CEM Solver Hyperparameters (High-Fidelity Multi-View)
+        # 4. CEM Solver Hyperparameters (Graceful Multi-View)
         self.solver = CEMSolver(
             model=self.agent,
             num_samples=800,
@@ -133,9 +133,9 @@ class LEWMInferenceServer:
             device=DEVICE,
         )
         self.solver.configure(
-            action_space=Box(low=-1.0, high=1.0, shape=(15, 32)),
+            action_space=Box(low=-1.0, high=1.0, shape=(4, 32)),
             n_envs=1,
-            config=MockConfig(horizon=15, init_var=0.2),
+            config=MockConfig(horizon=4, init_var=0.1),
         )
 
         # 5. State Buffering
