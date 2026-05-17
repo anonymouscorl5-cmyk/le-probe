@@ -235,7 +235,7 @@ if __name__ == "__main__":
         default=0,
         help="Number of episodes to harvest (0 for all)",
     )
-    parser.add_argument("--multi_view", action="store_true", default=True)
+    parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--fusion", type=str, default="linear")
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     args = parser.parse_args()
