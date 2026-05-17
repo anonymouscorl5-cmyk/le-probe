@@ -246,13 +246,18 @@ class LEWMInferenceServer:
                         f"🧊 Initial Pose Anchored: Left Shoulder Pitch = {self.initial_pose[0]:.4f}"
                     )
 
-                self.history["pixels"].append(current_pixels)
-                if len(self.history["pixels"]) > 3:
+                # Pixels History (V, C, H, W)
+                try:
                     self.history["pixels"].pop(0)
+                except IndexError:
+                    pass
+                while len(self.history["pixels"]) < 3:
+                    self.history["pixels"].append(current_pixels.clone())
 
-                # Action History: Ground the model in the current normalized pose
-                while len(self.history["actions"]) < 3:
-                    self.history["actions"].append(norm_state)
+                # Action History: Pad to size 3 on step 0, then slide naturally at the end of the loop
+                if not self.history["actions"]:
+                    while len(self.history["actions"]) < 3:
+                        self.history["actions"].append(norm_state.copy())
 
                 # pixels_stacked: (B=1, T_history=3, V, C, H, W)
                 pixels_stacked = (
@@ -274,7 +279,7 @@ class LEWMInferenceServer:
                     f"Actions Stacked: {actions_stacked.shape} ({actions_stacked.dtype})"
                 )
                 print(
-                    f"🧠 Step: Planning (8,000 parallel samples, Shape: {pixels_stacked.shape})..."
+                    f"🧠 Step: Planning (800 parallel samples, Shape: {pixels_stacked.shape})..."
                 )
                 start_time = time.time()
                 with torch.inference_mode():
