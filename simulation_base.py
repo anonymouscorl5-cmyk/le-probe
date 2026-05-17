@@ -441,13 +441,16 @@ class GR1MuJoCoBase:
         # Save target for next chunk (VLA Trajectory Threading)
         self._last_interp_q = target_q.copy()
 
-    def reset_env(self, lock_posture=False):
+    def reset_env(self, lock_posture=False, randomize_cube=True):
         """Resets the simulation with optional postural locking."""
         print(f"🎲 Resetting environment (Lock Posture: {lock_posture})...")
         self.current_phase = 0
         # Constrain cube randomization to table bounds (X: 0.25-0.65, Y: ±0.25)
         # Using [0.27, 0.63] and ±0.23 for a small safety margin from the edges
-        rx, ry = np.random.uniform(0.27, 0.63), np.random.uniform(-0.23, 0.23)
+        if randomize_cube:
+            rx, ry = np.random.uniform(0.27, 0.63), np.random.uniform(-0.23, 0.23)
+        else:
+            rx, ry = 0.5, 0
         print(f"rx: {rx}, ry: {ry}")
         cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint")
         cube_q_idx = self.model.jnt_qposadr[cube_id]
