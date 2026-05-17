@@ -31,24 +31,28 @@ I use a custom-built Streamlit dashboard for real-time control, IK requests, and
 
 ### 🛠 Key Components
 
-- [**`teleop_ui.py`**](teleop_ui.py):
+- [`teleop_ui.py`](teleop_ui.py):
   - Streamlit dashboard for 32-DoF joint control and IK-assisted manipulation.
   - Contains options for controlling the robot manually through the sliders, using the IK solver for consistent movement, the recording of episodes into the dataset, monitoring of distance between the right hand fingers and the cube, etc.
 
-- [**`simulation_teleop.py`**](simulation_teleop.py):
+- [`simulation_teleop.py`](simulation_teleop.py):
   - ZMQ server driving the MuJoCo simulation and handling 32-DoF IK requests and supports all the features listed in the `teleop_ui.py` dashboard.
   - Currently the IK solver operates in a grasp move, but essentially a few tweaks to the target coordinates can allow operations in a cup movement as well.
 
-- [**`lerobot_manager.py`**](lerobot_manager.py):
+- [`lerobot_manager.py`](lerobot_manager.py):
   - Core recording logic in the LeRobot format.
   - Implements the 32-dim identity protocol and "Smart Reward" injection.
   - Rewards are currently assigned as an inverse of the distance between the right hand fingers and the cube (capped at `10`) using the `lerobot_manager.py`.
 
-- [**`simulation_replay.py`**](simulation_replay.py):
+- [`simulation_replay.py`](simulation_replay.py):
   - Visual audit tool for replaying recorded episodes for verification.
 
-- [**`upload_dataset.py`**](upload_dataset.py):
+- [`upload_dataset.py`](upload_dataset.py):
   - A script to upload the dataset to the Hugging Face Hub.
+
+- [`skeleton`](skeleton/):
+  - contains scripts for generating the priors for both the main dataset and the reward tuning dataset.
+  - other scripts to audit and verify the generation of the priors.
 
 ## 📊 Current Datasets
 
@@ -57,6 +61,16 @@ The following datasets have been curated and uploaded to the Hugging Face Hub:
 - [**`gr1_pickup_grasp`**](https://huggingface.co/datasets/vedpatwardhan/gr1_pickup_grasp): Precision "pinch" grasp trajectories.
 - [**`gr1_pickup_cup`**](https://huggingface.co/datasets/vedpatwardhan/gr1_pickup_cup): Robust "surrounding" containment trajectories.
 - [**`gr1_reward_pred`**](https://huggingface.co/datasets/vedpatwardhan/gr1_reward_pred): Multi-behavioral data used to train the Reward Head. Wasn't curated using the IK Solver, but instead using Wild Randomization with the Snapshot button on the teleoperator for having a significant proportion of failing states.
+
+## 🦴 Skeleton Priors
+
+- In order to improve the performance of the LeWM model, a 4th channel was added to the data alongside RGB which would basically just be a bunch of lines that represent the motion from the waist joints to the right shoulder and then to the right fingers.
+- Left arm, head, neck, etc. were all ignored while generating the skeleton given the dataset doesn't even use those joints for picking up the cube, and our goal is to ensure that the world model understands what's important in the cube pick up.
+- Here's an example for what the skeleton looks like for one of the episodes in `gr1_pickup_grasp`:
+
+<div align="center">
+  <img src="../assets/skeletal_priors.gif" width="100%" style="border-radius: 8px;">
+</div>
 
 ## 🚀 Workflows
 
@@ -75,4 +89,19 @@ streamlit run dataset/teleop_ui.py
 ### 2. Dataset Upload
 ```bash
 .venv/bin/python dataset/upload_dataset.py --repo_id <>
+```
+
+### 3. Skeletal Priors
+```bash
+# Pulls the video dataset used to train the LeWM and makes in-place changes
+.venv/bin/python dataset/skeleton/generate_priors.py vedpatwardhan/gr1_pickup_grasp
+
+# Verify that the tiling worked
+.venv/bin/python le-probe/dataset/skeleton/verify_tiling.py /root/.cache/huggingface/lerobot/vedpatwardhan/gr1_pickup_grasp/videos/observation.images.world_center_tiled/chunk-000/file-000.mp4
+
+# Pulls the reward prediction dataset used to fine-tune the reward head
+.venv/bin/python dataset/skeleton/generate_reward_priors.py vedpatwardhan/gr1_reward_pred
+
+# Audit the reward priors
+.venv/bin/python dataset/skeleton/audit_priors.py --repo_id vedpatwardhan/gr1_reward_pred_v2 --frames dataset_skel_frames
 ```

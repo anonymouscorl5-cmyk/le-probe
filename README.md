@@ -73,21 +73,68 @@ More details available in [**`lewm/README.md`**](./lewm/README.md).
 
 To try and still get some sort of idea of the quality of training, I trained an auxiliary reward head on snapshot data with a broader range of trajectories predict the reward from the latent space. While reward prediction was much better, the MPC solver still didn't manage to actually pick up the cube and instead just got close to it and moved away as you can see in the video below.
 
+#### Single-View RGB
+
 <div align="center">
   <b>LeWM: Grasp Execution</b>
   <hr width="320">
   <img src="assets/lewm_grasp.gif" width="320">
 </div>
 
+### Multi-View RGB
+
+Previously, we had only trained the LeWM model with single-view images (`world_center`). Completed another training run while including all the views with late fusion at the encoder side, and got this result where the robot does smash the cube off the table but the only challenge is for the hand to get on top of the table.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View)</b>
+  <hr width="320">
+  <img src="assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
+</div>
+
+### Multi-View RGB + Skeletal Priors
+
+- As can be seen with the Multi-View RGB example, once the robot hand is on top of the table it does show a clear intent approaching the cube, but it experiences a fair bit of resistance getting the hand on top of the cube in the first place.
+- An intuitive explanation could be that the model still ends up trying to learn about the position of joints that aren't really that important for the motion.
+- To improve the behaviour, skeletal priors were added to the training data that solely focused on the joints that are actually important for picking up the cube as the 4th channel after RGB.
+
+<div align="center">
+  <b>Skeletal Priors</b>
+  <hr width="320">
+  <img src="assets/skeletal_priors.gif" width="320" alt="Skeletal Priors">
+</div>
+
+The model trained doesn't experience the same kind of resistance faced when we were relying on the skeletal and it also somewhat attempted the pickup movement albeit a bit too rapidly and smashed the cube off the table after 2 failed attempts.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors)</b>
+  <hr width="320">
+  <img src="assets/lewm_grasp_multiview_skeleton.gif" width="320" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors)">
+</div>
+
+It still doesn't actually pick up the cube, we need to find further ways of learning all 4 sub-phases of movement needed for the task separately.
+
+### 4. Interpretability
+
 #### Next Steps
 
-Given the behaviour somewhat works but nowhere near good enough, the next step is to try and probe into the model to identify the sparse features driving these latent representations.
+Given how the behaviour differs between different kinds of training data, it makes sense to try and get a better idea of what the model has ended up learning.
 
-### 4. Interpretability: The "Residual Highway"
+More details are available in [**`interpretability/README.md`**](./interpretability/README.md).
+
+#### Latent Topology Audit
+
+Dimensionality reduction (PCA, t-SNE, UMAP) to diagnose manifold fragmentation and MPC search failures.
+
+| Type | 3D PCA | 3D t-SNE | 3D UMAP |
+| :--- | :---: | :---: | :---: |
+| **Single-View** | ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
+| **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
+
+#### Neuronpedia
 
 To understand why LeWM struggles with goal discrimination, I am working with a fork of [neuronpedia](https://github.com/hijohnnylin/neuronpedia) [here](https://github.com/vedpatwardhan/neuronpedia).
 
-#### Architecture
+##### Architecture
 
 We use a full-stack attribution engine that probes every layer of the Encoder and Predictor.
 
@@ -96,7 +143,7 @@ We use a full-stack attribution engine that probes every layer of the Encoder an
   <p><i>LeWM Interpretability: Global Causal Tracing from Pixels to Reward.</i></p>
 </div>
 
-#### Results
+##### Results
 
 High-level decision hubs (L11) draw raw spatial anchors directly from early sensory layers (L0/L1) via 10+ layer skip connections.
 
@@ -109,31 +156,6 @@ High-level decision hubs (L11) draw raw spatial anchors directly from early sens
     *   **Visual Patch Audit**: Mapping feature activations back to specific image patches with green-box highlighting.
     *   **Integrated Gradients**: Tracing the exact causal path from pixels to Success Probability.
     *   **Directional Filtering**: Using a **Min-K Union** filter to isolate the most critical causal circuits.
-*   **Latent Topology Audit**: Dimensionality reduction (PCA, t-SNE, UMAP) to diagnose manifold fragmentation and MPC search failures.
-
-| Type | 3D PCA | 3D t-SNE | 3D UMAP |
-| :--- | :---: | :---: | :---: |
-| **Single-View** | ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
-| **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
-
-More details are available in [**`interpretability/README.md`**](./interpretability/README.md).
-
-### 5. Multi-View Training
-
-Previously, we had only trained the LeWM model with single-view images (`world_center`). Completed another training run while including all the views with late fusion at the encoder side, and got this result where the robot does smash the cube off the table but the only challenge is for the hand to get on top of the table.
-
-<div align="center">
-  <b>LeWM: Grasp Execution (Multi-View)</b>
-  <hr width="320">
-  <img src="assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
-</div>
-
-More details are available in [**`lewm/README.md`**](./lewm/README.md).
-
-#### Next Steps
-With the multi-view infrastructure stabilized, we are investigating:
-1. **Kinematic Polytopes**: Using reachability analysis to prevent out-of-distribution arm folding.
-2. **Latent Steering**: Using discovered features as reward boosters for real-time MPC.
 
 ## 🛠 Getting Started
 
@@ -164,6 +186,7 @@ I have published three core datasets used for the above results:
 - [**`gr1_pickup_grasp`**](https://huggingface.co/datasets/vedpatwardhan/gr1_pickup_grasp): Precision "pinch" grasp trajectories.
 - [**`gr1_pickup_cup`**](https://huggingface.co/datasets/vedpatwardhan/gr1_pickup_cup): Robust "surrounding" containment trajectories.
 - [**`gr1_reward_pred`**](https://huggingface.co/datasets/vedpatwardhan/gr1_reward_pred): Multi-behavioral data used to train the Reward Head.
+- [**`gr1_reward_pred_v2`**](https://huggingface.co/datasets/vedpatwardhan/gr1_reward_pred_v2): Multi-view version of `gr1_reward_pred`.
 
 Optionally, if you'd like to record new datasets you can use the following:
 
@@ -183,6 +206,18 @@ streamlit run dataset/teleop_ui.py
 ```bash
 .venv/bin/python dataset/upload_dataset.py --repo_id <>
 ```
+
+#### Skeletal Priors
+
+1. **Generate Priors For Main Dataset**: Pulls the video dataset used to train the LeWM and makes in-place changes.
+  ```bash
+  .venv/bin/python dataset/skeleton/generate_priors.py vedpatwardhan/gr1_pickup_grasp
+  ```
+
+2. **Generate Priors For Reward Dataset**: Pulls the reward prediction dataset used to fine-tune the reward head and makes in-place changes.
+  ```bash
+  .venv/bin/python dataset/skeleton/generate_reward_priors.py vedpatwardhan/gr1_reward_pred
+  ```
 
 ### 2. VLA (GR00T-N1)
 
@@ -222,21 +257,32 @@ Following the training, all goal states in the dataset were harvested in the lat
 | :--- | :--- | :--- |
 | **Single-View** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
 | **Multi-View** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1pGMMicqYL_Z8GCS1TOe2A_kAAJQLV3qd/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1gYk_P9Godif20boD64M8epR5xSSSxugn/view?usp=sharing) |
+| **Multi-View + Skeletal Priors** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1tiN-awjiMl0oUy8uLE9JT0850QQOPCUI/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1R9uuqpd1yb7t7-NwuvEq7VrOuI6wI152/view?usp=sharing) |
 
 #### Inference
 
 1. **Inference Server**: Was run using [**`lewm/LEWM_E2E.ipynb`**](lewm/LEWM_E2E.ipynb) using a Pinggy tunnel.
    ```bash
+   # For Single-View
+   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
+
    # For Multi-View
    .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth --multi_view
 
-   # For Single-View
-   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
+   # For Multi-View + Skeletal Priors
+   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v6.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton
    ```
 
 2. **Simulation Host**:
    ```bash
+   # For Single-View
    .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
+
+   # For Multi-View
+   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view
+
+   # For Multi-View + Skeletal Priors
+   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton
    ```
 
 ### 4. Interpretability

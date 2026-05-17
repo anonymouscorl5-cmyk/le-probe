@@ -25,10 +25,15 @@ Finally, the performance was evaluated using [**`LEWM_E2E.ipynb`**](LEWM_E2E.ipy
 - [`goal_mapper.py`](goal_mapper.py): Manages latent goal memory and manifold traversal.
 - [`goal_utils.py`](goal_utils.py): Utilities for handling goal embeddings.
 - [`simulation_lewm.py`](simulation_lewm.py): MuJoCo simulation environment for LeWM testing.
+- [`skeleton`](skeleton/):
+  - [`trainer`](skeleton/trainer.py): trainer to train the model with the trainer
+  - [`tuner`](skeleton/tuner.py): to tune the reward head after training with broader randomization
+  - [`data.py`](skeleton/data.py): skeletal data plugin to include the skeletal prior
+  - [`encoder`](skeleton/encoder.py): the patched encoder for processing the 4th channel
 
 ## 📊 Results
 
-Here are some of the training metrics:
+Here are some of the single-view training metrics:
 
 <div align="center">
   <table>
@@ -47,6 +52,8 @@ Here are some of the training metrics:
 
 As can be seen, the softrank ends up close to a 60-90 range which was initially expected based on the dataset without colapsing lower than 45 at the start of training and the sigreg loss also drops significantly indicating that we're able to capture the dynamics without representation collapse.
 
+Plots for other training regimes haven't been added but they follow the same pattern apart from minor variations.
+
 ### 📈 Metric Glossary: Understanding Manifold Health
 
 To monitor the stability of the latent world, we track several topological and structural metrics:
@@ -61,6 +68,8 @@ To monitor the stability of the latent world, we track several topological and s
 
 ## 🏆 Current Performance
 
+### Single-View RGB
+
 The results with solely relying on the goal state embeddings weren't useful, but after training with an auxillary reward head instead, the robot atleast managed to get close to the table but not able to close in on the cube.
 
 <div align="center">
@@ -69,24 +78,41 @@ The results with solely relying on the goal state embeddings weren't useful, but
   <img src="../assets/lewm_grasp.gif" width="320" alt="LeWM: Grasp Execution">
 </div>
 
-## ⚠️ Current Challenges: The Discriminability Gap
+### Multi-View RGB
 
-My research shows that while LeWM can learn to predict video frames accurately, it struggles with the **Latent Discriminability Gap**:
-
-- **Latent Confusion**: The world model often fails to distinguish the final goal state from intermediate states in the latent manifold, leading to "stalled" planning.
-- **Reward Head Intervention**: I use an auxiliary **Reward Predictor** to provide a clearer gradient for the MPC solver. This has shown improvement in the robot's movement intent, though smoothness still trails behind VLA baselines.
-
-The above thus motivated the need for interpretability, covered in [**`interpretability/README.md`**](../interpretability/README.md).
-
-## 📷 Multi-View Training
-
-Completed another training run while including all the views with late fusion at the encoder side, and got this result where the robot does smash the cube off the table but the only challenge is for the hand to get on top of the table.
+Previously, we had only trained the LeWM model with single-view images (`world_center`). Completed another training run while including all the views with late fusion at the encoder side, and got this result where the robot does smash the cube off the table but the only challenge is for the hand to get on top of the table.
 
 <div align="center">
   <b>LeWM: Grasp Execution (Multi-View)</b>
   <hr width="320">
-  <img src="../assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
+  <img src="assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
 </div>
+
+### Multi-View + Skeletal Priors
+
+- As can be seen with the Multi-View RGB example, once the robot hand is on top of the table it does show a clear intent approaching the cube, but it experiences a fair bit of resistance getting the hand on top of the cube in the first place.
+- An intuitive explanation could be that the model still ends up trying to learn about the position of joints that aren't really that important for the motion.
+- To improve the behaviour, skeletal priors were added to the training data that solely focused on the joints that are actually important for picking up the cube as the 4th channel after RGB.
+
+<div align="center">
+  <b>Skeletal Priors</b>
+  <hr width="320">
+  <img src="assets/skeletal_priors.gif" width="320" alt="Skeletal Priors">
+</div>
+
+The model trained doesn't experience the same kind of resistance faced when we were relying on the skeletal and it also somewhat attempted the pickup movement albeit a bit too rapidly and smashed the cube off the table after 2 failed attempts.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors)</b>
+  <hr width="320">
+  <img src="assets/lewm_grasp_multiview_skeleton.gif" width="320" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors)">
+</div>
+
+It still doesn't actually pick up the cube, we need to find further ways of learning all 4 sub-phases of movement needed for the task separately.
+
+## 🎨 Motivation for Interpretability
+
+Given how the behaviour differs between different kinds of training data, it makes sense to try and get a better idea of what the model has ended up learning, that motivated the need for interpretability, covered in [**`interpretability/README.md`**](../interpretability/README.md).
 
 ## 🚀 Workflows
 
@@ -102,19 +128,31 @@ After training, use [**`harvest_goals.py`**](harvest_goals.py) to harvest latent
 | :--- | :--- | :--- | :--- |
 | **Single-View** | Standard Baseline | [gr1_reward_tuned_v2.ckpt](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [goal_gallery.pth](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
 | **Multi-View** | Multi-Camera Oracle | [gr1_reward_tuned_v2.ckpt](https://drive.google.com/file/d/1pGMMicqYL_Z8GCS1TOe2A_kAAJQLV3qd/view?usp=drive_link) | [goal_gallery.pth](https://drive.google.com/file/d/1gYk_P9Godif20boD64M8epR5xSSSxugn/view?usp=drive_link) |
+| **Multi-View + Skeletal Priors** | 4th Channel with Skeletal Priors | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1tiN-awjiMl0oUy8uLE9JT0850QQOPCUI/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1R9uuqpd1yb7t7-NwuvEq7VrOuI6wI152/view?usp=sharing) |
 
 ### 2. Inference
 To test the World Model and MPC planner:
 
-1. **LeWM MPC Server**: Start the ZMQ inference host.
-   ```bash
-   # Multi-View Inference
-   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth --multi_view
+#### LeWM MPC Server
+```bash
+# For Single-View
+.venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
 
-   # Single-View Inference
-   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
-   ```
-2. **Simulation Host**: Start the MuJoCo environment.
-   ```bash
-   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
-   ```
+# For Multi-View
+.venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth --multi_view
+
+# For Multi-View + Skeletal Priors
+.venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v6.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton
+```
+
+#### Simulation Host
+```bash
+# For Single-View
+.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
+
+# For Multi-View
+.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view
+
+# For Multi-View + Skeletal Priors
+.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton
+```
