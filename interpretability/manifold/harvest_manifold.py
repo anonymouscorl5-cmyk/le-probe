@@ -62,11 +62,11 @@ def harvest_manifold(
     keys_to_load = ["action"]
     if use_multi_view:
         keys_to_load += [
-            "observation.images.world_center",
-            "observation.images.world_left",
-            "observation.images.world_right",
-            "observation.images.world_top",
-            "observation.images.world_wrist",
+            "world_center",
+            "world_left",
+            "world_right",
+            "world_top",
+            "world_wrist",
         ]
     else:
         keys_to_load += ["pixels"]
