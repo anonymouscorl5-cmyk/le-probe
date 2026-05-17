@@ -123,7 +123,7 @@ class LEWMInferenceServer:
         self.agent.goal_latent = torch.stack(goal_list).to(DEVICE)
         print(f"🚀 Brain Prime: Loaded all {len(goal_list)} goals for Omni-MPC.")
 
-        # 4. CEM Solver Hyperparameters (Graceful Multi-View)
+        # 4. CEM Solver Hyperparameters (High-Fidelity Multi-View)
         self.solver = CEMSolver(
             model=self.agent,
             num_samples=800,
@@ -133,9 +133,9 @@ class LEWMInferenceServer:
             device=DEVICE,
         )
         self.solver.configure(
-            action_space=Box(low=-1.0, high=1.0, shape=(4, 32)),
+            action_space=Box(low=-1.0, high=1.0, shape=(15, 32)),
             n_envs=1,
-            config=MockConfig(horizon=4, init_var=0.1),
+            config=MockConfig(horizon=15, init_var=0.2),
         )
 
         # 5. State Buffering
@@ -163,13 +163,10 @@ class LEWMInferenceServer:
                         d["shape"]
                     )
 
-                # 1. Proprioception & Physics Unpacking
+                # 0. Get state of robot
                 raw_sim_state = unpack_np(req.get("state"))
-                raw_cube_pos = None
-                if "cube_pos" in req:
-                    raw_cube_pos = unpack_np(req.get("cube_pos"))
 
-                # 2. Perception Unpacking
+                # 1. Perception Unpacking
                 if self.use_multi_view:
                     cam_keys = [
                         "observation.images.world_center",
@@ -180,78 +177,60 @@ class LEWMInferenceServer:
                     ]
                     views = []
                     for k in cam_keys:
-                        raw_img_np = unpack_np(req.get(k))
-                        # (H, W, C) -> (C, H, W)
-                        raw_img = (
-                            torch.from_numpy(raw_img_np).permute(2, 0, 1).to(DEVICE)
-                        )
-
+                        raw_img = unpack_np(req.get(k))
+                        # Transform to (C, H, W)
+                        transformed = self.agent.transform({"pixels": raw_img})
                         if self.use_skeleton:
+                            # Get state of cube
+                            raw_cube_pos = None
+                            if "cube_pos" in req:
+                                raw_cube_pos = unpack_np(req.get("cube_pos"))
+
                             # Render skeleton for this view on-the-fly!
                             skel_mask = self.render_skeleton_mask(
                                 view_name=k.split(".")[-1],
                                 raw_sim_state=raw_sim_state,
                                 raw_cube_pos=raw_cube_pos,
                             )
-                            skel_tensor = (
-                                torch.from_numpy(skel_mask).unsqueeze(0).to(DEVICE)
-                            )
-                            if raw_img.dtype == torch.uint8:
-                                skel_tensor = skel_tensor.to(torch.uint8)
-                            else:
-                                skel_tensor = skel_tensor.float() / 255.0
 
-                            raw_img_4ch = torch.cat([raw_img, skel_tensor], dim=0)
-                            transformed = reconstruct_4ch_frame(
-                                raw_img_4ch, transform_fn=self.agent.transform
+                            # Concatenate normalized RGB with float skeleton mask
+                            transformed_rgb = transformed["pixels"].to(DEVICE)
+                            skel_tensor = (
+                                torch.from_numpy(skel_mask)
+                                .float()
+                                .unsqueeze(0)
+                                .to(DEVICE)
+                                / 255.0
+                            )
+                            transformed["pixels"] = torch.cat(
+                                [transformed_rgb, skel_tensor], dim=0
                             )
 
                             # Inputs Visual Audit Saving Hook
-                            try:
-                                view_name = k.split(".")[-1]
-                                rgb_vis = (
-                                    raw_img.permute(1, 2, 0)
-                                    .cpu()
-                                    .numpy()
-                                    .astype(np.uint8)
-                                )
-                                skel_vis = skel_mask
-                                skel_3ch = np.stack([skel_vis] * 3, axis=-1)
-                                side_by_side = np.hstack([rgb_vis, skel_3ch])
-                                audit_path = os.path.join(
-                                    self.audit_dir,
-                                    f"step_{self.step_counter:03d}_{view_name}.png",
-                                )
-                                Image.fromarray(side_by_side).save(audit_path)
-                            except Exception as audit_err:
-                                print(
-                                    f"⚠️ Multi-view audit logging failed: {audit_err}"
-                                )
-                        else:
-                            transformed = self.agent.transform({"pixels": raw_img})[
-                                "pixels"
-                            ]
-
-                        views.append(transformed)
+                            view_name = k.split(".")[-1]
+                            rgb_vis = raw_img
+                            skel_vis = skel_mask
+                            skel_3ch = np.stack([skel_vis] * 3, axis=-1)
+                            side_by_side = np.hstack([rgb_vis, skel_3ch])
+                            audit_path = os.path.join(
+                                self.audit_dir,
+                                f"step_{self.step_counter:03d}_{view_name}.png",
+                            )
+                            Image.fromarray(side_by_side).save(audit_path)
+                        views.append(transformed["pixels"])
 
                     # Current frame is (V, C, H, W)
                     current_pixels = torch.stack(views, dim=0).to(DEVICE)
                 else:
-                    raw_image_np = unpack_np(req.get("observation.images.world_center"))
-                    raw_image = (
-                        torch.from_numpy(raw_image_np).permute(2, 0, 1).to(DEVICE)
-                    )
-
-                    transformed = self.agent.transform({"pixels": raw_image})["pixels"]
-
+                    raw_image = unpack_np(req.get("observation.images.world_center"))
+                    transformed = self.agent.transform({"pixels": raw_image})
                     # Current frame is (1, C, H, W) for single-view consistency
-                    current_pixels = transformed.unsqueeze(0).to(DEVICE)
+                    current_pixels = transformed["pixels"].unsqueeze(0).to(DEVICE)
 
-                num_views = 5 if self.use_multi_view else 1
                 print(
-                    f"📷 [Perception] Received {num_views}-View Frame. "
-                    f"current_pixels: {current_pixels.shape} ({current_pixels.dtype}) | "
-                    f"raw_sim_state: {raw_sim_state.shape} ({raw_sim_state.dtype})"
+                    f"📷 Received {5 if self.use_multi_view else 1}-View Frame. "
+                    f"current_pixels: {current_pixels.shape} ({current_pixels.dtype}) |"
+                    f" raw_sim_state: {raw_sim_state.shape} ({raw_sim_state.dtype})"
                 )
 
                 # Grounding: Normalize the current state for history alignment
@@ -267,25 +246,20 @@ class LEWMInferenceServer:
                         f"🧊 Initial Pose Anchored: Left Shoulder Pitch = {self.initial_pose[0]:.4f}"
                     )
 
-                # Pixel History: Replicate-pad to size 3 on step 0, slide window on step 1+
-                if not self.history["pixels"]:
-                    self.history["pixels"] = [current_pixels] * 3
-                else:
-                    self.history["pixels"].append(current_pixels)
-                    if len(self.history["pixels"]) > 3:
-                        self.history["pixels"].pop(0)
+                self.history["pixels"].append(current_pixels)
+                if len(self.history["pixels"]) > 3:
+                    self.history["pixels"].pop(0)
 
-                # Action History: Replicate-pad to size 3 on step 0 (slides at end of loop after planning)
-                if not self.history["actions"]:
-                    self.history["actions"] = [norm_state] * 3
+                # Action History: Ground the model in the current normalized pose
+                while len(self.history["actions"]) < 3:
+                    self.history["actions"].append(norm_state)
 
-                # Prepare Planning Tensors (Unsqueeze B=1 for the generic solver pipeline)
+                # pixels_stacked: (B=1, T_history=3, V, C, H, W)
                 pixels_stacked = (
                     torch.stack(self.history["pixels"]).unsqueeze(0).to(DEVICE)
                 )
-                pixels_stacked = pixels_stacked.unsqueeze(
-                    1
-                )  # Double-Padding: (B=1, 1, T_history, V, C, H, W)
+                # (B=1, S=1, T_history=3, V, C, H, W)
+                pixels_stacked = pixels_stacked.unsqueeze(1)
 
                 actions_stacked = (
                     torch.tensor(np.stack(self.history["actions"]), dtype=torch.float32)
@@ -381,10 +355,9 @@ class LEWMInferenceServer:
                 # --- 📡 Rerun Telemetry & Audit ---
                 # For now, log the center view for diagnostics
                 self.log_diagnostics(
-                    raw_image=pixels_stacked[0, 0, -1, 0, :3]
-                    .cpu()
-                    .numpy()
-                    .transpose(1, 2, 0),
+                    raw_image=(
+                        pixels_stacked[0, 0, -1, 0, :3].cpu().numpy().transpose(1, 2, 0)
+                    ),
                     best_plan=best_plan,
                     plan_time=plan_time,
                     instruction=req.get("instruction", "Unknown"),
