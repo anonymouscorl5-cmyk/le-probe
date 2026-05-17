@@ -141,6 +141,11 @@ class LEWMInferenceServer:
         # 5. State Buffering
         self.history = {"pixels": [], "actions": []}
 
+        # 6. Input Audit Configuration
+        self.audit_dir = os.path.join(ROOT_DIR, "temp_images", "inputs_audit")
+        os.makedirs(self.audit_dir, exist_ok=True)
+        self.step_counter = 0
+
     def run(self, host="0.0.0.0"):
         context = zmq.Context()
         socket = context.socket(zmq.REP)
@@ -151,6 +156,7 @@ class LEWMInferenceServer:
             try:
                 message = socket.recv()
                 req = msgpack.unpackb(message, raw=False)
+                self.step_counter += 1
 
                 def unpack_np(d):
                     return np.frombuffer(d["data"], dtype=d["dtype"]).reshape(
@@ -199,6 +205,28 @@ class LEWMInferenceServer:
                             transformed = reconstruct_4ch_frame(
                                 raw_img_4ch, transform_fn=self.agent.transform
                             )
+
+                            # Inputs Visual Audit Saving Hook
+                            try:
+                                view_name = k.split(".")[-1]
+                                rgb_vis = (
+                                    raw_img.permute(1, 2, 0)
+                                    .cpu()
+                                    .numpy()
+                                    .astype(np.uint8)
+                                )
+                                skel_vis = skel_mask
+                                skel_3ch = np.stack([skel_vis] * 3, axis=-1)
+                                side_by_side = np.hstack([rgb_vis, skel_3ch])
+                                audit_path = os.path.join(
+                                    self.audit_dir,
+                                    f"step_{self.step_counter:03d}_{view_name}.png",
+                                )
+                                Image.fromarray(side_by_side).save(audit_path)
+                            except Exception as audit_err:
+                                print(
+                                    f"⚠️ Multi-view audit logging failed: {audit_err}"
+                                )
                         else:
                             transformed = self.agent.transform({"pixels": raw_img})[
                                 "pixels"
@@ -233,6 +261,25 @@ class LEWMInferenceServer:
                         transformed = reconstruct_4ch_frame(
                             raw_img_4ch, transform_fn=self.agent.transform
                         )
+
+                        # Inputs Visual Audit Saving Hook
+                        try:
+                            rgb_vis = (
+                                raw_image.permute(1, 2, 0)
+                                .cpu()
+                                .numpy()
+                                .astype(np.uint8)
+                            )
+                            skel_vis = skel_mask
+                            skel_3ch = np.stack([skel_vis] * 3, axis=-1)
+                            side_by_side = np.hstack([rgb_vis, skel_3ch])
+                            audit_path = os.path.join(
+                                self.audit_dir,
+                                f"step_{self.step_counter:03d}_world_center.png",
+                            )
+                            Image.fromarray(side_by_side).save(audit_path)
+                        except Exception as audit_err:
+                            print(f"⚠️ Single-view audit logging failed: {audit_err}")
                     else:
                         transformed = self.agent.transform({"pixels": raw_image})[
                             "pixels"
@@ -460,7 +507,7 @@ class LEWMInferenceServer:
                 ps, _ = project_point(self.mj_data.xpos[b_id], K, R_cam, t_cam)
                 pp, _ = project_point(self.mj_data.xpos[p_id], K, R_cam, t_cam)
                 if ps is not None and pp is not None:
-                    draw.line([tuple(ps), tuple(pp)], fill=255, width=2)
+                    draw.line([tuple(ps), tuple(pp)], fill=255, width=1)
 
         # 4. Draw cube wireframe if cube_pos is provided (snapped to hand if within grasping range)
         if raw_cube_pos is not None:
@@ -508,7 +555,7 @@ class LEWMInferenceServer:
                 ps, _ = project_point(corners[s_idx], K, R_cam, t_cam)
                 pe, _ = project_point(corners[e_idx], K, R_cam, t_cam)
                 if ps is not None and pe is not None:
-                    draw.line([tuple(ps), tuple(pe)], fill=255, width=2)
+                    draw.line([tuple(ps), tuple(pe)], fill=255, width=1)
 
         return np.array(mask)
 
