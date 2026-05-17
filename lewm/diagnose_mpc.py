@@ -87,7 +87,7 @@ def run_diagnostic(
 
     solver = CEMSolver(
         model=mapper,
-        num_samples=8000,
+        num_samples=800,
         var_scale=0.3,
         n_steps=5,
         topk=100,
