@@ -65,7 +65,7 @@ More details available in [**`vla/README.md`**](./vla/README.md).
 </div>
 
 ### 3. LeWM Challenges (The Discriminability Gap)
-LeWM, despite training with a large softrank, failed to sufficiently discriminate the goal state from non-goal states in the latent space. Training with multi-view data did show improvements in performance.
+LeWM, despite training with a large softrank, failed to sufficiently discriminate the goal state from non-goal states in the latent space. Training with multi-view data did show improvements in performance, followed by skeletal priors.
 
 More details available in [**`lewm/README.md`**](./lewm/README.md).
 
@@ -99,8 +99,8 @@ Previously, we had only trained the LeWM model with single-view images (`world_c
 
 <div align="center">
   <b>Skeletal Priors</b>
-  <hr width="320">
-  <img src="assets/skeletal_priors.gif" width="320" alt="Skeletal Priors">
+  <hr width="640">
+  <img src="assets/skeletal_priors.gif" width="640" alt="Skeletal Priors">
 </div>
 
 The model trained doesn't experience the same kind of resistance faced when we were relying on the skeletal and it also somewhat attempted the pickup movement albeit a bit too rapidly and smashed the cube off the table after 2 failed attempts.
