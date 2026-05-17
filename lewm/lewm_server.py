@@ -35,6 +35,16 @@ from stable_worldmodel.solver.cem import CEMSolver
 from gr1_protocol import StandardScaler
 from lewm.skeleton.skeletal_utils import reconstruct_4ch_frame
 
+# Skeletal prior imports
+import mujoco
+from PIL import Image, ImageDraw
+from gr1_config import SCENE_PATH, COMPACT_WIRE_JOINTS
+from dataset.skeleton.projection_utils import (
+    get_projection_matrix,
+    project_point,
+    is_allowed_action_chain,
+)
+
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_device(DEVICE)
@@ -91,6 +101,21 @@ class LEWMInferenceServer:
             use_skeleton=use_skeleton,
         )
 
+        # Initialize MuJoCo for server-side skeletal prior rendering
+        if self.use_skeleton:
+            print(
+                f"🦴 [Skeletal Fusion] Initializing server-side MuJoCo scene: {SCENE_PATH}"
+            )
+            self.mj_model = mujoco.MjModel.from_xml_path(SCENE_PATH)
+            self.mj_data = mujoco.MjData(self.mj_model)
+            self.compact_wire_joints = COMPACT_WIRE_JOINTS
+            self.idx_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "R_index_tip_link"
+            )
+            self.thm_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "R_thumb_tip_link"
+            )
+
         # 3. Load Entire Gallery into Brain (Omni-Goal mode)
         goal_list = [
             self.gallery["goals"][eid] for eid in sorted(self.gallery["goals"].keys())
@@ -132,7 +157,13 @@ class LEWMInferenceServer:
                         d["shape"]
                     )
 
-                # 1. Perception Unpacking
+                # 1. Proprioception & Physics Unpacking
+                raw_sim_state = unpack_np(req.get("state"))
+                raw_cube_pos = None
+                if "cube_pos" in req:
+                    raw_cube_pos = unpack_np(req.get("cube_pos"))
+
+                # 2. Perception Unpacking
                 if self.use_multi_view:
                     cam_keys = [
                         "observation.images.world_center",
@@ -150,8 +181,23 @@ class LEWMInferenceServer:
                         )
 
                         if self.use_skeleton:
+                            # Render skeleton for this view on-the-fly!
+                            skel_mask = self.render_skeleton_mask(
+                                view_name=k.split(".")[-1],
+                                raw_sim_state=raw_sim_state,
+                                raw_cube_pos=raw_cube_pos,
+                            )
+                            skel_tensor = (
+                                torch.from_numpy(skel_mask).unsqueeze(0).to(DEVICE)
+                            )
+                            if raw_img.dtype == torch.uint8:
+                                skel_tensor = skel_tensor.to(torch.uint8)
+                            else:
+                                skel_tensor = skel_tensor.float() / 255.0
+
+                            raw_img_4ch = torch.cat([raw_img, skel_tensor], dim=0)
                             transformed = reconstruct_4ch_frame(
-                                raw_img, transform_fn=self.agent.transform
+                                raw_img_4ch, transform_fn=self.agent.transform
                             )
                         else:
                             transformed = self.agent.transform({"pixels": raw_img})[
@@ -169,8 +215,23 @@ class LEWMInferenceServer:
                     )
 
                     if self.use_skeleton:
+                        # Render skeleton for world_center
+                        skel_mask = self.render_skeleton_mask(
+                            view_name="world_center",
+                            raw_sim_state=raw_sim_state,
+                            raw_cube_pos=raw_cube_pos,
+                        )
+                        skel_tensor = (
+                            torch.from_numpy(skel_mask).unsqueeze(0).to(DEVICE)
+                        )
+                        if raw_image.dtype == torch.uint8:
+                            skel_tensor = skel_tensor.to(torch.uint8)
+                        else:
+                            skel_tensor = skel_tensor.float() / 255.0
+
+                        raw_img_4ch = torch.cat([raw_image, skel_tensor], dim=0)
                         transformed = reconstruct_4ch_frame(
-                            raw_image, transform_fn=self.agent.transform
+                            raw_img_4ch, transform_fn=self.agent.transform
                         )
                     else:
                         transformed = self.agent.transform({"pixels": raw_image})[
@@ -180,7 +241,12 @@ class LEWMInferenceServer:
                     # Current frame is (1, C, H, W) for single-view consistency
                     current_pixels = transformed.unsqueeze(0).to(DEVICE)
 
-                raw_sim_state = unpack_np(req.get("state"))
+                num_views = 5 if self.use_multi_view else 1
+                print(
+                    f"📷 [Perception] Received {num_views}-View Frame. "
+                    f"current_pixels: {current_pixels.shape} ({current_pixels.dtype}) | "
+                    f"raw_sim_state: {raw_sim_state.shape} ({raw_sim_state.dtype})"
+                )
 
                 # Grounding: Normalize the current state for history alignment
                 norm_state = self.scaler.scale_state(raw_sim_state)
@@ -195,18 +261,25 @@ class LEWMInferenceServer:
                         f"🧊 Initial Pose Anchored: Left Shoulder Pitch = {self.initial_pose[0]:.4f}"
                     )
 
-                self.history["pixels"].append(current_pixels)
-                if len(self.history["pixels"]) > 3:
-                    self.history["pixels"].pop(0)
+                # Pixel History: Replicate-pad to size 3 on step 0, slide window on step 1+
+                if not self.history["pixels"]:
+                    self.history["pixels"] = [current_pixels] * 3
+                else:
+                    self.history["pixels"].append(current_pixels)
+                    if len(self.history["pixels"]) > 3:
+                        self.history["pixels"].pop(0)
 
-                # Action History: Ground the model in the current normalized pose
-                while len(self.history["actions"]) < 3:
-                    self.history["actions"].append(norm_state)
+                # Action History: Replicate-pad to size 3 on step 0 (slides at end of loop after planning)
+                if not self.history["actions"]:
+                    self.history["actions"] = [norm_state] * 3
 
-                # pixels_stacked: (B=1, T=3, V, C, H, W)
+                # Prepare Planning Tensors (Unsqueeze B=1 for the generic solver pipeline)
                 pixels_stacked = (
                     torch.stack(self.history["pixels"]).unsqueeze(0).to(DEVICE)
                 )
+                pixels_stacked = pixels_stacked.unsqueeze(
+                    1
+                )  # Double-Padding: (B=1, 1, T_history, V, C, H, W)
 
                 actions_stacked = (
                     torch.tensor(np.stack(self.history["actions"]), dtype=torch.float32)
@@ -215,6 +288,11 @@ class LEWMInferenceServer:
                     .to(DEVICE)
                 )
 
+                print(
+                    f"📊 [Telemetry] Queue Context: Pixels History={len(self.history['pixels'])}, Actions History={len(self.history['actions'])} | "
+                    f"Pixels Stacked: {pixels_stacked.shape} ({pixels_stacked.dtype}) | "
+                    f"Actions Stacked: {actions_stacked.shape} ({actions_stacked.dtype})"
+                )
                 print(
                     f"🧠 Step: Planning (8,000 parallel samples, Shape: {pixels_stacked.shape})..."
                 )
@@ -297,7 +375,10 @@ class LEWMInferenceServer:
                 # --- 📡 Rerun Telemetry & Audit ---
                 # For now, log the center view for diagnostics
                 self.log_diagnostics(
-                    raw_image=pixels_stacked[0, -1, 0].cpu().numpy().transpose(1, 2, 0),
+                    raw_image=pixels_stacked[0, 0, -1, 0, :3]
+                    .cpu()
+                    .numpy()
+                    .transpose(1, 2, 0),
                     best_plan=best_plan,
                     plan_time=plan_time,
                     instruction=req.get("instruction", "Unknown"),
@@ -342,6 +423,94 @@ class LEWMInferenceServer:
 
         except Exception as e:
             print(f"⚠️ Diagnostic logging failed: {e}")
+
+    def render_skeleton_mask(self, view_name, raw_sim_state, raw_cube_pos=None):
+        """Generates dynamic 1-channel skeletal prior on the server."""
+        # 1. Update the MuJoCo model to the current proprioceptive state
+        self.mj_data.qpos[:] = self.mj_model.qpos0
+        root_adr = self.mj_model.jnt_qposadr[
+            mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, "root")
+        ]
+        self.mj_data.qpos[root_adr : root_adr + 3] = [0.0, 0.0, 0.95]
+
+        for j, n in enumerate(self.compact_wire_joints):
+            j_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, n)
+            if j_id != -1:
+                self.mj_data.qpos[self.mj_model.jnt_qposadr[j_id]] = raw_sim_state[j]
+
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+
+        # 2. Get camera matrices for projection (resized to 224x224)
+        cam_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_CAMERA, view_name)
+        K = get_projection_matrix(cam_id, self.mj_model, 224, 224)
+        t_cam = self.mj_data.cam_xpos[cam_id]
+        R_cam = self.mj_data.cam_xmat[cam_id].reshape(3, 3) @ np.array(
+            [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+        )
+
+        # 3. Draw robot joints onto mask
+        mask = Image.new("L", (224, 224), 0)
+        draw = ImageDraw.Draw(mask)
+
+        for b_id in range(1, self.mj_model.nbody):
+            p_id = self.mj_model.body_parentid[b_id]
+            if is_allowed_action_chain(b_id, self.mj_model) and is_allowed_action_chain(
+                p_id, self.mj_model
+            ):
+                ps, _ = project_point(self.mj_data.xpos[b_id], K, R_cam, t_cam)
+                pp, _ = project_point(self.mj_data.xpos[p_id], K, R_cam, t_cam)
+                if ps is not None and pp is not None:
+                    draw.line([tuple(ps), tuple(pp)], fill=255, width=2)
+
+        # 4. Draw cube wireframe if cube_pos is provided (snapped to hand if within grasping range)
+        if raw_cube_pos is not None:
+            # Grasp Snapping Hysteresis:
+            gripper_mid = (
+                self.mj_data.xpos[self.idx_id] + self.mj_data.xpos[self.thm_id]
+            ) / 2.0
+            if np.linalg.norm(gripper_mid - raw_cube_pos) < 0.05:
+                cube_pos = gripper_mid
+            else:
+                cube_pos = raw_cube_pos
+
+            size = 0.02
+            corners = (
+                np.array(
+                    [
+                        [-1, -1, -1],
+                        [1, -1, -1],
+                        [1, 1, -1],
+                        [-1, 1, -1],
+                        [-1, -1, 1],
+                        [1, -1, 1],
+                        [1, 1, 1],
+                        [-1, 1, 1],
+                    ]
+                )
+                * size
+            ) + cube_pos
+
+            edges = [
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 0),  # Bottom
+                (4, 5),
+                (5, 6),
+                (6, 7),
+                (7, 4),  # Top
+                (0, 4),
+                (1, 5),
+                (2, 6),
+                (3, 7),  # Verticals
+            ]
+            for s_idx, e_idx in edges:
+                ps, _ = project_point(corners[s_idx], K, R_cam, t_cam)
+                pe, _ = project_point(corners[e_idx], K, R_cam, t_cam)
+                if ps is not None and pe is not None:
+                    draw.line([tuple(ps), tuple(pe)], fill=255, width=2)
+
+        return np.array(mask)
 
 
 if __name__ == "__main__":

@@ -23,16 +23,24 @@ import time
 import argparse
 import rerun as rr
 import traceback
+import mujoco
 from PIL import Image
 from simulation_base import GR1MuJoCoBase
 from gr1_protocol import StandardScaler
 
 
 class GR1LEWMClient(GR1MuJoCoBase):
-    def __init__(self, server_host="localhost", server_port=5555, use_multi_view=False):
+    def __init__(
+        self,
+        server_host="localhost",
+        server_port=5555,
+        use_multi_view=False,
+        use_skeleton=False,
+    ):
         super().__init__()
         self.scaler = StandardScaler()
         self.use_multi_view = use_multi_view
+        self.use_skeleton = use_skeleton
 
         # ZMQ Context
         self.context = zmq.Context()
@@ -41,7 +49,7 @@ class GR1LEWMClient(GR1MuJoCoBase):
         self.client.connect(f"tcp://{server_host}:{server_port}")
 
         print(
-            f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view})"
+            f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view}, Skeleton: {use_skeleton})"
         )
 
     def capture_observation(self, instruction):
@@ -59,6 +67,15 @@ class GR1LEWMClient(GR1MuJoCoBase):
             "instruction": instruction,
             "state": pack_np(state),
         }
+
+        # Extract ground-truth cube position for server-side skeletal prior rendering
+        try:
+            cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "cube")
+            if cube_id != -1:
+                cube_pos = self.data.xpos[cube_id].copy()
+                payload["cube_pos"] = pack_np(cube_pos)
+        except Exception as e:
+            print(f"⚠️ Could not extract cube position: {e}")
 
         if self.use_multi_view:
             cam_names = [
@@ -91,11 +108,15 @@ def run_mission(
     server_host,
     server_port,
     use_multi_view,
+    use_skeleton=False,
     instruction="Pick up the red cube",
     max_steps=100,
 ):
     sim = GR1LEWMClient(
-        server_host=server_host, server_port=server_port, use_multi_view=use_multi_view
+        server_host=server_host,
+        server_port=server_port,
+        use_multi_view=use_multi_view,
+        use_skeleton=use_skeleton,
     )
     print(f"🚀 Starting Omni-MPC Autonomous Mission: '{instruction}'")
 
@@ -175,10 +196,16 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--multi_view", action="store_true", default=False)
+    parser.add_argument("--use_skeleton", action="store_true", default=False)
     args = parser.parse_args()
 
     # Re-init Rerun for standalone local run
     rr.init("gr1_lewm", spawn=False)
     rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
 
-    run_mission(args.host, args.port, args.multi_view)
+    run_mission(
+        args.host,
+        args.port,
+        args.multi_view,
+        use_skeleton=args.use_skeleton,
+    )
