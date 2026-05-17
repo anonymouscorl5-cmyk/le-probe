@@ -120,23 +120,38 @@ def harvest_manifold(
                 raw_pixels = batch["pixels"].to(device)
                 actions = batch["action"].to(device)
 
+                if use_skeleton:
+                    raw_skel = batch["skeletons_raw"].to(device)
+                    # Convert 3-channel skeleton mask to 1-channel by taking the mean across the color dimension
+                    raw_skel_1ch = raw_skel.float().mean(dim=-3, keepdim=True).byte()
+
                 # --- 🎯 Unified 6D Protocol (B, T, V, C, H, W) ---
                 if i == 0:
                     print(f"\n🔍 [BATCH 0] SHAPE TRACE:")
                     print(f"  - raw_pixels:    {raw_pixels.shape}")
+                    if use_skeleton:
+                        print(f"  - raw_skel_1ch:  {raw_skel_1ch.shape}")
 
                 if raw_pixels.ndim == 5:
                     if not use_multi_view:
                         # (B, T, C, H, W) -> (B, T, 1, C, H, W)
                         pixels_6d = raw_pixels.unsqueeze(2)
+                        if use_skeleton:
+                            skel_6d = raw_skel_1ch.unsqueeze(2)
                     else:
                         # (B, V, C, H, W) -> (B, 1, V, C, H, W)
                         pixels_6d = raw_pixels.unsqueeze(1)
+                        if use_skeleton:
+                            skel_6d = raw_skel_1ch.unsqueeze(1)
                 else:
                     pixels_6d = raw_pixels
+                    if use_skeleton:
+                        skel_6d = raw_skel_1ch
 
                 if i == 0:
                     print(f"  - pixels_6d:     {pixels_6d.shape}")
+                    if use_skeleton:
+                        print(f"  - skel_6d:       {skel_6d.shape}")
 
                 B, T, V, C, H, W = pixels_6d.shape
                 raw_pixels_flat = pixels_6d.reshape(B * T * V, C, H, W)
@@ -144,6 +159,21 @@ def harvest_manifold(
                     "pixels"
                 ]
                 pixels = processed_pixels.view(B, T, V, C, 224, 224)
+
+                if use_skeleton:
+                    # Resize/transform skeleton to 224x224
+                    skel_flat = skel_6d.reshape(B * T * V, 1, H, W)
+                    if skel_flat.shape[-2:] != (224, 224):
+                        skel_flat_resized = torch.nn.functional.interpolate(
+                            skel_flat.float(), size=(224, 224), mode="nearest"
+                        ).byte()
+                    else:
+                        skel_flat_resized = skel_flat
+
+                    skel_final = skel_flat_resized.view(B, T, V, 1, 224, 224)
+
+                    # Concat RGB and Skeleton along channel dimension (index -3): (B, T, V, 4, 224, 224)
+                    pixels = torch.cat([pixels, skel_final.to(pixels.dtype)], dim=-3)
 
                 if i == 0:
                     print(f"  - mapper_out:    {processed_pixels.shape}")
