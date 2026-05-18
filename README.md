@@ -99,8 +99,8 @@ Previously, we had only trained the LeWM model with single-view images (`world_c
 
 <div align="center">
   <b>Skeletal Priors</b>
-  <hr width="640">
-  <img src="assets/skeletal_priors.gif" width="640" alt="Skeletal Priors">
+  <hr width="100%">
+  <img src="assets/skeletal_priors.gif" width="100%" alt="Skeletal Priors">
 </div>
 
 The model trained doesn't experience the same kind of resistance faced when we were relying on the skeletal and it also somewhat attempted the pickup movement albeit a bit too rapidly and smashed the cube off the table after 2 failed attempts.
