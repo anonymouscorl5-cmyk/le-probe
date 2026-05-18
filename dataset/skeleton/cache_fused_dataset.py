@@ -107,8 +107,8 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
                 # Fuse channels: RGB (3) + Skeleton (1)
                 fused = np.zeros((4, 224, 224), dtype=np.uint8)
                 # Transpose RGB from [H, W, 3] -> [3, H, W]
-                fused[:3] = frame_rgb.transpose(2, 0, 1)
-                fused[3] = frame_skel
+                fused[:3] = rgb_224.transpose(2, 0, 1)
+                fused[3] = skel_224
 
                 view_frames.append(torch.from_numpy(fused))
 
