@@ -82,6 +82,7 @@ def run_diagnostic(
         use_multi_view=use_multi_view,
         num_views=5 if use_multi_view else 1,
         use_skeleton=use_skeleton,
+        use_dino=use_dino,
     )
 
     # Initialize frozen_pose for manifold squashing (Offline diagnostic uses zero-pose)

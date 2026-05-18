@@ -306,8 +306,18 @@ class LEWMInferenceServer:
                     init_guess[:, 0:16] = self.agent.frozen_pose[0:16]
                     init_guess = init_guess.unsqueeze(0)
 
+                    obs_dict = {
+                        "pixels": pixels_stacked,
+                        "action": actions_stacked,
+                    }
+                    if "phase_idx" in req:
+                        p_idx = int(req.get("phase_idx"))
+                        obs_dict["phase_idx"] = torch.tensor(
+                            [[p_idx]], dtype=torch.long, device=DEVICE
+                        )
+
                     outputs = self.solver.solve(
-                        {"pixels": pixels_stacked, "action": actions_stacked},
+                        obs_dict,
                         init_action=init_guess,
                     )
 

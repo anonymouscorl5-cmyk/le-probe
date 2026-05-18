@@ -65,9 +65,21 @@ class GR1LEWMClient(GR1MuJoCoBase):
             }
 
         state = self.get_state_32()
+
+        # Calculate dynamic phase_idx based on hand-to-cube distance
+        physics = self.get_physics_state()
+        dist = physics["target_dist"]
+        if dist > 0.2:
+            phase_idx = 0
+        elif dist > 0.1:
+            phase_idx = 1
+        else:
+            phase_idx = 2
+
         payload = {
             "instruction": instruction,
             "state": pack_np(state),
+            "phase_idx": phase_idx,
         }
 
         # Extract ground-truth cube position for server-side skeletal prior rendering
