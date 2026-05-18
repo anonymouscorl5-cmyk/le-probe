@@ -81,7 +81,7 @@ To try and still get some sort of idea of the quality of training, I trained an 
   <img src="assets/lewm_grasp.gif" width="320">
 </div>
 
-### Multi-View RGB
+#### Multi-View RGB
 
 Previously, we had only trained the LeWM model with single-view images (`world_center`). Completed another training run while including all the views with late fusion at the encoder side, and got this result where the robot does smash the cube off the table but the only challenge is for the hand to get on top of the table.
 
@@ -91,7 +91,7 @@ Previously, we had only trained the LeWM model with single-view images (`world_c
   <img src="assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
 </div>
 
-### Multi-View RGB + Skeletal Priors
+#### Multi-View RGB + Skeletal Priors
 
 - As can be seen with the Multi-View RGB example, once the robot hand is on top of the table it does show a clear intent approaching the cube, but it experiences a fair bit of resistance getting the hand on top of the cube in the first place.
 - An intuitive explanation could be that the model still ends up trying to learn about the position of joints that aren't really that important for the motion.
