@@ -191,8 +191,12 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                     self._last_loaded_ep = -1
 
             if self._last_loaded_data is not None:
-                # Slicing the pre-saved float or byte tensors
-                t_slice = slice(frame_idx, frame_idx + self.num_steps)
+                # Clamp sequence steps to stay within valid cached episode bounds (usually 32 frames)
+                max_frame_idx = self._last_loaded_data["pixels"].shape[0] - 1
+                clamped_steps = torch.clamp(seq_steps, 0, max_frame_idx)
+
+                phase_idx = clamped_steps // 8
+                checkpoint_frame_idx = (phase_idx + 1) * 8 - 1
 
                 # Fetch pre-computed DINO anchors
                 dino_waypoints = self._last_loaded_data.get(
@@ -201,10 +205,10 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                 phase_anchors = dino_waypoints[phase_idx]
 
                 batch = {
-                    "observation.state": self._last_loaded_data["state"][t_slice],
-                    "action": self._last_loaded_data["action"][t_slice],
+                    "observation.state": self._last_loaded_data["state"][clamped_steps],
+                    "action": self._last_loaded_data["action"][clamped_steps],
                     "pixels": self._last_loaded_data["pixels"][
-                        t_slice
+                        clamped_steps
                     ],  # Shape [T, V, 4, 224, 224]
                     "phase_idx": phase_idx.unsqueeze(-1),  # Shape [T, 1]
                     "checkpoint_frame_idx": checkpoint_frame_idx.unsqueeze(
