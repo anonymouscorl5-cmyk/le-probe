@@ -71,7 +71,7 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
             )
             skel_path = (
                 dataset_path
-                / f"videos/observation.images.{view}_skeleton/chunk-000/file-{ep:03d}.mp4"
+                / f"videos/observation.images.{view}_tiled/chunk-000/file-{ep:03d}.mp4"
             )
 
             if not rgb_path.exists() or not skel_path.exists():
