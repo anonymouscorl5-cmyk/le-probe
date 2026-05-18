@@ -50,14 +50,60 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                 f"🚀 Tiled SkeletonDataPlugin initialized (Video Fallback) for views: {self.base_views}"
             )
 
+    def _run_filtered_transforms(self, tf, batch):
+        if tf is None:
+            return batch
+
+        transforms_list = []
+        if hasattr(tf, "transforms"):
+            transforms_list = tf.transforms
+        elif isinstance(tf, (list, tuple)):
+            transforms_list = tf
+        else:
+            transforms_list = [tf]
+
+        for t in transforms_list:
+            if hasattr(t, "transforms"):
+                batch = self._run_filtered_transforms(t, batch)
+                continue
+
+            source = getattr(t, "source", None)
+            if source is not None:
+                if any(k in source for k in ["pixels", "images", "world_"]):
+                    continue
+            try:
+                batch = t(batch)
+            except KeyError:
+                pass
+        return batch
+
     def tiled_transform_wrapper(self, nested_batch):
         """
         Intercepts the transform call to split tiled videos and handle 4-channel fusion.
         """
         # If cache is used, tensors are already resized, normalized, and fused
         if self.use_tensor_cache:
+            if "pixels" in nested_batch:
+                px = nested_batch["pixels"]
+                if px.dtype == torch.uint8:
+                    rgb = px[:, :, :3].float() / 255.0
+                    skel = px[:, :, 3:].float() / 255.0
+
+                    # ImageNet stats normalization: mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225]
+                    mean = torch.tensor(
+                        [0.485, 0.456, 0.406], dtype=rgb.dtype, device=rgb.device
+                    ).view(1, 1, 3, 1, 1)
+                    std = torch.tensor(
+                        [0.229, 0.224, 0.225], dtype=rgb.dtype, device=rgb.device
+                    ).view(1, 1, 3, 1, 1)
+                    rgb = (rgb - mean) / std
+
+                    nested_batch["pixels"] = torch.cat([rgb, skel], dim=2)
+
             if self.orig_transform:
-                return self.orig_transform(nested_batch)
+                nested_batch = self._run_filtered_transforms(
+                    self.orig_transform, nested_batch
+                )
             return nested_batch
 
         skeletons = {}
@@ -166,6 +212,9 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                     ),  # Shape [T, 1]
                     "dino_anchor": phase_anchors,  # Shape [T, 384]
                 }
+
+                if self.has_progress:
+                    batch["progress"] = self.cached_progress[idx : idx + self.num_steps]
 
                 # Apply transforms (normalized)
                 nested_batch = self.nest_dict(batch)
