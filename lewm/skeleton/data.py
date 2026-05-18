@@ -148,6 +148,12 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                 # Slicing the pre-saved float or byte tensors
                 t_slice = slice(frame_idx, frame_idx + self.num_steps)
 
+                # Fetch pre-computed DINO anchors
+                dino_waypoints = self._last_loaded_data.get(
+                    "dino_waypoints", torch.zeros((4, 384))
+                )
+                phase_anchors = dino_waypoints[phase_idx]
+
                 batch = {
                     "observation.state": self._last_loaded_data["state"][t_slice],
                     "action": self._last_loaded_data["action"][t_slice],
@@ -158,6 +164,7 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                     "checkpoint_frame_idx": checkpoint_frame_idx.unsqueeze(
                         -1
                     ),  # Shape [T, 1]
+                    "dino_anchor": phase_anchors,  # Shape [T, 384]
                 }
 
                 # Apply transforms (normalized)
@@ -168,6 +175,7 @@ class SkeletonDataPlugin(LEWMDataPlugin):
 
         # --- PATH B: Video Decoding Fallback ---
         batch = super().__getitem__(idx)
+        episode_idx = int(self.episode_indices[idx])
 
         # Multi-view Stacking
         if self.use_multi_view:
@@ -191,8 +199,19 @@ class SkeletonDataPlugin(LEWMDataPlugin):
             if skels:
                 batch["skeletons_raw"] = torch.stack(skels, dim=1)
 
-        # Attach phase tracking arrays
+        # Fetch pre-computed DINO anchors from raw file fallback
+        dino_pt_path = (
+            self.root / f"cache_dino/chunk-000/file-{episode_idx:03d}_dino.pt"
+        )
+        if dino_pt_path.exists():
+            dino_waypoints = torch.load(dino_pt_path, map_location="cpu")
+        else:
+            dino_waypoints = torch.zeros((4, 384))
+        phase_anchors = dino_waypoints[phase_idx]
+
+        # Attach phase and anchor tracking arrays
         batch["phase_idx"] = phase_idx.unsqueeze(-1)
         batch["checkpoint_frame_idx"] = checkpoint_frame_idx.unsqueeze(-1)
+        batch["dino_anchor"] = phase_anchors
 
         return batch

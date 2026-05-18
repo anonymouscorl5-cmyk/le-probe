@@ -1,3 +1,12 @@
+"""
+generate_dino_priors.py
+
+Pre-computes and caches high-fidelity zero-shot DINOv3 visual waypoint anchors
+for the Hierarchical World Model (HWM). By pre-calculating embeddings at static
+checkpoints (Frames 8, 16, 24, 32), we completely eliminate visual forward pass
+overhead and frozen model VRAM consumption during training.
+"""
+
 import os
 import sys
 import torch
@@ -17,111 +26,68 @@ if REPO_DIR not in sys.path:
 # --------------------------
 
 
-def process_episode(ep_idx, dataset_path, views, model, transform, device):
-    for view in views:
-        rgb_v_path = (
-            dataset_path
-            / f"videos/observation.images.{view}/chunk-000/file-{ep_idx:03d}.mp4"
-        )
-        out_v_path = (
-            dataset_path
-            / f"videos/observation.images.{view}_dino_tiled/chunk-000/file-{ep_idx:03d}.mp4"
-        )
+def process_episode(ep_idx, dataset_path, model, transform, device):
+    """
+    Extracts landmark frames from the world_center view, passes them through
+    the frozen DINOv3 visual backbone, and caches the flat 384-dimensional features.
+    """
+    rgb_v_path = (
+        dataset_path
+        / f"videos/observation.images.world_center/chunk-000/file-{ep_idx:03d}.mp4"
+    )
+    out_dir = dataset_path / "cache_dino/chunk-000"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"file-{ep_idx:03d}_dino.pt"
 
-        if not rgb_v_path.exists():
-            continue
+    if not rgb_v_path.exists():
+        print(f"⚠️ Video missing for Episode {ep_idx}: {rgb_v_path}")
+        return
 
-        cap = cv2.VideoCapture(str(rgb_v_path))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # Checkpoint frame indices (0-based) for Frames 8, 16, 24, 32
+    checkpoints = [7, 15, 23, 31]
+    cap = cv2.VideoCapture(str(rgb_v_path))
 
-        tmp_raw = out_v_path.with_suffix(".raw.mp4")
-        video = cv2.VideoWriter(
-            str(tmp_raw), cv2.VideoWriter_fourcc(*"mp4v"), fps, (960, 480), isColor=True
-        )
+    embeddings = []
+    frame_idx = 0
 
-        # Hook to capture attention weights
-        attn_weights = []
+    while True:
+        ret, rgb_frame = cap.read()
+        if not ret:
+            break
 
-        def get_attn_hook(module, input, output):
-            x = input[0]
-            B, N, C = x.shape
-            qkv = (
-                module.qkv(x)
-                .reshape(B, N, 3, module.num_heads, module.head_dim)
-                .permute(2, 0, 3, 1, 4)
-            )
-            q, k, v = qkv.unbind(0)
-            attn = (q @ k.transpose(-2, -1)) * module.scale
-            attn = attn.softmax(dim=-1)
-            attn_weights.append(attn.detach().cpu())
-
-        hook = model.blocks[-1].attn.register_forward_hook(get_attn_hook)
-
-        for _ in range(total_frames):
-            ret, rgb_frame = cap.read()
-            if not ret:
-                break
-
-            # 1. Prepare input for DINOv3
+        if frame_idx in checkpoints:
+            # Prepare image
             pil_img = Image.fromarray(cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2RGB))
             img_tensor = transform(pil_img).unsqueeze(0).to(device)
 
-            # 2. Forward pass & extract attention maps
-            attn_weights.clear()
+            # Forward pass through frozen DINOv3
             with torch.no_grad():
-                _ = model(img_tensor)
+                # vit_small outputs shape [1, 384] for pooled output (num_classes=0)
+                embedding = model(img_tensor).squeeze(0).cpu()
+                embeddings.append(embedding)
 
-            # Get attention weights of shape (B, num_heads, N, N)
-            attn = attn_weights[0][0]  # Batch index 0
+        frame_idx += 1
 
-            # Self-attention of the CLS token to all patch tokens (excluding CLS and 4 registers)
-            cls_attn = attn[:, 0, 5:]
+    cap.release()
 
-            # Average attention map across all heads
-            mean_attn = cls_attn.mean(dim=0).reshape(14, 14).numpy()
-
-            # Normalize to [0, 1]
-            mean_attn = (mean_attn - mean_attn.min()) / (
-                mean_attn.max() - mean_attn.min() + 1e-8
-            )
-
-            # Scale to uint8 and resize to match standard 480x480 panel size
-            mean_attn_u8 = (mean_attn * 255).astype(np.uint8)
-            mean_attn_resized = cv2.resize(mean_attn_u8, (480, 480))
-
-            # Apply Inferno Colormap for gorgeous consistent visuals
-            dino_colormap = cv2.applyColorMap(mean_attn_resized, cv2.COLORMAP_INFERNO)
-
-            # 3. Stack original and DINOv3 side by side (960x480)
-            if rgb_frame.shape[:2] != (480, 480):
-                rgb_frame = cv2.resize(rgb_frame, (480, 480))
-
-            video.write(np.hstack([rgb_frame, dino_colormap]))
-
-        cap.release()
-        video.release()
-        hook.remove()
-
-        # Compress to final web-native web MP4
-        os.system(
-            f"ffmpeg -y -i {tmp_raw} -vcodec libx264 -crf 28 -preset ultrafast -pix_fmt yuv420p {out_v_path} > /dev/null 2>&1"
+    # Integrity check: Ensure all 4 checkpoints were extracted
+    if len(embeddings) < 4:
+        # Fallback padding if video ended prematurely
+        while len(embeddings) < 4:
+            embeddings.append(torch.zeros(384))
+        print(
+            f"⚠️ Episode {ep_idx} had truncated frames ({frame_idx}). Padded to 4 waypoints."
         )
-        if tmp_raw.exists():
-            tmp_raw.unlink()
+
+    # Stack into a [4, 384] float32 tensor
+    stacked_embeddings = torch.stack(embeddings, dim=0).float()
+    torch.save(stacked_embeddings, out_path)
 
 
 def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
-    print(f"📦 [DINO PRIOR GENERATOR] Initializing: {repo_id}")
+    print(f"📦 [DINO CACHE GENERATOR] Initializing: {repo_id}")
     dataset = LeRobotDataset(repo_id)
     dataset_path = Path(dataset.root)
-    views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
-
-    # Setup output directories
-    for view in views:
-        (dataset_path / f"videos/observation.images.{view}_dino_tiled/chunk-000").mkdir(
-            parents=True, exist_ok=True
-        )
 
     print("🚀 Loading tiny DINOv3 model (vit_small_patch16_dinov3)...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -130,7 +96,11 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
     )
     model = model.to(device)
     model.eval()
-    print("✅ DINOv3 model loaded successfully!")
+
+    # Freeze parameters completely
+    for p in model.parameters():
+        p.requires_grad = False
+    print("✅ DINOv3 model loaded and frozen successfully!")
 
     transform = transforms.Compose(
         [
@@ -140,11 +110,13 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
         ]
     )
 
-    print(f"🎬 Processing {dataset.num_episodes} episodes sequentially on {device}...")
-    for ep_idx in tqdm(range(dataset.num_episodes), desc="Episodes"):
-        process_episode(ep_idx, dataset_path, views, model, transform, device)
+    print(
+        f"🎬 Pre-computing DINO visual waypoints for {dataset.num_episodes} episodes on {device}..."
+    )
+    for ep_idx in tqdm(range(dataset.num_episodes), desc="DINO Caching"):
+        process_episode(ep_idx, dataset_path, model, transform, device)
 
-    print("🎉 Success! All DINO priors generated successfully.")
+    print(f"🎉 Success! Cached DINO anchors saved to: {dataset_path / 'cache_dino'}")
 
 
 if __name__ == "__main__":

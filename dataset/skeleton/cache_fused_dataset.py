@@ -117,11 +117,20 @@ def main():
         # Stack across 5 views -> Shape [32, 5, 4, 224, 224]
         stacked_pixels = torch.stack(episode_pixels, dim=1)
 
+        # 2. Package DINO Waypoint Anchors if pre-computed
+        dino_pt_path = dataset_path / f"cache_dino/chunk-000/file-{ep:03d}_dino.pt"
+        if dino_pt_path.exists():
+            dino_waypoints = torch.load(dino_pt_path)
+        else:
+            dino_waypoints = torch.zeros((4, 384))
+            print(f"⚠️ DINO prior missing for Ep {ep}. Padded with zeros.")
+
         # Pack into serialized dict
         packaged_data = {
             "pixels": stacked_pixels,  # uint8 [32, 5, 4, 224, 224]
             "state": state_tensor,  # float [32, D_state]
             "action": action_tensor,  # float [32, D_action]
+            "dino_waypoints": dino_waypoints,  # float [4, 384] pre-computed anchors!
         }
 
         # Save to disk

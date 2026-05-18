@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import timm
 import torch
 import numpy as np
 import hydra
@@ -84,36 +83,19 @@ class SkeletonImportanceCallback(pl.Callback):
             pass
 
 
-def compute_subgoal_waypoint_loss(self, batch, cfg, pixels, emb):
+def compute_subgoal_waypoint_loss(self, batch, cfg, emb):
     """
-    Decoupled utility to compute visual waypoint guidance (HWM) using DINOv3 target anchors.
+    Decoupled utility to compute visual waypoint guidance (HWM) using pre-cached DINOv3 anchors.
     """
-    # Primary Diagonal camera view is center view (index 0)
-    rgb_center = pixels[:, :, 0, :3]  # Shape: [B, T, 3, H, W]
-    B, T, C, H, W = rgb_center.shape
+    phi_dino = batch["dino_anchor"]  # Shape: [B, T, 384]
+    B, T, D_dino = phi_dino.shape
 
-    # Vectorized target checkpoint coordinate gather (Frames 8, 16, 24, 32)
-    checkpoint_frame_idx = batch["checkpoint_frame_idx"].long()  # Shape: [B, T, 1]
-    gather_idx = (
-        checkpoint_frame_idx.unsqueeze(-1)
-        .unsqueeze(-1)
-        .unsqueeze(-1)
-        .expand(-1, -1, C, H, W)
-    )
-    checkpoint_rgb = torch.gather(rgb_center, 1, gather_idx)  # Shape: [B, T, 3, H, W]
-
-    # Process via frozen DINOv3 (vit-s-16)
-    checkpoint_flat = rearrange(checkpoint_rgb, "b t c h w -> (b t) c h w")
-
-    # Ensure DINO model is on correct device
-    self.dino_model = self.dino_model.to(pixels.device)
-
-    with torch.no_grad():
-        phi_dino = self.dino_model(checkpoint_flat)  # [B*T, 384]
+    # Flatten for projection MLP
+    phi_dino_flat = rearrange(phi_dino, "b t d -> (b t) d")
 
     # Trainable MLP Projection aligner & High-Level Predictor path
     z_subgoal_target = rearrange(
-        self.model.project_dino(phi_dino), "(b t) d -> b t d", b=B, t=T
+        self.model.project_dino(phi_dino_flat), "(b t) d -> b t d", b=B, t=T
     )
     z_subgoal_pred = self.model.predict_subgoal(emb, batch["phase_idx"])  # [B, T, D]
 
@@ -174,9 +156,7 @@ def lejepa_forward_bips_wit(self, batch, stage, cfg):
 
     # 5. Hierarchical World Model (HWM) Subgoal Waypoint Loss
     if cfg.get("use_dino", False):
-        subgoal_loss = compute_subgoal_waypoint_loss(
-            self, batch, cfg, pixels, output["emb"]
-        )
+        subgoal_loss = compute_subgoal_waypoint_loss(self, batch, cfg, output["emb"])
         output["subgoal_loss"] = subgoal_loss
 
         subgoal_weight = cfg.loss.get("subgoal", {}).get("weight", 0.5)
@@ -360,15 +340,6 @@ def run(cfg):
         forward=partial(lejepa_forward_bips_wit, cfg=cfg),
         optim=optimizers,
     )
-
-    if cfg.get("use_dino", False):
-        print("🚀 HWM: Pre-loading frozen vit_small_patch16_dinov3 extractor...")
-        world_model_module.dino_model = timm.create_model(
-            "vit_small_patch16_dinov3", pretrained=True, num_classes=0
-        )
-        world_model_module.dino_model.eval()
-        for p in world_model_module.dino_model.parameters():
-            p.requires_grad = False
 
     # 4. Logger & Callbacks
     logger = None
