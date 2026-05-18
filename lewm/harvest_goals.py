@@ -39,6 +39,7 @@ def harvest(
     output_path,
     use_multi_view=False,
     use_skeleton=False,
+    use_dino=False,
 ):
     """
     Sweeps the dataset and encodes success states using the DataPlugin engine.
@@ -53,6 +54,7 @@ def harvest(
         use_multi_view=use_multi_view,
         num_views=5 if use_multi_view else 1,
         use_skeleton=use_skeleton,
+        use_dino=use_dino,
     )
 
     # 2. Initialize Data Engine (Plugin)
@@ -162,6 +164,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--use_dino", action="store_true", default=False)
     args = parser.parse_args()
 
     harvest(
@@ -170,4 +173,5 @@ if __name__ == "__main__":
         args.output,
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
+        use_dino=args.use_dino,
     )

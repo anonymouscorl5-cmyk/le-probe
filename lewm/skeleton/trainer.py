@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+import timm
 import torch
 import numpy as np
 import hydra
@@ -82,9 +84,50 @@ class SkeletonImportanceCallback(pl.Callback):
             pass
 
 
-def lejepa_forward_bips(self, batch, stage, cfg):
+def compute_subgoal_waypoint_loss(self, batch, cfg, pixels, emb):
     """
-    Augmented JEPA forward pass with Bi-Directional Perceptual Shaping (BiPS).
+    Decoupled utility to compute visual waypoint guidance (HWM) using DINOv3 target anchors.
+    """
+    # Primary Diagonal camera view is center view (index 0)
+    rgb_center = pixels[:, :, 0, :3]  # Shape: [B, T, 3, H, W]
+    B, T, C, H, W = rgb_center.shape
+
+    # Vectorized target checkpoint coordinate gather (Frames 8, 16, 24, 32)
+    checkpoint_frame_idx = batch["checkpoint_frame_idx"].long()  # Shape: [B, T, 1]
+    gather_idx = (
+        checkpoint_frame_idx.unsqueeze(-1)
+        .unsqueeze(-1)
+        .unsqueeze(-1)
+        .expand(-1, -1, C, H, W)
+    )
+    checkpoint_rgb = torch.gather(rgb_center, 1, gather_idx)  # Shape: [B, T, 3, H, W]
+
+    # Process via frozen DINOv3 (vit-s-16)
+    checkpoint_flat = rearrange(checkpoint_rgb, "b t c h w -> (b t) c h w")
+
+    # Ensure DINO model is on correct device
+    self.dino_model = self.dino_model.to(pixels.device)
+
+    with torch.no_grad():
+        phi_dino = self.dino_model(checkpoint_flat)  # [B*T, 384]
+
+    # Trainable MLP Projection aligner & High-Level Predictor path
+    z_subgoal_target = rearrange(
+        self.model.project_dino(phi_dino), "(b t) d -> b t d", b=B, t=T
+    )
+    z_subgoal_pred = self.model.predict_subgoal(emb, batch["phase_idx"])  # [B, T, D]
+
+    # Calculate waypoint guidance loss (4th loss)
+    subgoal_loss = torch.nn.functional.mse_loss(
+        z_subgoal_pred, z_subgoal_target.detach()
+    )
+    return subgoal_loss
+
+
+def lejepa_forward_bips_wit(self, batch, stage, cfg):
+    """
+    Augmented JEPA forward pass with Bi-Directional Perceptual Shaping (BiPS)
+    and Hierarchical World Model (HWM) waypoint grounding.
     """
     # 1. GPU-Side Skeleton Processing (Vectorized)
     if "skeletons_raw" in batch:
@@ -120,12 +163,39 @@ def lejepa_forward_bips(self, batch, stage, cfg):
             skeleton_mask = (pixels[:, :, :, 3:, :, :] > 0.1).float()
             pixels[:, :, :, :3, :, :] *= 1.0 - skeleton_mask
 
-    return lejepa_forward(self, batch, stage, cfg)
+    # 4. Standard Prediction Rollout and Base Loss Compilation
+    # We temporarily mock self.log_dict during lejepa_forward to avoid premature partial logging
+    orig_log_dict = self.log_dict
+    self.log_dict = lambda *args, **kwargs: None
+    try:
+        output = lejepa_forward(self, batch, stage, cfg)
+    finally:
+        self.log_dict = orig_log_dict
+
+    # 5. Hierarchical World Model (HWM) Subgoal Waypoint Loss
+    if cfg.get("use_dino", False):
+        subgoal_loss = compute_subgoal_waypoint_loss(
+            self, batch, cfg, pixels, output["emb"]
+        )
+        output["subgoal_loss"] = subgoal_loss
+
+        subgoal_weight = cfg.loss.get("subgoal", {}).get("weight", 0.5)
+        output["loss"] = output["loss"] + subgoal_weight * subgoal_loss
+
+    # 6. Unified Final Logging (Standardized across DINO and baseline runs)
+    losses_dict = {f"{stage}/{k}": v.detach() for k, v in output.items() if "loss" in k}
+    self.log_dict(losses_dict, on_step=True, sync_dist=True)
+
+    self._step_end_time = time.time()
+    return output
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="lewm")
 def run(cfg):
-    print("🦾 Starting Skeleton-Prior Augmented Training (BiPS)...")
+    print(
+        "🦾 Starting Skeleton-Prior Augmented Training (BiPS)... "
+        f"[DINO Guidance: {cfg.get('use_dino', False)}]"
+    )
 
     # 1. Seed Everything
     pl.seed_everything(cfg.get("seed", 3072), workers=True)
@@ -210,6 +280,7 @@ def run(cfg):
         action_encoder=GR1Embedder(input_dim=effective_act_dim, emb_dim=embed_dim),
         projector=GR1MLP(input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048),
         pred_proj=GR1MLP(input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048),
+        embed_dim=embed_dim,
     )
     world_model.reward_head = RewardPredictor(input_dim=embed_dim, hidden_dim=512)
 
@@ -286,9 +357,18 @@ def run(cfg):
     world_model_module = spt.Module(
         model=world_model,
         sigreg=SIGReg(**cfg.loss.sigreg.kwargs),
-        forward=partial(lejepa_forward_bips, cfg=cfg),
+        forward=partial(lejepa_forward_bips_wit, cfg=cfg),
         optim=optimizers,
     )
+
+    if cfg.get("use_dino", False):
+        print("🚀 HWM: Pre-loading frozen vit_small_patch16_dinov3 extractor...")
+        world_model_module.dino_model = timm.create_model(
+            "vit_small_patch16_dinov3", pretrained=True, num_classes=0
+        )
+        world_model_module.dino_model.eval()
+        for p in world_model_module.dino_model.parameters():
+            p.requires_grad = False
 
     # 4. Logger & Callbacks
     logger = None

@@ -43,12 +43,14 @@ class GoalMapper:
         use_multi_view=False,
         num_views=1,
         use_skeleton=False,
+        use_dino=False,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dataset_root = Path(dataset_root) if dataset_root is not None else None
         self.use_multi_view = use_multi_view
         self.num_views = num_views
         self.use_skeleton = use_skeleton
+        self.use_dino = use_dino
 
         # 1. Initialize the Model
         if str(model_path).endswith(".pt") or str(model_path).endswith(".ckpt"):
@@ -131,7 +133,10 @@ class GoalMapper:
             dt.transforms.Resize(224, source="pixels", target="pixels"),
         )
 
-        print(f"✅ GoalMapper initialized (Skeleton: {use_skeleton})")
+        print(
+            "✅ GoalMapper initialized "
+            f"(Skeleton: {use_skeleton}, DINO: {self.use_dino})"
+        )
 
     def set_goal(self, episode_idx, frame_idx):
         """Encodes a specific frame from the dataset as the target goal."""

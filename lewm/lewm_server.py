@@ -72,14 +72,16 @@ class LEWMInferenceServer:
         gallery_path="goal_gallery.pth",
         use_multi_view=False,
         use_skeleton=False,
+        use_dino=False,
     ):
         print(
-            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}) ---"
+            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino}) ---"
         )
         self.scaler = StandardScaler()
         self.initial_pose = None
         self.use_multi_view = use_multi_view
         self.use_skeleton = use_skeleton
+        self.use_dino = use_dino
 
         gallery_file = Path(gallery_path)
         if not gallery_file.exists():
@@ -99,6 +101,7 @@ class LEWMInferenceServer:
             use_multi_view=use_multi_view,
             num_views=5 if use_multi_view else 1,
             use_skeleton=use_skeleton,
+            use_dino=use_dino,
         )
 
         # Initialize MuJoCo for server-side skeletal prior rendering
@@ -503,11 +506,13 @@ if __name__ == "__main__":
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--use_dino", action="store_true", default=False)
     args = parser.parse_args()
     server = LEWMInferenceServer(
         args.model,
         args.gallery,
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
+        use_dino=args.use_dino,
     )
     server.run()

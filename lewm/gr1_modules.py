@@ -21,6 +21,72 @@ class MultiViewJEPA(JEPA):
     instead of flattening T into the batch dimension.
     """
 
+    def __init__(
+        self,
+        encoder,
+        predictor,
+        action_encoder,
+        projector=None,
+        pred_proj=None,
+        embed_dim=192,
+        dino_dim=384,
+    ):
+        super().__init__(encoder, predictor, action_encoder, projector, pred_proj)
+
+        # 1. High-Level Waypoint Latent Predictor (Vector Reward Head)
+        # Input: current latent z_t (embed_dim) + phase one-hot (4)
+        self.high_level_predictor = HWMPredictor(
+            input_dim=embed_dim + 4,
+            output_dim=embed_dim,
+            hidden_dim=512,
+        )
+
+        # 2. Trainable DINO Latent Projection MLP
+        # Input: frozen DINOv3 feature dimension (dino_dim)
+        self.dino_projector = DINOProjector(
+            input_dim=dino_dim,
+            output_dim=embed_dim,
+            hidden_dim=512,
+        )
+
+    def predict_subgoal(self, z_t, phase_idx):
+        """
+        Predicts the 192-dimensional latent subgoal target for the next phase checkpoint.
+        z_t: (B, D) or (B, T, D)
+        phase_idx: (B, 1) or (B, T, 1)
+        """
+        device = z_t.device
+
+        # Keep dims clean if sequence dimension is present
+        is_seq = z_t.dim() == 3
+        if is_seq:
+            B, T, D = z_t.shape
+            z_t_flat = rearrange(z_t, "b t d -> (b t) d")
+            phase_flat = rearrange(phase_idx, "b t 1 -> (b t) 1")
+        else:
+            z_t_flat = z_t
+            phase_flat = phase_idx
+
+        # Convert phase index to 4-dimensional one-hot tensor
+        phase_onehot = (
+            F.one_hot(phase_flat.squeeze(-1).long(), num_classes=4).float().to(device)
+        )
+
+        # Predict macro subgoal coordinate
+        mlp_input = torch.cat([z_t_flat, phase_onehot], dim=-1)
+        subgoal_flat = self.high_level_predictor(mlp_input)
+
+        if is_seq:
+            return rearrange(subgoal_flat, "(b t) d -> b t d", b=B, t=T)
+        return subgoal_flat
+
+    def project_dino(self, phi_dino):
+        """
+        Projects frozen DINOv3 visual embeddings down into the world model's latent space.
+        phi_dino: (B, T, 384) or (B, 384)
+        """
+        return self.dino_projector(phi_dino)
+
     def encode(self, info):
         """
         Encode multi-view observations.
@@ -48,6 +114,47 @@ class MultiViewJEPA(JEPA):
             info["act_emb"] = self.action_encoder(info["action"])
 
         return info
+
+
+class HWMPredictor(nn.Module):
+    """
+    High-Level Latent MLP Predictor for HWM Waypoints.
+    Utilizes LayerNorm and GELU for batch-size-independent planning stability.
+    """
+
+    def __init__(self, input_dim, output_dim, hidden_dim=512):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class DINOProjector(nn.Module):
+    """
+    Trainable DINO Latent Projection Head.
+    Maps frozen DINOv3 visual representations to the world model's latent space.
+    """
+
+    def __init__(self, input_dim=384, output_dim=192, hidden_dim=512):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
 
 
 class GR1Embedder(nn.Module):

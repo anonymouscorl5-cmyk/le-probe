@@ -55,7 +55,7 @@ class RewardPredictor(torch.nn.Module):
         return self.mlp(x)
 
 
-def lejepa_forward(self, batch, stage, cfg):
+def lejepa_forward(self, batch, stage, cfg, log_metrics=True):
     """encode observations, predict next states, compute losses."""
     ctx_len = cfg.wm.history_size
     n_preds = cfg.wm.num_preds
@@ -145,8 +145,11 @@ def lejepa_forward(self, batch, stage, cfg):
     if "reward_loss" in output:
         output["loss"] = output["loss"] + reward_weight * output["reward_loss"]
 
-    losses_dict = {f"{stage}/{k}": v.detach() for k, v in output.items() if "loss" in k}
-    self.log_dict(losses_dict, on_step=True, sync_dist=True)
+    if log_metrics:
+        losses_dict = {
+            f"{stage}/{k}": v.detach() for k, v in output.items() if "loss" in k
+        }
+        self.log_dict(losses_dict, on_step=True, sync_dist=True)
     self._step_end_time = time.time()
     return output
 

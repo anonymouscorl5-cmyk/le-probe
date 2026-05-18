@@ -53,12 +53,14 @@ def run_diagnostic(
     batch_size=10,
     use_multi_view=False,
     use_skeleton=False,
+    use_dino=False,
     dataset_root=".",
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🔬 Running Full-Spectrum Diagnostic on {device}...")
     print(f"   - Multi-View: {use_multi_view}")
     print(f"   - Skeleton: {use_skeleton}")
+    print(f"   - DINO: {use_dino}")
 
     if not Path(gallery_path).exists():
         print(f"❌ Error: Gallery not found at {gallery_path}")
@@ -188,6 +190,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch", type=int, default=10)
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--use_dino", action="store_true", default=False)
     parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
     args = parser.parse_args()
 
@@ -205,5 +208,6 @@ if __name__ == "__main__":
         args.batch,
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
+        use_dino=args.use_dino,
         dataset_root=resolved_root,
     )

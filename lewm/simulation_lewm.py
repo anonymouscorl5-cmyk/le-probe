@@ -36,11 +36,13 @@ class GR1LEWMClient(GR1MuJoCoBase):
         server_port=5555,
         use_multi_view=False,
         use_skeleton=False,
+        use_dino=False,
     ):
         super().__init__()
         self.scaler = StandardScaler()
         self.use_multi_view = use_multi_view
         self.use_skeleton = use_skeleton
+        self.use_dino = use_dino
 
         # ZMQ Context
         self.context = zmq.Context()
@@ -49,7 +51,7 @@ class GR1LEWMClient(GR1MuJoCoBase):
         self.client.connect(f"tcp://{server_host}:{server_port}")
 
         print(
-            f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view}, Skeleton: {use_skeleton})"
+            f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino})"
         )
 
     def capture_observation(self, instruction):
@@ -109,6 +111,7 @@ def run_mission(
     server_port,
     use_multi_view,
     use_skeleton=False,
+    use_dino=False,
     instruction="Pick up the red cube",
     max_steps=100,
 ):
@@ -117,6 +120,7 @@ def run_mission(
         server_port=server_port,
         use_multi_view=use_multi_view,
         use_skeleton=use_skeleton,
+        use_dino=use_dino,
     )
     print(f"🚀 Starting Omni-MPC Autonomous Mission: '{instruction}'")
     sim.reset_env(randomize_cube=False)
@@ -198,6 +202,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--use_dino", action="store_true", default=False)
     args = parser.parse_args()
 
     # Re-init Rerun for standalone local run
@@ -209,4 +214,5 @@ if __name__ == "__main__":
         args.port,
         args.multi_view,
         use_skeleton=args.use_skeleton,
+        use_dino=args.use_dino,
     )
