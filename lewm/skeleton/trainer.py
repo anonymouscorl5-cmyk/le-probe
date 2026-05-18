@@ -85,24 +85,49 @@ class SkeletonImportanceCallback(pl.Callback):
 
 def compute_subgoal_waypoint_loss(self, batch, cfg, emb):
     """
-    Decoupled utility to compute visual waypoint guidance (HWM) using pre-cached DINOv3 anchors.
+    Decoupled utility to compute visual waypoint guidance (HWM) using pre-cached DINOv3 anchors
+    with bidirectional visual alignment to ensure high-fidelity latent representations.
     """
     phi_dino = batch["dino_anchor"]  # Shape: [B, T, 384]
     B, T, D_dino = phi_dino.shape
+    D = emb.shape[-1]
 
     # Flatten for projection MLP
     phi_dino_flat = rearrange(phi_dino, "b t d -> (b t) d")
 
     # Trainable MLP Projection aligner & High-Level Predictor path
+    # NOTE: z_subgoal_target is projected from frozen DINOv3 features
     z_subgoal_target = rearrange(
         self.model.project_dino(phi_dino_flat), "(b t) d -> b t d", b=B, t=T
     )
     z_subgoal_pred = self.model.predict_subgoal(emb, batch["phase_idx"])  # [B, T, D]
 
-    # Calculate waypoint guidance loss (4th loss)
-    subgoal_loss = torch.nn.functional.mse_loss(
-        z_subgoal_pred, z_subgoal_target.detach()
-    )
+    # 1. Subgoal Prediction Loss (for HWMPredictor)
+    pred_loss = torch.nn.functional.mse_loss(z_subgoal_pred, z_subgoal_target.detach())
+
+    # 2. Visual Alignment Loss (for DINOProjector)
+    # Align projected DINO subgoals with actual J-EPA embeddings at checkpoint frames
+    is_checkpoint = batch.get("is_checkpoint")  # Shape: [B, T]
+
+    if is_checkpoint is not None:
+        is_checkpoint = is_checkpoint.to(emb.device)
+        if is_checkpoint.any():
+            # Mask only the steps that are checkpoint frames to extract correct alignments
+            z_subgoal_target_masked = z_subgoal_target[is_checkpoint]  # [N, D]
+            emb_masked = emb[is_checkpoint]  # [N, D]
+
+            # Detach actual JEPA embeddings to ensure visual semantics flow INTO the projector
+            # rather than distorting task-grounded J-EPA latent embeddings
+            align_loss = torch.nn.functional.mse_loss(
+                z_subgoal_target_masked, emb_masked.detach()
+            )
+        else:
+            align_loss = torch.zeros_like(pred_loss)
+    else:
+        align_loss = torch.zeros_like(pred_loss)
+
+    # Combined visual waypoint loss
+    subgoal_loss = pred_loss + align_loss
     return subgoal_loss
 
 

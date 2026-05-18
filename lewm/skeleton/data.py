@@ -172,8 +172,9 @@ class SkeletonDataPlugin(LEWMDataPlugin):
         # Calculate Phase Index and Checkpoint Frame Index for each time step
         # Phase boundaries are at static 8-frame intervals: [0..7] -> P0, [8..15] -> P1, etc.
         seq_steps = torch.arange(frame_idx, frame_idx + self.num_steps)
-        phase_idx = seq_steps // 8
+        phase_idx = torch.clamp(seq_steps // 8, 0, 3)
         checkpoint_frame_idx = (phase_idx + 1) * 8 - 1
+        is_checkpoint = seq_steps == checkpoint_frame_idx
 
         # --- PATH A: High-Speed Direct PT Cache ---
         if self.use_tensor_cache:
@@ -195,8 +196,9 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                 max_frame_idx = self._last_loaded_data["pixels"].shape[0] - 1
                 clamped_steps = torch.clamp(seq_steps, 0, max_frame_idx)
 
-                phase_idx = clamped_steps // 8
+                phase_idx = torch.clamp(clamped_steps // 8, 0, 3)
                 checkpoint_frame_idx = (phase_idx + 1) * 8 - 1
+                is_checkpoint = clamped_steps == checkpoint_frame_idx
 
                 # Fetch pre-computed DINO anchors
                 dino_waypoints = self._last_loaded_data.get(
@@ -214,6 +216,7 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                     "checkpoint_frame_idx": checkpoint_frame_idx.unsqueeze(
                         -1
                     ),  # Shape [T, 1]
+                    "is_checkpoint": is_checkpoint,  # Shape [T]
                     "dino_anchor": phase_anchors,  # Shape [T, 384]
                 }
 
@@ -265,6 +268,7 @@ class SkeletonDataPlugin(LEWMDataPlugin):
         # Attach phase and anchor tracking arrays
         batch["phase_idx"] = phase_idx.unsqueeze(-1)
         batch["checkpoint_frame_idx"] = checkpoint_frame_idx.unsqueeze(-1)
+        batch["is_checkpoint"] = is_checkpoint
         batch["dino_anchor"] = phase_anchors
 
         return batch
