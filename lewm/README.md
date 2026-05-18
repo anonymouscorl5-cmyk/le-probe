@@ -126,9 +126,9 @@ After training, use [**`harvest_goals.py`**](harvest_goals.py) to harvest latent
 **Pre-trained Artifacts:**
 | Version | Description | Checkpoint (G-Drive) | Goal Gallery |
 | :--- | :--- | :--- | :--- |
-| **Single-View** | Standard Baseline | [gr1_reward_tuned_v2.ckpt](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [goal_gallery.pth](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
-| **Multi-View** | Multi-Camera Oracle | [gr1_reward_tuned_v2.ckpt](https://drive.google.com/file/d/1pGMMicqYL_Z8GCS1TOe2A_kAAJQLV3qd/view?usp=drive_link) | [goal_gallery.pth](https://drive.google.com/file/d/1gYk_P9Godif20boD64M8epR5xSSSxugn/view?usp=drive_link) |
-| **Multi-View + Skeletal Priors** | 4th Channel with Skeletal Priors | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1tiN-awjiMl0oUy8uLE9JT0850QQOPCUI/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1R9uuqpd1yb7t7-NwuvEq7VrOuI6wI152/view?usp=sharing) |
+| **Single-View** | Standard Baseline | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
+| **Multi-View** | Multi-Camera Oracle | [`gr1_reward_tuned_v2.ckpt](https://drive.google.com/file/d/1pGMMicqYL_Z8GCS1TOe2A_kAAJQLV3qd/view?usp=drive_link) | [`goal_gallery.pth`](https://drive.google.com/file/d/1gYk_P9Godif20boD64M8epR5xSSSxugn/view?usp=drive_link) |
+| **Multi-View + Skeletal Priors** | 4th Channel with Skeletal Priors | [`gr1_reward_tuned_v6.ckpt`](https://drive.google.com/file/d/1tiN-awjiMl0oUy8uLE9JT0850QQOPCUI/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1R9uuqpd1yb7t7-NwuvEq7VrOuI6wI152/view?usp=sharing) |
 
 ### 2. Inference
 To test the World Model and MPC planner:
