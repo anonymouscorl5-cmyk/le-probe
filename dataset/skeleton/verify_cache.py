@@ -12,9 +12,14 @@ from pathlib import Path
 from tqdm import tqdm
 
 
-def main():
-    repo_dir = Path("/Users/vedpatwardhan/Desktop/cortex-os/le-probe")
-    dataset_path = repo_dir / "datasets/vedpatwardhan/gr1_pickup_grasp"
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+
+def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
+    # Dynamically resolve dataset path using LeRobot's own dataset engine or bust
+    dataset = LeRobotDataset(repo_id)
+    dataset_path = Path(dataset.root)
+
     dino_cache_dir = dataset_path / "cache_dino/chunk-000"
     fused_cache_dir = dataset_path / "cache"
 
