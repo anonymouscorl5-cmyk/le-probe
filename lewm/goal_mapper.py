@@ -307,24 +307,62 @@ class GoalMapper:
         reward_weight = 50.0
         dist = (10.0 - reward_pred) * reward_weight  # (B * S, T_horizon)
 
-        # Latent distance cost
-        # repeat (current B * S) // (number of unique goals) times.
-        num_goals = self.goal_latent.view(-1, self.goal_latent.size(-1)).size(0)
-        goal_target = self.goal_latent.view(num_goals, 1, -1).to(all_preds.dtype)
+        if self.use_dino:
+            # Hierarchical Macro Subgoal Planning Cost
+            # A. Extract current phase index
+            phase_idx = obs_dict.get("phase_idx", None)
+            if phase_idx is None:
+                # Default to Phase 0
+                phase_idx = torch.zeros((B, 1), device=self.device)
+            else:
+                if not isinstance(phase_idx, torch.Tensor):
+                    phase_idx = torch.tensor(phase_idx, device=self.device)
+                if phase_idx.ndim == 1:
+                    phase_idx = phase_idx.unsqueeze(-1)
+                if phase_idx.ndim == 0:
+                    phase_idx = phase_idx.view(1, 1).repeat(B, 1)
+                phase_idx = phase_idx.view(B, 1).to(self.device)
 
-        expansion_factor = (B * S) // num_goals
-        if expansion_factor > 1:
-            goal_target = goal_target.repeat_interleave(expansion_factor, dim=0)
-        # (B * S, 1, 192) or (N_goals, 1, 192) if no expansion needed
+            # B. Query High-Level Predictor for Macro Subgoal Coordinate
+            curr_state = init_emb[:, -1, :]  # (B, 192)
+            subgoal = self.model.predict_subgoal(curr_state, phase_idx)  # (B, 192)
+            subgoal_target = subgoal.repeat_interleave(S, dim=0)  # (B * S, 192)
 
-        # (B * S, T_horizon)
-        dists_to_latents = torch.cdist(all_preds, goal_target).squeeze(-1)
-        # (B * S, 1)
-        min_latent_dist_per_step = dists_to_latents.min(dim=-1).values.unsqueeze(-1)
+            # C. Euclidean distance between rollout states and the subgoal
+            # Final-step distance (Targeting the checkpoint bottleneck at step H)
+            final_dist = torch.norm(
+                all_preds[:, -1, :] - subgoal_target, p=2, dim=-1
+            )  # (B * S,)
 
-        # Global Compass Weight: Increase to 0.5 to pull the robot out of pose-saturation.
-        dist = dist + min_latent_dist_per_step * 0.5  # (B * S, T_horizon)
-        dist = dist.mean(dim=-1)  # (B * S,)
+            # Step-by-step distance (Ensuring smooth semantic progress)
+            step_dists = torch.norm(
+                all_preds - subgoal_target.unsqueeze(1), p=2, dim=-1
+            )  # (B * S, T_horizon)
+
+            # Combine costs (B * S, T_horizon)
+            # We map final_dist across the sequence dim to match the base dist structure
+            subgoal_cost = final_dist.unsqueeze(-1) + 0.1 * step_dists
+            dist = dist + subgoal_cost * 1.0  # Weight the visual subgoal guidance
+            dist = dist.mean(dim=-1)  # (B * S,)
+        else:
+            # Standard Flat Goal Planning Cost
+            # repeat (current B * S) // (number of unique goals) times.
+            num_goals = self.goal_latent.view(-1, self.goal_latent.size(-1)).size(0)
+            goal_target = self.goal_latent.view(num_goals, 1, -1).to(all_preds.dtype)
+
+            expansion_factor = (B * S) // num_goals
+            if expansion_factor > 1:
+                goal_target = goal_target.repeat_interleave(expansion_factor, dim=0)
+            # (B * S, 1, 192) or (N_goals, 1, 192) if no expansion needed
+
+            # (B * S, T_horizon)
+            dists_to_latents = torch.cdist(all_preds, goal_target).squeeze(-1)
+            # (B * S, 1)
+            min_latent_dist_per_step = dists_to_latents.min(dim=-1).values.unsqueeze(-1)
+
+            # Global Compass Weight: Increase to 0.5 to pull the robot out of pose-saturation.
+            dist = dist + min_latent_dist_per_step * 0.5  # (B * S, T_horizon)
+            dist = dist.mean(dim=-1)  # (B * S,)
 
         # 8. Smoothness Penalty
         last_real_action = flat_hist_actions[:, -1, :]  # (B * S, 32)

@@ -1,7 +1,11 @@
+import sys
+from unittest.mock import MagicMock
+# Prevent torchcodec OSError/RuntimeError crashes in environments without ffmpeg 4
+sys.modules['torchcodec'] = MagicMock()
+
 import torch
 import numpy as np
 import pytest
-from unittest.mock import MagicMock
 from lewm.goal_mapper import GoalMapper
 
 
