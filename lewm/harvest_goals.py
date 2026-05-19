@@ -100,13 +100,25 @@ def harvest(
             goal_pixels = goal_batch["pixels"].squeeze(0)  # (V, C, H, W) or (C, H, W)
             goal_skeleton = None
             if use_skeleton:
-                goal_skeleton = goal_batch.get("skeletons_raw")
-                if goal_skeleton is None:
-                    raise ValueError(
-                        f"🚨 Missing 'skeletons_raw' in episode {i} despite use_skeleton=True!"
+                # If cached tensor is used, it already has 4 channels (RGB + Skeleton).
+                # Only look for skeletons_raw if the pixels do not already contain the 4th channel.
+                channels = (
+                    goal_pixels.shape[1]
+                    if goal_pixels.ndim == 4
+                    else goal_pixels.shape[0]
+                )
+                if channels < 4:
+                    goal_skeleton = goal_batch.get("skeletons_raw")
+                    if goal_skeleton is None:
+                        raise ValueError(
+                            f"🚨 Missing 'skeletons_raw' in episode {i} despite use_skeleton=True!"
+                        )
+                    goal_skeleton = goal_skeleton.squeeze(
+                        0
+                    )  # (V, 1, H, W) or (1, H, W)
+                    goal_skeleton = (
+                        goal_skeleton.float().mean(dim=-3, keepdim=True).byte()
                     )
-                goal_skeleton = goal_skeleton.squeeze(0)  # (V, 1, H, W) or (1, H, W)
-                goal_skeleton = goal_skeleton.float().mean(dim=-3, keepdim=True).byte()
 
             # C. Encode
             mapper.encode_goal_from_pixels(goal_pixels, skeleton=goal_skeleton)
@@ -123,18 +135,26 @@ def harvest(
                 batch = plugin[idx]
 
                 # Fuse for diagnostics if in skeletal mode
-                diag_p = batch["pixels"].squeeze(0)  # (V, C, H, W)
+                diag_p = batch["pixels"].squeeze(0)  # (V, C, H, W) or (C, H, W)
                 if use_skeleton:
-                    diag_skel = batch["skeletons_raw"].squeeze(0)
-                    # Force single-channel (C is always -3)
-                    diag_skel = diag_skel.float().mean(dim=-3, keepdim=True).byte()
+                    diag_channels = (
+                        diag_p.shape[1] if diag_p.ndim == 4 else diag_p.shape[0]
+                    )
+                    if diag_channels < 4:
+                        diag_skel = batch.get("skeletons_raw")
+                        if diag_skel is not None:
+                            diag_skel = diag_skel.squeeze(0)
+                            # Force single-channel (C is always -3)
+                            diag_skel = (
+                                diag_skel.float().mean(dim=-3, keepdim=True).byte()
+                            )
 
-                    # Fuse: (V, 3, H, W) + (V, 1, H, W) -> (V, 4, H, W)
-                    if diag_p.ndim == 4:
-                        diag_p = torch.cat([diag_p, diag_skel], dim=1)
-                    else:
-                        # Single view: (3, H, W) + (1, H, W) -> (4, H, W)
-                        diag_p = torch.cat([diag_p, diag_skel], dim=0)
+                            # Fuse: (V, 3, H, W) + (V, 1, H, W) -> (V, 4, H, W)
+                            if diag_p.ndim == 4:
+                                diag_p = torch.cat([diag_p, diag_skel], dim=1)
+                            else:
+                                # Single view: (3, H, W) + (1, H, W) -> (4, H, W)
+                                diag_p = torch.cat([diag_p, diag_skel], dim=0)
 
                 diag_pixels.append(diag_p)
                 diag_actions.append(batch["action"].squeeze(0))
