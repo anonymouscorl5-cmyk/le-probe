@@ -373,6 +373,3 @@ Analyze the internal "map" of the latent space to diagnose planning failures.
 ```bash
 .venv/bin/python interpretability/manifold/visualize_manifold.py --method umap --output manifold_3d_umap.html
 ```
-
----
-*Developed by Ved Patwardhan.*
