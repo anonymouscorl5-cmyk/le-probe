@@ -72,19 +72,16 @@ class LEWMInferenceServer:
         gallery_path="goal_gallery.pth",
         use_multi_view=False,
         use_skeleton=False,
-        # use_dino=False,
+        use_dino=False,
     ):
-        # print(
-        #     f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino}) ---"
-        # )
         print(
-            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}) ---"
+            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino}) ---"
         )
         self.scaler = StandardScaler()
         self.initial_pose = None
         self.use_multi_view = use_multi_view
         self.use_skeleton = use_skeleton
-        # self.use_dino = use_dino
+        self.use_dino = use_dino
 
         gallery_file = Path(gallery_path)
         if not gallery_file.exists():
@@ -104,7 +101,7 @@ class LEWMInferenceServer:
             use_multi_view=use_multi_view,
             num_views=5 if use_multi_view else 1,
             use_skeleton=use_skeleton,
-            # use_dino=use_dino,
+            use_dino=use_dino,
         )
 
         # Initialize MuJoCo for server-side skeletal prior rendering
@@ -306,21 +303,21 @@ class LEWMInferenceServer:
 
                     # 🧊 FREEZE SAMPLING SPACE (0-15) 🧊
                     # We ensure the solver starts with the joints frozen to their initial pose
-                    init_guess[:, 0:16] = self.agent.frozen_pose[0:16]
+                    init_guess[..., 0:16] = self.agent.frozen_pose[0:16]
                     init_guess = init_guess.unsqueeze(0)
 
-                    # obs_dict = {
-                    #     "pixels": pixels_stacked,
-                    #     "action": actions_stacked,
-                    # }
-                    # if "phase_idx" in req:
-                    #     p_idx = int(req.get("phase_idx"))
-                    #     obs_dict["phase_idx"] = torch.tensor(
-                    #         [[p_idx]], dtype=torch.long, device=DEVICE
-                    #     )
+                    obs_dict = {
+                        "pixels": pixels_stacked,
+                        "action": actions_stacked,
+                    }
+                    if "phase_idx" in req:
+                        p_idx = int(req.get("phase_idx"))
+                        obs_dict["phase_idx"] = torch.tensor(
+                            [[p_idx]], dtype=torch.long, device=DEVICE
+                        )
 
                     outputs = self.solver.solve(
-                        {"pixels": pixels_stacked, "action": actions_stacked},
+                        obs_dict,
                         init_action=init_guess,
                     )
 
@@ -330,39 +327,31 @@ class LEWMInferenceServer:
                 elif best_plan.ndim == 3:
                     best_plan = best_plan[0]  # (S, T, D) -> (T, D)
 
+                # Apply Manifold Enforcements and Precision Mapping to the ENTIRE plan
                 # 🧊 MANIFOLD ENFORCEMENT (0-15) 🧊
-                # Explicitly zero out any leakage for the frozen joints in the full plan
                 best_plan[:, 0:16] = self.initial_pose[0:16]
 
-                target_action = best_plan[0]  # (32,)
+                # 2. 🛡️ PRECISION MAPPING & PROTOCOL ENFORCEMENT 🛡️
+                arm_min = np.array([-0.312, -0.098, -0.156, -0.098])
+                arm_max = np.array([1.172, 0.098, 0.236, 0.098])
+                best_plan[:, 17:21] = (
+                    arm_min + (best_plan[:, 17:21] + 1.0) * (arm_max - arm_min) / 2.0
+                )
 
-                # 🛡️ THE GOVERNOR: Delta Capping & Smoothing 🛡️
+                # 3. Final safety clip for active joints
+                best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
+
+                # 4. Delta Capping on the first step relative to history
+                target_action = best_plan[0].copy()
                 if len(self.history["actions"]) > 0:
                     prev_action = self.history["actions"][-1]
-
-                    # 1. Delta Capping (Max 0.05 normalized units per step)
-                    # We ONLY apply delta capping to the active joints (16-31)
                     max_delta = 0.05
                     delta = target_action[16:] - prev_action[16:]
                     clipped_delta = np.clip(delta, -max_delta, max_delta)
                     target_action[16:] = prev_action[16:] + clipped_delta
-
-                    # 2. 🛡️ PRECISION MAPPING & PROTOCOL ENFORCEMENT 🛡️
-                    arm_min = np.array([-0.312, -0.098, -0.156, -0.098])
-                    arm_max = np.array([1.172, 0.098, 0.236, 0.098])
-
-                    target_action[17:21] = (
-                        arm_min
-                        + (target_action[17:21] + 1.0) * (arm_max - arm_min) / 2.0
-                    )
-
-                    # Ensure indices 0-15 remain exactly at their initial pose
                     target_action[0:16] = self.initial_pose[0:16]
-
-                    # Final safety clip for active joints
                     target_action[16:] = np.clip(target_action[16:], -1.0, 1.0)
-
-                best_plan[0] = target_action
+                    best_plan[0] = target_action
 
                 plan_time = time.time() - start_time
 
@@ -519,13 +508,13 @@ if __name__ == "__main__":
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
-    # parser.add_argument("--use_dino", action="store_true", default=False)
+    parser.add_argument("--use_dino", action="store_true", default=False)
     args = parser.parse_args()
     server = LEWMInferenceServer(
         args.model,
         args.gallery,
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
-        # use_dino=args.use_dino,
+        use_dino=args.use_dino,
     )
     server.run()

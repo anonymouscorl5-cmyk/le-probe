@@ -45,15 +45,20 @@ def reconstruct_4ch_frame(pixels, transform_fn=None):
         else:
             transformed = rgb.float() / 255.0 if rgb.dtype == torch.uint8 else rgb
 
-        if skel.shape[-2:] != (224, 224):
-            skel = F.interpolate(
-                skel.unsqueeze(0), size=(224, 224), mode="nearest"
+        # Convert to float for bilinear interpolation
+        skel_float = skel.float()
+        if skel_float.shape[-2:] != (224, 224):
+            skel_float = F.interpolate(
+                skel_float.unsqueeze(0),
+                size=(224, 224),
+                mode="bilinear",
+                align_corners=False,
             ).squeeze(0)
 
         if skel.dtype == torch.uint8:
-            skel = skel.float() / 255.0
+            skel_float = skel_float / 255.0
 
-        return torch.cat([transformed, skel], dim=0)
+        return torch.cat([transformed, skel_float], dim=0)
 
     # CASE 2: Already 4-Channel
     elif c == 4:
@@ -61,13 +66,19 @@ def reconstruct_4ch_frame(pixels, transform_fn=None):
             rgb = pixels[:3]
             skel = pixels[3:]
             transformed = transform_fn({"pixels": rgb})["pixels"]
-            if skel.shape[-2:] != (224, 224):
-                skel = F.interpolate(
-                    skel.unsqueeze(0), size=(224, 224), mode="nearest"
+
+            # Convert to float for bilinear interpolation
+            skel_float = skel.float()
+            if skel_float.shape[-2:] != (224, 224):
+                skel_float = F.interpolate(
+                    skel_float.unsqueeze(0),
+                    size=(224, 224),
+                    mode="bilinear",
+                    align_corners=False,
                 ).squeeze(0)
             if skel.dtype == torch.uint8:
-                skel = skel.float() / 255.0
-            return torch.cat([transformed, skel], dim=0)
+                skel_float = skel_float / 255.0
+            return torch.cat([transformed, skel_float], dim=0)
         return pixels
 
     # CASE 3: Fallback (RGB + Empty Skeleton)

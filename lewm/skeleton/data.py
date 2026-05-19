@@ -150,7 +150,8 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                     skeletons[view] = torch.nn.functional.interpolate(
                         skel_raw.float(),
                         size=(self.img_size, self.img_size),
-                        mode="nearest",
+                        mode="bilinear",
+                        align_corners=False,
                     ).byte()
                 else:
                     skeletons[view] = skel_raw

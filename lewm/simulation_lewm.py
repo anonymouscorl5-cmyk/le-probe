@@ -36,13 +36,13 @@ class GR1LEWMClient(GR1MuJoCoBase):
         server_port=5555,
         use_multi_view=False,
         use_skeleton=False,
-        # use_dino=False,
+        use_dino=False,
     ):
         super().__init__()
         self.scaler = StandardScaler()
         self.use_multi_view = use_multi_view
         self.use_skeleton = use_skeleton
-        # self.use_dino = use_dino
+        self.use_dino = use_dino
 
         # ZMQ Context
         self.context = zmq.Context()
@@ -50,11 +50,8 @@ class GR1LEWMClient(GR1MuJoCoBase):
         self.client.setsockopt(zmq.RCVTIMEO, 120000)
         self.client.connect(f"tcp://{server_host}:{server_port}")
 
-        # print(
-        #     f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino})"
-        # )
         print(
-            f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view}, Skeleton: {use_skeleton})"
+            f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino})"
         )
 
     def capture_observation(self, instruction):
@@ -70,20 +67,21 @@ class GR1LEWMClient(GR1MuJoCoBase):
         state = self.get_state_32()
 
         # # Calculate dynamic phase_idx based on hand-to-cube distance
-        # physics = self.get_physics_state()
-        # dist = physics["target_dist"]
-        # if dist > 0.2:
-        #     phase_idx = 0
-        # elif dist > 0.1:
-        #     phase_idx = 1
-        # else:
-        #     phase_idx = 2
-
         payload = {
             "instruction": instruction,
             "state": pack_np(state),
-            # "phase_idx": phase_idx,
         }
+
+        if self.use_dino:
+            physics = self.get_physics_state()
+            dist = physics["target_dist"]
+            if dist > 0.2:
+                phase_idx = 0
+            elif dist > 0.1:
+                phase_idx = 1
+            else:
+                phase_idx = 2
+            payload["phase_idx"] = phase_idx
 
         # Extract ground-truth cube position for server-side skeletal prior rendering
         try:
@@ -126,7 +124,7 @@ def run_mission(
     server_port,
     use_multi_view,
     use_skeleton=False,
-    # use_dino=False,
+    use_dino=False,
     instruction="Pick up the red cube",
     max_steps=100,
 ):
@@ -135,7 +133,7 @@ def run_mission(
         server_port=server_port,
         use_multi_view=use_multi_view,
         use_skeleton=use_skeleton,
-        # use_dino=use_dino,
+        use_dino=use_dino,
     )
     print(f"🚀 Starting Omni-MPC Autonomous Mission: '{instruction}'")
     sim.reset_env(randomize_cube=False)
@@ -217,7 +215,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
-    # parser.add_argument("--use_dino", action="store_true", default=False)
+    parser.add_argument("--use_dino", action="store_true", default=False)
     args = parser.parse_args()
 
     # Re-init Rerun for standalone local run
@@ -229,5 +227,5 @@ if __name__ == "__main__":
         args.port,
         args.multi_view,
         use_skeleton=args.use_skeleton,
-        # use_dino=args.use_dino,
+        use_dino=args.use_dino,
     )

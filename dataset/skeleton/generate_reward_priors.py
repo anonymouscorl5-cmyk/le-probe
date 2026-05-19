@@ -4,11 +4,13 @@ import numpy as np
 import mujoco
 import torch
 import shutil
+import cv2
 from PIL import Image, ImageDraw
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool
 from datasets import load_dataset
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 import argparse
 
 # --- Path Stabilization ---
@@ -18,13 +20,83 @@ if REPO_DIR not in sys.path:
 
 from gr1_config import SCENE_PATH, COMPACT_WIRE_JOINTS
 from gr1_protocol import StandardScaler
+from dataset.skeleton.projection_utils import (
+    get_projection_matrix,
+    project_point,
+    is_allowed_action_chain,
+)
 
 # --- Global Worker Context ---
 # This is populated once per worker process to avoid initialization overhead
 _worker_context = {}
 
 
-def init_worker(repo_id, views, output_dir):
+def check_cube_visibility(rgb_frame):
+    hsv = cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(
+        hsv, np.array([0, 100, 100]), np.array([10, 255, 255])
+    ) + cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255]))
+    return np.sum(mask > 0) > 30
+
+
+def find_initial_cube_pos(video_path, K, R, t, table_z=0.82):
+    cap = cv2.VideoCapture(str(video_path))
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        return None
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(
+        hsv, np.array([0, 100, 100]), np.array([10, 255, 255])
+    ) + cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255]))
+    M = cv2.moments(mask)
+    if M["m00"] == 0:
+        return None
+    u, v = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
+    p_cam = np.linalg.inv(K) @ np.array([u, v, 1])
+    v_world = R @ p_cam
+    return t + ((table_z - t[2]) / v_world[2]) * v_world
+
+
+def draw_cube_wireframe(draw, cube_pos, K, R, t, color=255):
+    size = 0.02
+    corners = (
+        np.array(
+            [
+                [-1, -1, -1],
+                [1, -1, -1],
+                [1, 1, -1],
+                [-1, 1, -1],
+                [-1, -1, 1],
+                [1, -1, 1],
+                [1, 1, 1],
+                [-1, 1, 1],
+            ]
+        )
+        * size
+    ) + cube_pos
+    edges = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+    ]
+    for s_idx, e_idx in edges:
+        ps, _ = project_point(corners[s_idx], K, R, t)
+        pe, _ = project_point(corners[e_idx], K, R, t)
+        if ps is not None and pe is not None:
+            draw.line([tuple(ps), tuple(pe)], fill=color, width=2)
+
+
+def init_worker(repo_id, views, output_dir, initial_cube_positions):
     """Initializes the plugin and MuJoCo model once per process"""
     _worker_context["ds"] = load_dataset(repo_id, split="train")
     _worker_context["model"] = mujoco.MjModel.from_xml_path(SCENE_PATH)
@@ -32,6 +104,7 @@ def init_worker(repo_id, views, output_dir):
     _worker_context["unscaler"] = StandardScaler()
     _worker_context["views"] = views
     _worker_context["out_dir"] = Path(output_dir)
+    _worker_context["initial_cube_positions"] = initial_cube_positions
 
 
 def process_frame_task(idx):
@@ -42,15 +115,33 @@ def process_frame_task(idx):
     unscaler = _worker_context["unscaler"]
     views = _worker_context["views"]
     out_dir = _worker_context["out_dir"]
+    initial_cube_positions = _worker_context["initial_cube_positions"]
 
     row = ds[idx]
+    ep_idx = row["episode_index"] if "episode_index" in row else 0
 
     # 1. Proprioception
     qpos = np.array(row["observation.state"])
     qpos_raw = unscaler.unscale_action(qpos)
 
-    data.qpos[: len(qpos_raw)] = qpos_raw
+    data.qpos[:] = model.qpos0
+    data.qpos[
+        model.jnt_qposadr[
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "root")
+        ] : model.jnt_qposadr[
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "root")
+        ]
+        + 3
+    ] = [0.0, 0.0, 0.95]
+    for j, n in enumerate(COMPACT_WIRE_JOINTS):
+        j_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n)
+        if j_id != -1:
+            data.qpos[model.jnt_qposadr[j_id]] = qpos_raw[j]
     mujoco.mj_forward(model, data)
+
+    idx_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "R_index_tip_link")
+    thm_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "R_thumb_tip_link")
+    initial_cube_pos = initial_cube_positions.get(ep_idx)
 
     frame_data = {}
     for view_name in views:
@@ -66,34 +157,31 @@ def process_frame_task(idx):
 
         # Camera Projection
         cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, view_name)
-        fovy = model.cam_fovy[cam_id]
-        f = 0.5 * H / np.tan(fovy * np.pi / 360)
-        cx, cy = W / 2, H / 2
+        K = get_projection_matrix(cam_id, model, W, H)
+        t_cam = data.cam_xpos[cam_id]
+        R_cam = data.cam_xmat[cam_id].reshape(3, 3) @ np.array(
+            [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+        )
 
-        cam_pos = data.cam_xpos[cam_id]
-        cam_rot = data.cam_xmat[cam_id].reshape(3, 3)
+        for b_id in range(1, model.nbody):
+            p_id = model.body_parentid[b_id]
+            if is_allowed_action_chain(b_id, model) and is_allowed_action_chain(
+                p_id, model
+            ):
+                ps, _ = project_point(data.xpos[b_id], K, R_cam, t_cam)
+                pp, _ = project_point(data.xpos[p_id], K, R_cam, t_cam)
+                if ps is not None and pp is not None:
+                    draw.line([tuple(ps), tuple(pp)], fill=255, width=2)
 
-        def project(x):
-            rel_pos = cam_rot.T @ (x - cam_pos)
-            if rel_pos[2] <= 0:
-                return None
-            px = cx - f * rel_pos[0] / rel_pos[2]
-            py = cy - f * rel_pos[1] / rel_pos[2]
-            return (px, py)
-
-        for joint_pair in COMPACT_WIRE_JOINTS:
-            p1 = project(
-                data.xpos[
-                    mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, joint_pair[0])
-                ]
+        # Draw cube wireframe
+        if initial_cube_pos is not None and check_cube_visibility(rgb):
+            gripper_mid = (data.xpos[idx_id] + data.xpos[thm_id]) / 2.0
+            cube_pos = (
+                gripper_mid
+                if np.linalg.norm(gripper_mid - initial_cube_pos) < 0.05
+                else initial_cube_pos
             )
-            p2 = project(
-                data.xpos[
-                    mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, joint_pair[1])
-                ]
-            )
-            if p1 and p2:
-                draw.line([p1, p2], fill=255, width=2)
+            draw_cube_wireframe(draw, cube_pos, K, R_cam, t_cam)
 
         # 4. Stack into 4-channel tensor [C, H, W]
         skel = np.array(mask, dtype=np.uint8)
@@ -122,13 +210,42 @@ def main():
     num_frames = len(ds)
     print(f"📊 Dataset loaded: {num_frames} frames.")
 
-    # 2. Setup Output Directories
+    # 2. Get LeRobot Dataset Path for cube positioning video analysis
+    lerobot_ds = LeRobotDataset(args.repo_id)
+    dataset_path = Path(lerobot_ds.root)
+
+    # 3. Pre-calculate Initial Cube Positions for all episodes
+    print("🧊 Pre-calculating initial cube positions for all episodes...")
+    model = mujoco.MjModel.from_xml_path(SCENE_PATH)
+    data = mujoco.MjData(model)
+    cam_id_center = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "world_center")
+    mujoco.mj_forward(model, data)
+    K_center = get_projection_matrix(cam_id_center, model, 480, 480)
+    t_center = data.cam_xpos[cam_id_center]
+    R_center = data.cam_xmat[cam_id_center].reshape(3, 3) @ np.array(
+        [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+    )
+
+    initial_cube_positions = {}
+    for ep_idx in range(lerobot_ds.num_episodes):
+        center_rgb = (
+            dataset_path
+            / f"videos/observation.images.world_center/chunk-000/file-{ep_idx:03d}.mp4"
+        )
+        if center_rgb.exists():
+            initial_cube_pos = find_initial_cube_pos(
+                center_rgb, K_center, R_center, t_center
+            )
+            if initial_cube_pos is not None:
+                initial_cube_positions[ep_idx] = initial_cube_pos
+
+    # 4. Setup Output Directories
     out_dir = Path(args.output_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
 
-    # 3. Save Metadata
+    # 5. Save Metadata
     print("💾 Saving metadata...")
     progress = ds["progress"] if "progress" in ds.column_names else ([0.0] * num_frames)
     ep_idx = (
@@ -151,7 +268,7 @@ def main():
     }
     torch.save(metadata, out_dir / "metadata.pt")
 
-    # 4. Multiprocess Frame Generation
+    # 6. Multiprocess Frame Generation
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
 
     print(f"🚀 Processing {num_frames} frames across {args.cores} cores...")
@@ -160,7 +277,7 @@ def main():
     with Pool(
         processes=args.cores,
         initializer=init_worker,
-        initargs=(args.repo_id, views, out_dir),
+        initargs=(args.repo_id, views, out_dir, initial_cube_positions),
     ) as p:
         # chunksize=5 for a responsive progress bar with good efficiency
         results = p.imap_unordered(process_frame_task, range(num_frames), chunksize=5)
