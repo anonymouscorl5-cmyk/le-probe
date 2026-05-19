@@ -72,16 +72,19 @@ class LEWMInferenceServer:
         gallery_path="goal_gallery.pth",
         use_multi_view=False,
         use_skeleton=False,
-        use_dino=False,
+        # use_dino=False,
     ):
+        # print(
+        #     f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino}) ---"
+        # )
         print(
-            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino}) ---"
+            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}) ---"
         )
         self.scaler = StandardScaler()
         self.initial_pose = None
         self.use_multi_view = use_multi_view
         self.use_skeleton = use_skeleton
-        self.use_dino = use_dino
+        # self.use_dino = use_dino
 
         gallery_file = Path(gallery_path)
         if not gallery_file.exists():
@@ -101,7 +104,7 @@ class LEWMInferenceServer:
             use_multi_view=use_multi_view,
             num_views=5 if use_multi_view else 1,
             use_skeleton=use_skeleton,
-            use_dino=use_dino,
+            # use_dino=use_dino,
         )
 
         # Initialize MuJoCo for server-side skeletal prior rendering
@@ -306,18 +309,18 @@ class LEWMInferenceServer:
                     init_guess[:, 0:16] = self.agent.frozen_pose[0:16]
                     init_guess = init_guess.unsqueeze(0)
 
-                    obs_dict = {
-                        "pixels": pixels_stacked,
-                        "action": actions_stacked,
-                    }
-                    if "phase_idx" in req:
-                        p_idx = int(req.get("phase_idx"))
-                        obs_dict["phase_idx"] = torch.tensor(
-                            [[p_idx]], dtype=torch.long, device=DEVICE
-                        )
+                    # obs_dict = {
+                    #     "pixels": pixels_stacked,
+                    #     "action": actions_stacked,
+                    # }
+                    # if "phase_idx" in req:
+                    #     p_idx = int(req.get("phase_idx"))
+                    #     obs_dict["phase_idx"] = torch.tensor(
+                    #         [[p_idx]], dtype=torch.long, device=DEVICE
+                    #     )
 
                     outputs = self.solver.solve(
-                        obs_dict,
+                        {"pixels": pixels_stacked, "action": actions_stacked},
                         init_action=init_guess,
                     )
 
@@ -516,13 +519,13 @@ if __name__ == "__main__":
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
-    parser.add_argument("--use_dino", action="store_true", default=False)
+    # parser.add_argument("--use_dino", action="store_true", default=False)
     args = parser.parse_args()
     server = LEWMInferenceServer(
         args.model,
         args.gallery,
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
-        use_dino=args.use_dino,
+        # use_dino=args.use_dino,
     )
     server.run()
