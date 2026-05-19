@@ -317,11 +317,18 @@ class GoalMapper:
             else:
                 if not isinstance(phase_idx, torch.Tensor):
                     phase_idx = torch.tensor(phase_idx, device=self.device)
-                if phase_idx.ndim == 1:
-                    phase_idx = phase_idx.unsqueeze(-1)
-                if phase_idx.ndim == 0:
-                    phase_idx = phase_idx.view(1, 1).repeat(B, 1)
-                phase_idx = phase_idx.view(B, 1).to(self.device)
+
+                # Flatten first
+                phase_idx = phase_idx.flatten()
+
+                # Bulletproof slice/repeat to exactly match B
+                if phase_idx.numel() == B * S:
+                    # CEM solver repeats observations using repeat_interleave(S, dim=0)
+                    phase_idx = phase_idx[::S].view(B, 1).to(self.device)
+                elif phase_idx.numel() >= B:
+                    phase_idx = phase_idx[:B].view(B, 1).to(self.device)
+                else:
+                    phase_idx = phase_idx[0].repeat(B).view(B, 1).to(self.device)
 
             # B. Query High-Level Predictor for Macro Subgoal Coordinate
             curr_state = init_emb[:, -1, :]  # (B, 192)
