@@ -96,12 +96,17 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
                     # Grayscale conversion for skeleton mask
                     frame_skel = cv2.cvtColor(frame_skel, cv2.COLOR_BGR2GRAY)
 
+                    # Crop the right half (skeleton mask) from the 960x480 tiled video
+                    h_skel, w_skel = frame_skel.shape
+                    if w_skel == 960:
+                        frame_skel = frame_skel[:, 480:]
+
                     # Resize to 224x224
                     rgb_224 = cv2.resize(
                         frame_rgb, (224, 224), interpolation=cv2.INTER_LINEAR
                     )
                     skel_224 = cv2.resize(
-                        frame_skel, (224, 224), interpolation=cv2.INTER_NEAREST
+                        frame_skel, (224, 224), interpolation=cv2.INTER_AREA
                     )
 
                 # Fuse channels: RGB (3) + Skeleton (1)

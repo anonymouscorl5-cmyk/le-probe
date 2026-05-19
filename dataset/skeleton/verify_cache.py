@@ -206,6 +206,66 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
                 )
                 fused_failures += 1
 
+            # 4. Semantic Skeleton Channel Audit (Anti-Squashing & Anti-Leakage Check)
+            # A valid skeleton mask is drawn on a black background and should be highly sparse.
+            # A squashed tiled video (RGB + Skeleton) would have active RGB textures on the left, dropping sparsity.
+            skel = pixels[:, :, 3].float()
+            sparsity = (skel == 0.0).float().mean()
+            if sparsity < 0.70:
+                print(
+                    f"❌ Semantic Violation in {fused_path.name}: Skeleton channel sparsity is too low ({sparsity.item():.2%}). "
+                    "Expected at least 70.00% sparsity (black background). This indicates RGB leakage or squashed/unsplit tiled frames."
+                )
+                fused_failures += 1
+
+            # Check that the skeleton is not completely dead (all zeros)
+            if skel.max() < 100:
+                print(
+                    f"❌ Dead Channel Violation in {fused_path.name}: Skeleton channel max value is too low ({skel.max().item()}). "
+                    "A valid skeleton mask must contain bright lines/joints."
+                )
+                fused_failures += 1
+
+            # Check for RGB-to-Skeleton leakage using Pearson correlation
+            r, g, b = (
+                pixels[:, :, 0].float(),
+                pixels[:, :, 1].float(),
+                pixels[:, :, 2].float(),
+            )
+            rgb_gray = 0.299 * r + 0.587 * g + 0.114 * b
+            mean_rgb = rgb_gray.mean()
+            mean_skel = skel.mean()
+            diff_rgb = rgb_gray - mean_rgb
+            diff_skel = skel - mean_skel
+            covariance = (diff_rgb * diff_skel).mean()
+            std_rgb = torch.sqrt((diff_rgb**2).mean())
+            std_skel = torch.sqrt((diff_skel**2).mean())
+            if std_rgb > 0 and std_skel > 0:
+                correlation = covariance / (std_rgb * std_skel)
+                # If correlation is too high, it indicates leakage of RGB textures into the skeleton channel
+                if correlation > 0.45:
+                    print(
+                        f"❌ Leakage Violation in {fused_path.name}: Skeleton channel is highly correlated with RGB channel "
+                        f"({correlation.item():.2f}). Potential RGB-to-skeleton leakage or squashed frame resizing."
+                    )
+                    fused_failures += 1
+
+            # 5. State, Action, and Waypoint Dynamics/Variance Checks
+            # Check for dead/frozen states and actions (which indicate corrupted parquet/video logging)
+            if state.std(dim=0).max() < 1e-4:
+                print(
+                    f"⚠️ Warning in {fused_path.name}: State exhibits near-zero temporal variance across all dimensions."
+                )
+            if action.std(dim=0).max() < 1e-4:
+                print(
+                    f"⚠️ Warning in {fused_path.name}: Action exhibits near-zero temporal variance across all dimensions."
+                )
+            if dino_waypoints.std() < 1e-4:
+                print(
+                    f"❌ Waypoint Violation in {fused_path.name}: Cached DINO waypoints exhibit zero variance."
+                )
+                fused_failures += 1
+
         except Exception as e:
             print(f"❌ Failed to load fused cache file {fused_path.name}: {e}")
             fused_failures += 1
