@@ -32,7 +32,7 @@ _worker_context = {}
 
 
 def check_cube_visibility(rgb_frame):
-    hsv = cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2HSV)
     mask = cv2.inRange(
         hsv, np.array([0, 100, 100]), np.array([10, 255, 255])
     ) + cv2.inRange(hsv, np.array([160, 100, 100]), np.array([180, 255, 255]))
@@ -175,7 +175,7 @@ def process_frame_task(idx):
                 ps, _ = project_point(data.xpos[b_id], K, R_cam, t_cam)
                 pp, _ = project_point(data.xpos[p_id], K, R_cam, t_cam)
                 if ps is not None and pp is not None:
-                    draw.line([tuple(ps), tuple(pp)], fill=255, width=2)
+                    draw.line([tuple(ps), tuple(pp)], fill=255, width=1)
 
         # Draw cube wireframe
         if cube_pos is not None and check_cube_visibility(rgb):
@@ -226,24 +226,8 @@ def main():
     # 3. Save Metadata
     print("💾 Saving metadata...")
     progress = ds["progress"] if "progress" in ds.column_names else ([0.0] * num_frames)
-    ep_idx_list = (
-        ds["episode_index"]
-        if "episode_index" in ds.column_names
-        else ([0] * num_frames)
-    )
-
-    if "frame_index" in ds.column_names:
-        f_idx = ds["frame_index"]
-    elif "step" in ds.column_names:
-        f_idx = ds["step"]
-    else:
-        f_idx = list(range(num_frames))
-
-    metadata = {
-        "progress": progress,
-        "episode_index": ep_idx_list,
-        "frame_index": f_idx,
-    }
+    f_idx = list(range(num_frames))
+    metadata = {"progress": progress, "frame_index": f_idx}
     torch.save(metadata, out_dir / "metadata.pt")
 
     # 4. Multiprocess Frame Generation
