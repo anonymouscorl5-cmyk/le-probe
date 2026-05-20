@@ -37,8 +37,8 @@ I've created two datasets aimed at picking up the cube with different behavioura
       <th>Dataset: Cup Pattern</th>
     </tr>
     <tr>
-      <td><img src="assets/dataset_grasp.gif" width="320"></td>
-      <td><img src="assets/dataset_cup.gif" width="320"></td>
+      <td><img src="assets/dataset_grasp.gif" width="240"></td>
+      <td><img src="assets/dataset_cup.gif" width="240"></td>
     </tr>
   </table>
 </div>
@@ -58,8 +58,8 @@ More details available in [**`vla/README.md`**](./vla/README.md).
       <th>VLA: Cup Execution</th>
     </tr>
     <tr>
-      <td><img src="assets/vla_grasp.gif" width="320"></td>
-      <td><img src="assets/vla_cup.gif" width="320"></td>
+      <td><img src="assets/vla_grasp.gif" width="240"></td>
+      <td><img src="assets/vla_cup.gif" width="240"></td>
     </tr>
   </table>
 </div>
@@ -77,8 +77,8 @@ To try and still get some sort of idea of the quality of training, I trained an 
 
 <div align="center">
   <b>LeWM: Grasp Execution</b>
-  <hr width="320">
-  <img src="assets/lewm_grasp.gif" width="320">
+  <hr width="240">
+  <img src="assets/lewm_grasp.gif" width="240">
 </div>
 
 #### Multi-View RGB
@@ -87,8 +87,8 @@ Previously, we had only trained the LeWM model with single-view images (`world_c
 
 <div align="center">
   <b>LeWM: Grasp Execution (Multi-View)</b>
-  <hr width="320">
-  <img src="assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
+  <hr width="240">
+  <img src="assets/lewm_grasp_multiview.gif" width="240" alt="LeWM: Grasp Execution (Multi-View)">
 </div>
 
 #### Multi-View RGB + Skeletal Priors
@@ -99,19 +99,37 @@ Previously, we had only trained the LeWM model with single-view images (`world_c
 
 <div align="center">
   <b>Skeletal Priors</b>
-  <hr width="100%">
-  <img src="assets/skeletal_priors.gif" width="100%" alt="Skeletal Priors">
+  <hr width="480">
+  <img src="assets/skeletal_priors.gif" width="480" alt="Skeletal Priors">
 </div>
 
 The model trained doesn't experience the same kind of resistance faced when we were relying on the skeletal and it also somewhat attempted the pickup movement albeit a bit too rapidly and smashed the cube off the table after 2 failed attempts.
 
 <div align="center">
   <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors)</b>
-  <hr width="320">
-  <img src="assets/lewm_grasp_multiview_skeleton.gif" width="320" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors)">
+  <hr width="240">
+  <img src="assets/lewm_grasp_multiview_skeleton.gif" width="240" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors)">
 </div>
 
 It still doesn't actually pick up the cube, we need to find further ways of learning all 4 sub-phases of movement needed for the task separately.
+
+#### Multi-View RGB + Skeletal Priors + DINO Waypoints
+
+The previous attempt did show some signs of learning the broader motion of grasping the cube as shown in the dataset but not as precisely as before. One argument is that the training window only contains about 3 frames which prevents that from happening. As a result, in this experiment we've included DINOv3 Waypoints for the target position of all 4 sub-phases in the training data,
+
+<div align="center">
+  <b>DINOv3 Representation of Episode</b>
+  <hr width="720">
+  <img src="assets/dino_skeletal_priors.gif" width="720" alt="DINOv3 Representation of Episode">
+</div>
+
+While the above GIF shows DINOv3 representations for all frames in an episode, we only rely on 4 frames in every 32-frame episode. That representation is passed in to an additional reward head on top of the predictor to ensure that every transition tries to close in to the upcoming sub-goal. This does demonstrate that now we are able to follow the grasp trajectory of the training data more closely than any previous experiments, especially the first phase of approaching the cube.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)</b>
+  <hr width="240">
+  <img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="240" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)">
+</div>
 
 ### 4. Interpretability
 
@@ -130,6 +148,7 @@ Dimensionality reduction (PCA, t-SNE, UMAP) to diagnose manifold fragmentation a
 | **Single-View** | ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
 | **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
 | **Multi-View + Skeletal Priors** | ![PCA](assets/manifold_3d_multiview_skeleton_pca.png) | ![t-SNE](assets/manifold_3d_multiview_skeleton_tsne.png) | ![UMAP](assets/manifold_3d_multiview_skeleton_umap.png) |
+| **Multi-View + Skeletal Priors + DINOv3 Waypoints** | ![PCA](assets/manifold_3d_multiview_skeleton_dino_pca.png) | ![t-SNE](assets/manifold_3d_multiview_skeleton_dino_tsne.png) | ![UMAP](assets/manifold_3d_multiview_skeleton_dino_umap.png) |
 
 #### Neuronpedia
 
@@ -149,7 +168,7 @@ We use a full-stack attribution engine that probes every layer of the Encoder an
 High-level decision hubs (L11) draw raw spatial anchors directly from early sensory layers (L0/L1) via 10+ layer skip connections.
 
 <div align="center">
-  <img src="assets/neuronpedia_dashboard.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
+  <img src="assets/neuronpedia_dashboard.png" width="720" style="border-radius: 12px; margin-bottom: 20px;">
   <p><i>The Le-Probe Dashboard: Mapping the L0 $\rightarrow$ L11 skip connections.</i></p>
 </div>
 
@@ -192,6 +211,7 @@ I have published three core datasets used for the above results:
 Optionally, if you'd like to record new datasets you can use the following:
 
 #### Data Collection
+
 ```bash
 # Start the Rerun server
 rerun
@@ -204,6 +224,7 @@ streamlit run dataset/teleop_ui.py
 ```
 
 #### Dataset Upload
+
 ```bash
 .venv/bin/python dataset/upload_dataset.py --repo_id <>
 ```
@@ -219,6 +240,13 @@ streamlit run dataset/teleop_ui.py
   ```bash
   .venv/bin/python dataset/skeleton/generate_reward_priors.py vedpatwardhan/gr1_reward_pred
   ```
+
+#### DINOv3 Waypoints
+
+```bash
+# Generate Waypoints for Main Dataset
+.venv/bin/python le-probe/dataset/skeleton/generate_dino_priors.py
+```
 
 ### 2. VLA (GR00T-N1)
 
@@ -259,6 +287,7 @@ Following the training, all goal states in the dataset were harvested in the lat
 | **Single-View** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
 | **Multi-View** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1pGMMicqYL_Z8GCS1TOe2A_kAAJQLV3qd/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1gYk_P9Godif20boD64M8epR5xSSSxugn/view?usp=sharing) |
 | **Multi-View + Skeletal Priors** | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1tiN-awjiMl0oUy8uLE9JT0850QQOPCUI/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1R9uuqpd1yb7t7-NwuvEq7VrOuI6wI152/view?usp=sharing) |
+| **Multi-View + Skeletal Priors + DINOv3 Waypoints** | [`gr1_reward_tuned_v1.ckpt`](https://drive.google.com/file/d/18xFB2lbxY5Q7EFs-18V9tkmED7NSQelR/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1nFW8J_6PQhFaB1agzd8vaEZ1yIy8cCPA/view?usp=sharing) |
 
 #### Inference
 
@@ -272,6 +301,9 @@ Following the training, all goal states in the dataset were harvested in the lat
 
    # For Multi-View + Skeletal Priors
    .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v6.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton
+
+   # For Multi-View + Skeletal Priors + DINOv3 Waypoints
+   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v1.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton --use_dino
    ```
 
 2. **Simulation Host**:
@@ -284,6 +316,9 @@ Following the training, all goal states in the dataset were harvested in the lat
 
    # For Multi-View + Skeletal Priors
    .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton
+
+   # For Multi-View + Skeletal Priors + DINOv3 Waypoints
+   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton --use_dino
    ```
 
 ### 4. Interpretability
@@ -348,28 +383,30 @@ make webapp-localhost-dev
 ```
 
 #### Latent Manifold Topology
+
 Analyze the internal "map" of the latent space to diagnose planning failures.
-| Type | 3D PCA | 3D t-SNE | 3D UMAP |
-| :--- | :---: | :---: | :---: |
-| **Single-View** | ![PCA](assets/manifold_3d_pca.png) | ![t-SNE](assets/manifold_3d_tsne.png) | ![UMAP](assets/manifold_3d_umap.png) |
-| **Multi-View** | ![PCA](assets/manifold_3d_multiview_pca.png) | ![t-SNE](assets/manifold_3d_multiview_tsne.png) | ![UMAP](assets/manifold_3d_multiview_umap.png) |
 
 0. **Latest Manifolds:**
 | Version | Interactive Manifold (UMAP) |
 | :--- | :--- |
 | **Single-View** | [manifold_data.pt](https://drive.google.com/file/d/17f2l3ebzrX0chu5Zy0GiWEYqGZ-M0CyK/view?usp=sharing) |
 | **Multi-View** | [manifold_data.pt](https://drive.google.com/file/d/1ix3_ISc80CX91RWKafP0pV8ZA9RlO49f/view?usp=sharing) |
+| **Multi-View + Skeletal Priors** | [manifold_data.pt](https://drive.google.com/file/d/1XG1Bt6jfV7uTy5wSd9INDIY-g0hu5U1i/view?usp=sharing) |
+| **Multi-View + Skeletal Priors + DINOv3 Waypoints** | [manifold_data.pt](https://drive.google.com/file/d/1nnAQZNHOSeIb_dLfYZCy-MjN9BIKtRji/view?usp=sharing) |
 
 1. **Harvest Latents**:
 ```bash
-# Multi-View Harvest
+# Single-View
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200
+
+# Multi-View
 .venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200 --multi_view
 
-# Single-View Harvest
-.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200
+# Multi-View + Skeleton Priors
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200 --multi_view --use_skeleton
 ```
 
 2. **Visualize Latent Topology**:
 ```bash
-.venv/bin/python interpretability/manifold/visualize_manifold.py --method umap --output manifold_3d_umap.html
+.venv/bin/python interpretability/manifold/visualize_manifold.py --method umap --output manifold_3d_umap.html [--highlight <ID1> <ID2>, ...]
 ```

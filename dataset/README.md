@@ -13,8 +13,8 @@ After experimenting with 12, 32 and 52 frame episodes, I have standardized on **
       <th>Dataset: Cup Pattern</th>
     </tr>
     <tr>
-      <td><img src="../assets/dataset_grasp.gif" width="320"></td>
-      <td><img src="../assets/dataset_cup.gif" width="320"></td>
+      <td><img src="../assets/dataset_grasp.gif" width="240"></td>
+      <td><img src="../assets/dataset_cup.gif" width="240"></td>
     </tr>
   </table>
 </div>
@@ -26,7 +26,7 @@ After experimenting with 12, 32 and 52 frame episodes, I have standardized on **
 I use a custom-built Streamlit dashboard for real-time control, IK requests, and dataset auditing using the `teleop_ui.py` which is eventually visualized via Rerun.
 
 <div align="center">
-  <img src="../assets/teleop_dashboard.png" width="100%" style="border-radius: 8px;">
+  <img src="../assets/teleop_dashboard.png" width="720" style="border-radius: 8px;">
 </div>
 
 ### 🛠 Key Components
@@ -69,12 +69,25 @@ The following datasets have been curated and uploaded to the Hugging Face Hub:
 - Here's an example for what the skeleton looks like for one of the episodes in `gr1_pickup_grasp`:
 
 <div align="center">
-  <img src="../assets/skeletal_priors.gif" width="100%" style="border-radius: 8px;">
+  <img src="../assets/skeletal_priors.gif" width="480" style="border-radius: 8px;">
+</div>
+
+## 🦖 DINOv3 Waypoints
+
+- In order to improve the model's understanding of the global trajectory during the episode beyond the 3-frame default window, we use DINOv3 to generate waypoints.
+- The goal is to have a separate waypoint for the target position of each of the 4 sub-phases during an episode.
+- Here's an example for the DINOv3 representation of the full episode, although we only rely on 4 waypoints out of a 32-frame episode.
+
+<div align="center">
+  <b>DINOv3 Representation of Episode</b>
+  <hr width="720">
+  <img src="../assets/dino_skeletal_priors.gif" width="720" alt="DINOv3 Representation of Episode">
 </div>
 
 ## 🚀 Workflows
 
 ### 1. Data Collection
+
 ```bash
 # Start the Rerun server
 rerun
@@ -104,4 +117,10 @@ streamlit run dataset/teleop_ui.py
 
 # Audit the reward priors
 .venv/bin/python dataset/skeleton/audit_priors.py --repo_id vedpatwardhan/gr1_reward_pred_v2 --frames dataset_skel_frames
+```
+
+### 4. DINOv3 Waypoints
+```bash
+# Generate Waypoints for Main Dataset
+.venv/bin/python dataset/skeleton/generate_dino_priors.py
 ```

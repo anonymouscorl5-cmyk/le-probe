@@ -26,8 +26,8 @@ Following are the loss plots while training both the cup and grasp datasets for 
       <th>Cup</th>
     </tr>
     <tr>
-      <td><img src="../assets/gr00t_grasp_loss.png" width="400"></td>
-      <td><img src="../assets/gr00t_cup_loss.png" width="400"></td>
+      <td><img src="../assets/gr00t_grasp_loss.png" width="240"></td>
+      <td><img src="../assets/gr00t_cup_loss.png" width="240"></td>
     </tr>
   </table>
 </div>
@@ -43,8 +43,8 @@ GR00T-N1 has been successfully stabilized to perform two distinct manipulation s
       <th>Cup Execution</th>
     </tr>
     <tr>
-      <td><img src="../assets/vla_grasp.gif" width="320"></td>
-      <td><img src="../assets/vla_cup.gif" width="320"></td>
+      <td><img src="../assets/vla_grasp.gif" width="240"></td>
+      <td><img src="../assets/vla_cup.gif" width="240"></td>
     </tr>
   </table>
 </div>

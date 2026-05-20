@@ -51,7 +51,7 @@ Separate from the mechanistic circuit analysis, we analyzed the topological stru
 The attribution graph was computed using integrated gradients,
 
 <div align="center">
-  <img src="../assets/neuronpedia_dashboard.png" width="100%" style="border-radius: 12px; margin-bottom: 20px;">
+  <img src="../assets/neuronpedia_dashboard.png" width="720" style="border-radius: 12px; margin-bottom: 20px;">
   <p><i>The Le-Probe Dashboard: Hierarchical circuit tracing from pixels to reward probability.</i></p>
 </div>
 
@@ -64,11 +64,13 @@ Here's the results of the manifold visualization,
 | :--- | :---: | :---: | :---: |
 | **Methodology** | **Global Variance Audit**: Measures representational diversity and collapse. | **Local Neighborhood Audit**: Measures phase-wise temporal consistency. | **Manifold Topology Audit**: Maps global task continuity and goal reachability. |
 | **Single-View** | ![PCA](../assets/manifold_3d_pca.png) | ![t-SNE](../assets/manifold_3d_tsne.png) | ![UMAP](../assets/manifold_3d_umap.png) |
-| **Finding** | **Diffuse High-Entropy Cloud**: Extremely scattered spatial representation showing zero coherent coordinate trajectories or macro-structure. High sensitivity to background pixels and peripheral noise prevents representation alignment. | **Jittered Local Clustered Fields**: Demonstrates fragmented temporal sequences with severe phase-transition jitter and micro-loops, disrupting planning continuity. | **Failure: Fragmented Archipelago**: Separates into highly disconnected topological islands with extremely low semantic grouping, causing pathfinding failure. |
+| **Finding** | **Diffuse High-Entropy Cloud**: Extremely scattered spatial representation showing zero coherent coordinate trajectories or macro-structure. High sensitivity to background pixels and peripheral noise prevents representation alignment. | **Jittered Local Clustered Fields**: Demonstrates fragmented temporal sequences with severe phase-transition jitter and micro-loops, disrupting planning continuity. | **Fragmented Archipelago**: Separates into highly disconnected topological islands with extremely low semantic grouping, causing pathfinding failure. |
 | **Multi-View** | ![PCA](../assets/manifold_3d_multiview_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_umap.png) |
-| **Finding** | **Dispersed Trajectory Threads**: Exhibits broad temporal flow vectors from start (yellow) to finish (brown), but fails to establish a structured planning corridor. Early-stage (yellow) embeddings are widely scattered, indicating a lack of unified task-space coordination. | **Overfitted Trajectory Splitting**: Offers cleaner separation but is highly prone to memorization (overfitting). Distinct, isolated thread "hairs" run parallel on the peripheries with a dense interior cluster, failing to merge into shared execution directions. | **Failure: Isolated Trajectory Islands**: Exhibits extreme topological collapse and overfitting, with isolated single-episode islands (rarely grouped by more than two). This confirms that without physical constraints, the model struggles to generalize. |
+| **Finding** | **Dispersed Trajectory Threads**: Exhibits broad temporal flow vectors from start (yellow) to finish (brown), but fails to establish a structured planning corridor. Early-stage (yellow) embeddings are widely scattered, indicating a lack of unified task-space coordination. | **Overfitted Trajectory Splitting**: Offers cleaner separation but is highly prone to memorization (overfitting). Distinct, isolated thread "hairs" run parallel on the peripheries with a dense interior cluster, failing to merge into shared execution directions. | **Isolated Trajectory Islands**: Exhibits extreme topological collapse and overfitting, with isolated single-episode islands (rarely grouped by more than two). This confirms that without physical constraints, the model struggles to generalize. |
 | **Multi-View + Skeletal Priors** | ![PCA](../assets/manifold_3d_multiview_skeleton_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_skeleton_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_skeleton_umap.png) |
-| **Finding** | **Skeletal Directional Highway**: Establishes a highly structured, low-entropy directional corridor. Trajectories originate from a clustered interior (start/yellow), transition systematically through the task-space base (approach/orange), and terminate consistently at the target zone (success/brown). | **Coherent Structural Bundles**: Highly interpretable, clustered trajectories. Large groups of distinct episodes align into unified directional bundles, indicating generalized movement policies rather than overfitting or memorization. | **Success: Unified Task Continua**: Exceptional topological recovery. Large, continuous semantic islands emerge with smooth, convergent trajectory arcs, demonstrating the critical role of skeletal priors in pruning noise. |
+| **Finding** | **Skeletal Directional Highway**: Establishes a highly structured, low-entropy directional corridor. Trajectories originate from a clustered interior (start/yellow), transition systematically through the task-space base (approach/orange), and terminate consistently at the target zone (success/brown). | **Coherent Structural Bundles**: Highly interpretable, clustered trajectories. Large groups of distinct episodes align into unified directional bundles, indicating generalized movement policies rather than overfitting or memorization. | **Unified Task Continua**: Exceptional topological recovery. Large, continuous semantic islands emerge with smooth, convergent trajectory arcs, demonstrating the critical role of skeletal priors in pruning noise. |
+| **Multi-View + Skeletal Priors + DINOv3 Waypoints** | ![PCA](../assets/manifold_3d_multiview_skeleton_dino_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_skeleton_dino_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_skeleton_dino_umap.png) |
+| **Finding** | **Clear Directional Highway**: The corridor visible in the previous experiment becomes even more defined with all the start points at the top and all the end points at the bottom, courtesy of learning the global objectives with the waypoints. | **Clear Manifold Structure**: The manifold structure is even better than just relying on the skeletons, similar to PCA there's even more separation between start and end states, solving the discriminability problem between goal and non-goal states | **More Cohesion**: The UMAP plot with the waypoints included shows even more cohesion than with just the skeletons, there's about 4 major islands connected with each other through narrow links. |
 
 ## 🚀 Research Roadmap: Next Steps
 
@@ -144,11 +146,19 @@ Analyze the topological structure of the latent space to diagnose discriminabili
 | **Single-View** | [manifold_data.pt](https://drive.google.com/file/d/17f2l3ebzrX0chu5Zy0GiWEYqGZ-M0CyK/view?usp=sharing) |
 | **Multi-View** | [manifold_data.pt](https://drive.google.com/file/d/1ix3_ISc80CX91RWKafP0pV8ZA9RlO49f/view?usp=sharing) |
 | **Multi-View + Skeletal Priors** | [manifold_data.pt](https://drive.google.com/file/d/1XG1Bt6jfV7uTy5wSd9INDIY-g0hu5U1i/view?usp=sharing) |
+| **Multi-View + Skeletal Priors + DINOv3 Waypoints** | [manifold_data.pt](https://drive.google.com/file/d/1nnAQZNHOSeIb_dLfYZCy-MjN9BIKtRji/view?usp=sharing) |
 
 ```bash
-# 1. Harvest latents for the entire trajectory
-.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 100
+# Single-View
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200
 
-# 2. Generate 3D Visualization
-.venv/bin/python interpretability/manifold/visualize_manifold.py --method umap
+# Multi-View
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200 --multi_view
+
+# Multi-View + Skeleton Priors
+.venv/bin/python interpretability/manifold/harvest_manifold.py --episodes 200 --multi_view --use_skeleton
+
+# Visualize the manifold
+.venv/bin/python interpretability/manifold/visualize_manifold.py --method umap --output manifold_3d_umap.html [--highlight <ID1> <ID2>, ...]
+
 ```

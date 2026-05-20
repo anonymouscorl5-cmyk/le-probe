@@ -74,8 +74,8 @@ The results with solely relying on the goal state embeddings weren't useful, but
 
 <div align="center">
   <b>LeWM: Grasp Execution</b>
-  <hr width="320">
-  <img src="../assets/lewm_grasp.gif" width="320" alt="LeWM: Grasp Execution">
+  <hr width="240">
+  <img src="../assets/lewm_grasp.gif" width="240" alt="LeWM: Grasp Execution">
 </div>
 
 ### Multi-View RGB
@@ -84,8 +84,8 @@ Previously, we had only trained the LeWM model with single-view images (`world_c
 
 <div align="center">
   <b>LeWM: Grasp Execution (Multi-View)</b>
-  <hr width="320">
-  <img src="../assets/lewm_grasp_multiview.gif" width="320" alt="LeWM: Grasp Execution (Multi-View)">
+  <hr width="240">
+  <img src="../assets/lewm_grasp_multiview.gif" width="240" alt="LeWM: Grasp Execution (Multi-View)">
 </div>
 
 ### Multi-View + Skeletal Priors
@@ -96,19 +96,37 @@ Previously, we had only trained the LeWM model with single-view images (`world_c
 
 <div align="center">
   <b>Skeletal Priors</b>
-  <hr width="100%">
-  <img src="../assets/skeletal_priors.gif" width="100%" alt="Skeletal Priors">
+  <hr width="480">
+  <img src="../assets/skeletal_priors.gif" width="480" alt="Skeletal Priors">
 </div>
 
 The model trained doesn't experience the same kind of resistance faced when we were relying on the skeletal and it also somewhat attempted the pickup movement albeit a bit too rapidly and smashed the cube off the table after 2 failed attempts.
 
 <div align="center">
   <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors)</b>
-  <hr width="320">
-  <img src="../assets/lewm_grasp_multiview_skeleton.gif" width="320" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors)">
+  <hr width="240">
+  <img src="../assets/lewm_grasp_multiview_skeleton.gif" width="240" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors)">
 </div>
 
 It still doesn't actually pick up the cube, we need to find further ways of learning all 4 sub-phases of movement needed for the task separately.
+
+### Multi-View + Skeletal Priors + DINOv3 Waypoints
+
+The previous attempt did show some signs of learning the broader motion of grasping the cube as shown in the dataset but not as precisely as before. One argument is that the training window only contains about 3 frames which prevents that from happening. As a result, in this experiment we've included DINOv3 Waypoints for the target position of all 4 sub-phases in the training data,
+
+<div align="center">
+  <b>DINOv3 Representation of Episode</b>
+  <hr width="720">
+  <img src="assets/dino_skeletal_priors.gif" width="720" alt="DINOv3 Representation of Episode">
+</div>
+
+While the above GIF shows DINOv3 representations for all frames in an episode, we only rely on 4 frames in every 32-frame episode. That representation is passed in to an additional reward head on top of the predictor to ensure that every transition tries to close in to the upcoming sub-goal. This does demonstrate that now we are able to follow the grasp trajectory of the training data more closely than any previous experiments, especially the first phase of approaching the cube.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)</b>
+  <hr width="240">
+  <img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="240" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)">
+</div>
 
 ## 🎨 Motivation for Interpretability
 
@@ -129,6 +147,7 @@ After training, use [**`harvest_goals.py`**](harvest_goals.py) to harvest latent
 | **Single-View** | Standard Baseline | [`gr1_reward_tuned_v2.ckpt`](https://drive.google.com/file/d/1dPp-yuSEKMywKPH1mzKT4m7f7Rq5ak7A/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1KDxrZVbrlB2wDDPJAQfHIZxZi48ZhN8U/view?usp=sharing) |
 | **Multi-View** | Multi-Camera Oracle | [`gr1_reward_tuned_v2.ckpt](https://drive.google.com/file/d/1pGMMicqYL_Z8GCS1TOe2A_kAAJQLV3qd/view?usp=drive_link) | [`goal_gallery.pth`](https://drive.google.com/file/d/1gYk_P9Godif20boD64M8epR5xSSSxugn/view?usp=drive_link) |
 | **Multi-View + Skeletal Priors** | 4th Channel with Skeletal Priors | [`gr1_reward_tuned_v6.ckpt`](https://drive.google.com/file/d/1tiN-awjiMl0oUy8uLE9JT0850QQOPCUI/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1R9uuqpd1yb7t7-NwuvEq7VrOuI6wI152/view?usp=sharing) |
+| **Multi-View + Skeletal Priors + DINOv3 Waypoints** | 4th Channel with Skeletal Priors + DINOv3 Waypoints | [`gr1_reward_tuned_v1.ckpt`](https://drive.google.com/file/d/18xFB2lbxY5Q7EFs-18V9tkmED7NSQelR/view?usp=sharing) | [`goal_gallery.pth`](https://drive.google.com/file/d/1nFW8J_6PQhFaB1agzd8vaEZ1yIy8cCPA/view?usp=sharing) |
 
 ### 2. Inference
 To test the World Model and MPC planner:
@@ -143,6 +162,9 @@ To test the World Model and MPC planner:
 
 # For Multi-View + Skeletal Priors
 .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v6.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton
+
+# For Multi-View + Skeletal Priors + DINOv3 Waypoints
+.venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v1.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton --use_dino
 ```
 
 #### Simulation Host
@@ -155,4 +177,7 @@ To test the World Model and MPC planner:
 
 # For Multi-View + Skeletal Priors
 .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton
+
+# For Multi-View + Skeletal Priors + DINOv3 Waypoints
+.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton --use_dino
 ```
