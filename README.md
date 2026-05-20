@@ -387,7 +387,8 @@ make webapp-localhost-dev
 Analyze the internal "map" of the latent space to diagnose planning failures.
 
 0. **Latest Manifolds:**
-| Version | Interactive Manifold (UMAP) |
+
+| Version | Manifold Harvest |
 | :--- | :--- |
 | **Single-View** | [manifold_data.pt](https://drive.google.com/file/d/17f2l3ebzrX0chu5Zy0GiWEYqGZ-M0CyK/view?usp=sharing) |
 | **Multi-View** | [manifold_data.pt](https://drive.google.com/file/d/1ix3_ISc80CX91RWKafP0pV8ZA9RlO49f/view?usp=sharing) |
