@@ -91,7 +91,7 @@ def draw_cube_wireframe(draw, cube_pos, K, R, t, color=255):
             draw.line([tuple(ps), tuple(pe)], fill=color, width=2)
 
 
-def init_worker(parquet_path, views, output_dir, initial_cube_positions):
+def init_worker(parquet_path, views, output_dir):
     """Initializes the plugin and MuJoCo model once per process"""
     _worker_context["ds"] = Dataset.from_parquet(str(parquet_path))
     _worker_context["model"] = mujoco.MjModel.from_xml_path(SCENE_PATH)
@@ -99,7 +99,6 @@ def init_worker(parquet_path, views, output_dir, initial_cube_positions):
     _worker_context["unscaler"] = StandardScaler()
     _worker_context["views"] = views
     _worker_context["out_dir"] = Path(output_dir)
-    _worker_context["initial_cube_positions"] = initial_cube_positions
 
 
 def process_frame_task(idx):
@@ -110,10 +109,8 @@ def process_frame_task(idx):
     unscaler = _worker_context["unscaler"]
     views = _worker_context["views"]
     out_dir = _worker_context["out_dir"]
-    initial_cube_positions = _worker_context["initial_cube_positions"]
 
     row = ds[idx]
-    ep_idx = row["episode_index"] if "episode_index" in row else 0
 
     # 1. Proprioception
     qpos = np.array(row["observation.state"])
@@ -134,19 +131,31 @@ def process_frame_task(idx):
             data.qpos[model.jnt_qposadr[j_id]] = qpos_raw[j]
     mujoco.mj_forward(model, data)
 
-    idx_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "R_index_tip_link")
-    thm_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "R_thumb_tip_link")
-    initial_cube_pos = initial_cube_positions.get(ep_idx)
+    # 2. Detect cube position directly from observation.images.world_center for this snapshot
+    center_rgb = np.array(row["observation.images.world_center"], dtype=np.uint8)
+    if center_rgb.shape[0] == 3:
+        center_rgb = center_rgb.transpose(1, 2, 0)
+    H_c, W_c, _ = center_rgb.shape
+    cam_id_center = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "world_center")
+    K_center = get_projection_matrix(cam_id_center, model, W_c, H_c)
+    t_center = data.cam_xpos[cam_id_center]
+    R_center = data.cam_xmat[cam_id_center].reshape(3, 3) @ np.array(
+        [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+    )
+    bgr_center = cv2.cvtColor(center_rgb, cv2.COLOR_RGB2BGR)
+    cube_pos = find_initial_cube_pos_from_image(
+        bgr_center, K_center, R_center, t_center
+    )
 
     frame_data = {}
     for view_name in views:
-        # 2. Get RGB (Handle both HWC and CHW formats from datasets)
+        # 3. Get RGB (Handle both HWC and CHW formats from datasets)
         rgb = np.array(row[f"observation.images.{view_name}"], dtype=np.uint8)
         if rgb.shape[0] == 3:
             rgb = rgb.transpose(1, 2, 0)
         H, W, _ = rgb.shape
 
-        # 3. Render Skeleton
+        # 4. Render Skeleton
         mask = Image.new("L", (W, H), 0)
         draw = ImageDraw.Draw(mask)
 
@@ -169,16 +178,10 @@ def process_frame_task(idx):
                     draw.line([tuple(ps), tuple(pp)], fill=255, width=2)
 
         # Draw cube wireframe
-        if initial_cube_pos is not None and check_cube_visibility(rgb):
-            gripper_mid = (data.xpos[idx_id] + data.xpos[thm_id]) / 2.0
-            cube_pos = (
-                gripper_mid
-                if np.linalg.norm(gripper_mid - initial_cube_pos) < 0.05
-                else initial_cube_pos
-            )
+        if cube_pos is not None and check_cube_visibility(rgb):
             draw_cube_wireframe(draw, cube_pos, K, R_cam, t_cam)
 
-        # 4. Stack into 4-channel tensor [C, H, W]
+        # 5. Stack into 4-channel tensor [C, H, W]
         skel = np.array(mask, dtype=np.uint8)
         combined = np.concatenate([rgb, skel[..., None]], axis=-1)
         frame_data[view_name] = torch.from_numpy(combined).permute(2, 0, 1)
@@ -214,60 +217,13 @@ def main():
     num_frames = len(ds)
     print(f"📊 Dataset loaded: {num_frames} frames.")
 
-    # 2. Pre-calculate Initial Cube Positions for all episodes directly from images in parquet
-    initial_cube_positions = {}
-    print("🧊 Pre-calculating initial cube positions for all episodes...")
-    model = mujoco.MjModel.from_xml_path(SCENE_PATH)
-    data = mujoco.MjData(model)
-    cam_id_center = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "world_center")
-    mujoco.mj_forward(model, data)
-
-    # Find the first frame for each episode index to compute its initial cube position
-    ep_first_frames = {}
-    for idx in tqdm(range(num_frames), desc="Scanning snapshots"):
-        row = ds[idx]
-        ep_idx = row["episode_index"] if "episode_index" in row else 0
-        step_idx = (
-            row["step"]
-            if "step" in row
-            else (row["frame_index"] if "frame_index" in row else idx)
-        )
-
-        if ep_idx not in ep_first_frames or step_idx < ep_first_frames[ep_idx][0]:
-            ep_first_frames[ep_idx] = (step_idx, idx)
-
-    for ep_idx, (step_idx, idx) in tqdm(
-        ep_first_frames.items(), desc="Detecting cube positions"
-    ):
-        row = ds[idx]
-        rgb = np.array(row["observation.images.world_center"], dtype=np.uint8)
-        if rgb.shape[0] == 3:
-            rgb = rgb.transpose(1, 2, 0)
-        H, W, _ = rgb.shape
-
-        K_center = get_projection_matrix(cam_id_center, model, W, H)
-        t_center = data.cam_xpos[cam_id_center]
-        R_center = data.cam_xmat[cam_id_center].reshape(3, 3) @ np.array(
-            [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
-        )
-
-        bgr_frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        initial_cube_pos = find_initial_cube_pos_from_image(
-            bgr_frame, K_center, R_center, t_center
-        )
-        if initial_cube_pos is not None:
-            initial_cube_positions[ep_idx] = initial_cube_pos
-            print(
-                f"  📍 Episode {ep_idx} (step {step_idx}): Cube detected at {initial_cube_pos}"
-            )
-
-    # 3. Setup Output Directories
+    # 2. Setup Output Directories
     out_dir = Path(args.output_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
 
-    # 4. Save Metadata
+    # 3. Save Metadata
     print("💾 Saving metadata...")
     progress = ds["progress"] if "progress" in ds.column_names else ([0.0] * num_frames)
     ep_idx_list = (
@@ -290,7 +246,7 @@ def main():
     }
     torch.save(metadata, out_dir / "metadata.pt")
 
-    # 5. Multiprocess Frame Generation
+    # 4. Multiprocess Frame Generation
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
 
     print(f"🚀 Processing {num_frames} frames across {args.cores} cores...")
@@ -299,7 +255,7 @@ def main():
     with Pool(
         processes=args.cores,
         initializer=init_worker,
-        initargs=(parquet_path, views, out_dir, initial_cube_positions),
+        initargs=(parquet_path, views, out_dir),
     ) as p:
         # chunksize=5 for a responsive progress bar with good efficiency
         results = p.imap_unordered(process_frame_task, range(num_frames), chunksize=5)
