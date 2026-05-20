@@ -3,6 +3,7 @@ import sys
 import torch
 import argparse
 import numpy as np
+import cv2
 from pathlib import Path
 from datasets import load_dataset
 
@@ -117,6 +118,44 @@ def audit_dataset(repo_id, frames_dir):
                         )
         except Exception as e:
             print(f"❌ ERROR: Could not load frame {check_idx}: {e}")
+
+    # 6. Save Visual Audit Samples
+    vis_dir = out_dir / "audit_visualizations"
+    vis_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\n📸 Saving visual audit samples to {vis_dir}...")
+    sample_indices = [
+        check_indices[0],
+        check_indices[len(check_indices) // 2],
+        check_indices[-1],
+    ]
+    for sample_idx in sample_indices:
+        frame_path = out_dir / f"frame_{sample_idx:06d}.pt"
+        if not frame_path.exists():
+            continue
+        try:
+            frame = torch.load(frame_path, weights_only=False)
+            for v in views:
+                if v not in frame:
+                    continue
+                tensor = frame[v]
+                np_frame = tensor.permute(1, 2, 0).cpu().numpy()
+                rgb = np_frame[:, :, :3].astype(np.uint8)
+                skel = np_frame[:, :, 3].astype(np.uint8)
+
+                # Overlay skeleton mask on RGB frame as bright green
+                overlay = rgb.copy()
+                overlay[skel > 0] = [0, 255, 0]
+
+                # Combined: RGB | Skeleton Mask | Overlay
+                skel_3ch = np.stack([skel, skel, skel], axis=-1)
+                combined = np.hstack([rgb, skel_3ch, overlay])
+
+                combined_bgr = cv2.cvtColor(combined, cv2.COLOR_RGB2BGR)
+                out_file = vis_dir / f"frame_{sample_idx:06d}_{v}.png"
+                cv2.imwrite(str(out_file), combined_bgr)
+            print(f"  ✅ Saved visualizations for frame {sample_idx}")
+        except Exception as e:
+            print(f"  ⚠️ Failed to save visualization for frame {sample_idx}: {e}")
 
     print("\n🏁 Audit complete.")
 
