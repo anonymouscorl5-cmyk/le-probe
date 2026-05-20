@@ -9,8 +9,8 @@ from PIL import Image, ImageDraw
 from pathlib import Path
 from tqdm import tqdm
 from multiprocessing import Pool
-from datasets import load_dataset
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from datasets import Dataset
+from huggingface_hub import snapshot_download
 import argparse
 
 # --- Path Stabilization ---
@@ -39,12 +39,7 @@ def check_cube_visibility(rgb_frame):
     return np.sum(mask > 0) > 30
 
 
-def find_initial_cube_pos(video_path, K, R, t, table_z=0.82):
-    cap = cv2.VideoCapture(str(video_path))
-    ret, frame = cap.read()
-    cap.release()
-    if not ret:
-        return None
+def find_initial_cube_pos_from_image(frame, K, R, t, table_z=0.82):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(
         hsv, np.array([0, 100, 100]), np.array([10, 255, 255])
@@ -96,9 +91,9 @@ def draw_cube_wireframe(draw, cube_pos, K, R, t, color=255):
             draw.line([tuple(ps), tuple(pe)], fill=color, width=2)
 
 
-def init_worker(repo_id, views, output_dir, initial_cube_positions):
+def init_worker(parquet_path, views, output_dir, initial_cube_positions):
     """Initializes the plugin and MuJoCo model once per process"""
-    _worker_context["ds"] = load_dataset(repo_id, split="train")
+    _worker_context["ds"] = Dataset.from_parquet(str(parquet_path))
     _worker_context["model"] = mujoco.MjModel.from_xml_path(SCENE_PATH)
     _worker_context["data"] = mujoco.MjData(_worker_context["model"])
     _worker_context["unscaler"] = StandardScaler()
@@ -204,51 +199,76 @@ def main():
     parser.add_argument("--cores", type=int, default=4)
     args = parser.parse_args()
 
-    # 1. Initialize Dataset
-    print(f"📥 Loading dataset via HuggingFace: {args.repo_id}...")
-    ds = load_dataset(args.repo_id, split="train")
+    # 1. Download and Locate Parquet File
+    print(f"📥 Syncing dataset from HF: {args.repo_id}...")
+    local_dir = Path(args.repo_id.split("/")[-1])
+    snapshot_download(repo_id=args.repo_id, repo_type="dataset", local_dir=local_dir)
+
+    parquet_matches = list(local_dir.rglob("*.parquet"))
+    if not parquet_matches:
+        raise FileNotFoundError(f"🚨 Could not find dataset.parquet inside {local_dir}")
+
+    parquet_path = parquet_matches[0]
+    print(f"📊 Loading dataset from parquet: {parquet_path}")
+    ds = Dataset.from_parquet(str(parquet_path))
     num_frames = len(ds)
     print(f"📊 Dataset loaded: {num_frames} frames.")
 
-    # 2. Get LeRobot Dataset Path for cube positioning video analysis
-    lerobot_ds = LeRobotDataset(args.repo_id)
-    dataset_path = Path(lerobot_ds.root)
-
-    # 3. Pre-calculate Initial Cube Positions for all episodes
+    # 2. Pre-calculate Initial Cube Positions for all episodes directly from images in parquet
+    initial_cube_positions = {}
     print("🧊 Pre-calculating initial cube positions for all episodes...")
     model = mujoco.MjModel.from_xml_path(SCENE_PATH)
     data = mujoco.MjData(model)
     cam_id_center = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "world_center")
     mujoco.mj_forward(model, data)
-    K_center = get_projection_matrix(cam_id_center, model, 480, 480)
-    t_center = data.cam_xpos[cam_id_center]
-    R_center = data.cam_xmat[cam_id_center].reshape(3, 3) @ np.array(
-        [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
-    )
 
-    initial_cube_positions = {}
-    for ep_idx in range(lerobot_ds.num_episodes):
-        center_rgb = (
-            dataset_path
-            / f"videos/observation.images.world_center/chunk-000/file-{ep_idx:03d}.mp4"
+    # Find the first frame for each episode index to compute its initial cube position
+    ep_first_frames = {}
+    for idx in range(num_frames):
+        row = ds[idx]
+        ep_idx = row["episode_index"] if "episode_index" in row else 0
+        step_idx = (
+            row["step"]
+            if "step" in row
+            else (row["frame_index"] if "frame_index" in row else idx)
         )
-        if center_rgb.exists():
-            initial_cube_pos = find_initial_cube_pos(
-                center_rgb, K_center, R_center, t_center
-            )
-            if initial_cube_pos is not None:
-                initial_cube_positions[ep_idx] = initial_cube_pos
 
-    # 4. Setup Output Directories
+        if ep_idx not in ep_first_frames or step_idx < ep_first_frames[ep_idx][0]:
+            ep_first_frames[ep_idx] = (step_idx, idx)
+
+    for ep_idx, (step_idx, idx) in ep_first_frames.items():
+        row = ds[idx]
+        rgb = np.array(row["observation.images.world_center"], dtype=np.uint8)
+        if rgb.shape[0] == 3:
+            rgb = rgb.transpose(1, 2, 0)
+        H, W, _ = rgb.shape
+
+        K_center = get_projection_matrix(cam_id_center, model, W, H)
+        t_center = data.cam_xpos[cam_id_center]
+        R_center = data.cam_xmat[cam_id_center].reshape(3, 3) @ np.array(
+            [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+        )
+
+        bgr_frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        initial_cube_pos = find_initial_cube_pos_from_image(
+            bgr_frame, K_center, R_center, t_center
+        )
+        if initial_cube_pos is not None:
+            initial_cube_positions[ep_idx] = initial_cube_pos
+            print(
+                f"  📍 Episode {ep_idx} (step {step_idx}): Cube detected at {initial_cube_pos}"
+            )
+
+    # 3. Setup Output Directories
     out_dir = Path(args.output_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
 
-    # 5. Save Metadata
+    # 4. Save Metadata
     print("💾 Saving metadata...")
     progress = ds["progress"] if "progress" in ds.column_names else ([0.0] * num_frames)
-    ep_idx = (
+    ep_idx_list = (
         ds["episode_index"]
         if "episode_index" in ds.column_names
         else ([0] * num_frames)
@@ -263,12 +283,12 @@ def main():
 
     metadata = {
         "progress": progress,
-        "episode_index": ep_idx,
+        "episode_index": ep_idx_list,
         "frame_index": f_idx,
     }
     torch.save(metadata, out_dir / "metadata.pt")
 
-    # 6. Multiprocess Frame Generation
+    # 5. Multiprocess Frame Generation
     views = ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
 
     print(f"🚀 Processing {num_frames} frames across {args.cores} cores...")
@@ -277,7 +297,7 @@ def main():
     with Pool(
         processes=args.cores,
         initializer=init_worker,
-        initargs=(args.repo_id, views, out_dir, initial_cube_positions),
+        initargs=(parquet_path, views, out_dir, initial_cube_positions),
     ) as p:
         # chunksize=5 for a responsive progress bar with good efficiency
         results = p.imap_unordered(process_frame_task, range(num_frames), chunksize=5)
