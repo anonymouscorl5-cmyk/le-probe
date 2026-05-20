@@ -224,7 +224,7 @@ def main():
 
     # Find the first frame for each episode index to compute its initial cube position
     ep_first_frames = {}
-    for idx in range(num_frames):
+    for idx in tqdm(range(num_frames), desc="Scanning snapshots"):
         row = ds[idx]
         ep_idx = row["episode_index"] if "episode_index" in row else 0
         step_idx = (
@@ -236,7 +236,9 @@ def main():
         if ep_idx not in ep_first_frames or step_idx < ep_first_frames[ep_idx][0]:
             ep_first_frames[ep_idx] = (step_idx, idx)
 
-    for ep_idx, (step_idx, idx) in ep_first_frames.items():
+    for ep_idx, (step_idx, idx) in tqdm(
+        ep_first_frames.items(), desc="Detecting cube positions"
+    ):
         row = ds[idx]
         rgb = np.array(row["observation.images.world_center"], dtype=np.uint8)
         if rgb.shape[0] == 3:
