@@ -120,7 +120,7 @@ def audit_dataset(repo_id, frames_dir):
             print(f"❌ ERROR: Could not load frame {check_idx}: {e}")
 
     # 6. Save Visual Audit Samples
-    vis_dir = out_dir / "audit_visualizations"
+    vis_dir = Path("audit_visualizations")
     vis_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n📸 Saving visual audit samples to {vis_dir}...")
     sample_indices = [
