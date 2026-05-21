@@ -51,6 +51,12 @@ class GR1TeleopServer(GR1MuJoCoBase):
         reachability_horizon=0.25,
         reachability_refresh_every=5,
         reachability_include_hand=False,
+        reachability_limit_mode="hybrid",
+        reachability_dq_max=1.5,
+        reachability_quality="fast",
+        reachability_n_samples=None,
+        reachability_facet_dim=None,
+        reachability_fill_alpha=0.15,
     ):
         super().__init__(scene_path or SCENE_PATH, restrict_ik=True)
         self.port = port
@@ -64,6 +70,7 @@ class GR1TeleopServer(GR1MuJoCoBase):
         self._reach_lock = threading.Lock()
         self._reach_busy = False
         self._last_reach_poly = None
+        self.reachability_fill_alpha = reachability_fill_alpha
 
         if show_reachability and not REACHABILITY_AVAILABLE:
             print(f"⚠️ Reachability overlay disabled: {_REACHABILITY_IMPORT_ERROR}")
@@ -77,12 +84,21 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 scene_path or SCENE_PATH,
                 active_wire_idx=active_idx,
             )
-            self._reach_cfg = teleop_reachability_config(horizon=reachability_horizon)
+            self._reach_cfg = teleop_reachability_config(
+                horizon=reachability_horizon,
+                limit_mode=reachability_limit_mode,
+                dq_max_rad_s=reachability_dq_max,
+                quality=reachability_quality,
+                n_samples=reachability_n_samples,
+                facet_dim=reachability_facet_dim,
+            )
             dof_label = "arm+hand 10-DoF" if reachability_include_hand else "arm 7-DoF"
+            c = self._reach_cfg
             print(
                 f"🌐 Reachability 2D overlay on all cameras (depth-occluded) "
-                f"({dof_label}, horizon={reachability_horizon}s, "
-                f"refresh every {self.reachability_refresh_every} steps)"
+                f"({dof_label}, horizon={c.time_horizon}s, limits={c.limit_mode}, "
+                f"dq_max={c.dq_max_rad_s} rad/s, n_samples={c.n_samples}, "
+                f"facet_dim={c.facet_dim}, refresh every {self.reachability_refresh_every} steps)"
             )
 
     def _post_render_hook(self, name, rgb, depth=None):
@@ -99,7 +115,7 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 self.model,
                 self.data,
                 depth_buffer=depth,
-                fill_alpha=0.15,
+                fill_alpha=self.reachability_fill_alpha,
             )
             if drawn is not rgb:
                 rgb[:] = drawn
@@ -463,6 +479,42 @@ if __name__ == "__main__":
         action="store_true",
         help="Include thumb+index joints (slower, ~8s per update)",
     )
+    parser.add_argument(
+        "--reachability-limit-mode",
+        choices=["xml", "mpc_box", "hybrid"],
+        default="hybrid",
+        help="Joint limit source: full XML, MPC tight box on wire 17-20, or hybrid (default)",
+    )
+    parser.add_argument(
+        "--reachability-dq-max",
+        type=float,
+        default=1.5,
+        help="Max joint speed (rad/s) in reachable-set model — larger hull when increased",
+    )
+    parser.add_argument(
+        "--reachability-quality",
+        choices=["fast", "balanced", "high"],
+        default="fast",
+        help="Sampling preset: fast (n=2,f=1), balanced (3,2), high (5,2). Overrides unless --reachability-n-samples set",
+    )
+    parser.add_argument(
+        "--reachability-n-samples",
+        type=int,
+        default=None,
+        help="Override pycapacity n_samples (more = richer/slower hull)",
+    )
+    parser.add_argument(
+        "--reachability-facet-dim",
+        type=int,
+        default=None,
+        help="Override pycapacity facet_dim (higher = better shape fidelity)",
+    )
+    parser.add_argument(
+        "--reachability-fill-alpha",
+        type=float,
+        default=0.15,
+        help="Semi-transparent fill strength on camera overlay (0 = wireframe only)",
+    )
     args = parser.parse_args()
 
     refresh_every = args.reachability_refresh_every
@@ -476,4 +528,10 @@ if __name__ == "__main__":
         reachability_horizon=args.reachability_horizon,
         reachability_refresh_every=refresh_every,
         reachability_include_hand=args.reachability_include_hand,
+        reachability_limit_mode=args.reachability_limit_mode,
+        reachability_dq_max=args.reachability_dq_max,
+        reachability_quality=args.reachability_quality,
+        reachability_n_samples=args.reachability_n_samples,
+        reachability_facet_dim=args.reachability_facet_dim,
+        reachability_fill_alpha=args.reachability_fill_alpha,
     ).run()

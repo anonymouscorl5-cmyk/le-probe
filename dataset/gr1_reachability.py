@@ -421,14 +421,32 @@ def apply_active_joint_motion(
         engine._baseline_qpos[q_idx] = float(val)
 
 
-def teleop_reachability_config(horizon: float = 0.25) -> ReachabilityConfig:
-    """Low-cost settings for live Rerun overlay during teleop."""
+def teleop_reachability_config(
+    horizon: float = 0.25,
+    *,
+    limit_mode: Literal["xml", "mpc_box", "hybrid"] = "hybrid",
+    dq_max_rad_s: float = 1.5,
+    n_samples: int | None = None,
+    facet_dim: int | None = None,
+    convex_hull: bool = True,
+    calculate_faces: bool = True,
+    quality: Literal["fast", "balanced", "high"] = "fast",
+) -> ReachabilityConfig:
+    """Reachability settings for live teleop overlay (see ``--reachability-quality``)."""
+    presets: dict[str, tuple[int, int]] = {
+        "fast": (2, 1),
+        "balanced": (3, 2),
+        "high": (5, 2),
+    }
+    preset_n, preset_f = presets[quality]
     return ReachabilityConfig(
         time_horizon=horizon,
-        limit_mode="hybrid",
-        n_samples=2,
-        facet_dim=1,
-        calculate_faces=True,
+        dq_max_rad_s=dq_max_rad_s,
+        limit_mode=limit_mode,
+        convex_hull=convex_hull,
+        n_samples=n_samples if n_samples is not None else preset_n,
+        facet_dim=facet_dim if facet_dim is not None else preset_f,
+        calculate_faces=calculate_faces,
     )
 
 
