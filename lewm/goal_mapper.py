@@ -28,6 +28,7 @@ from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import get_multi_view_encoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
 from omegaconf import OmegaConf
+import numpy as np
 
 
 class GoalMapper:
@@ -125,6 +126,10 @@ class GoalMapper:
         self.model.to(self.device).eval()
         self.goal_latent = None
         self.frozen_pose = None
+
+        from lewm.reachability_constraint import ReachabilityMPCConstraint
+
+        self._reach_mpc = ReachabilityMPCConstraint()
 
         # 2. Image Transform (Standard LeWM 224x224)
         imagenet_stats = dt.dataset_stats.ImageNet
@@ -391,49 +396,54 @@ class GoalMapper:
         smoothness_weight = 100.0
         dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
 
+        reach_penalty = self._reachability_penalty(obs_dict, flat_plan_actions, B, S)
+        if reach_penalty is not None:
+            dist = dist + reach_penalty
+
         return dist.view(B, S)
 
     def predict(self, *args, **kwargs):
         """Proxy to the internal World Model's prediction logic."""
         return self.model.predict(*args, **kwargs)
 
+    def _reachability_penalty(self, obs_dict, flat_plan_actions, B: int, S: int):
+        """Task-space reachable polytope penalty (replaces 17–20 radian remap)."""
+        reach_H = obs_dict.get("reach_H")
+        reach_d = obs_dict.get("reach_d")
+        reach_wire32 = obs_dict.get("reach_wire32")
+        if reach_H is None or reach_d is None or reach_wire32 is None:
+            return None
+
+        if isinstance(reach_H, torch.Tensor):
+            H = reach_H[0, 0].detach().cpu().numpy()
+            d = reach_d[0, 0].detach().cpu().numpy().reshape(-1)
+            wire32 = reach_wire32[0, 0].detach().cpu().numpy()
+        else:
+            H = np.asarray(reach_H[0, 0], dtype=np.float64)
+            d = np.asarray(reach_d[0, 0], dtype=np.float64).reshape(-1)
+            wire32 = np.asarray(reach_wire32[0, 0], dtype=np.float64)
+
+        plan_np = flat_plan_actions.detach().cpu().numpy()
+        penalties = self._reach_mpc.plan_penalty_batch(wire32, plan_np, H=H, d=d)
+        pen_t = torch.from_numpy(penalties).to(
+            device=flat_plan_actions.device, dtype=flat_plan_actions.dtype
+        )
+        return pen_t * self._reach_mpc.gamma
+
     def manifold_squash(self, actions):
         """
-        PRECISION MANIFOLD MAPPING:
-        1. Restricts sampling to Right Arm (16-22), Right Hand (23-28), and Waist (29-31).
-        2. Freezes Left Arm/Hand (0-12) and Head (13-15) to -1.0.
-        3. Applies buffered remapping to Right Arm joints (17-20).
+        Freeze left side + head; clamp active joints to [-1, 1].
+        Right-arm task limits come from reachable polytope penalty in get_cost.
         """
-        # Clone the actions tensor to avoid mutating the solver's internal state/population in-place
         actions = actions.clone()
 
-        # 1. Freeze Left Side and Head (Indices 0-15)
-        # We set these to the frozen_pose (Initial Pose).
-        # Error if not set, as we must never default to -1.0.
         if self.frozen_pose is None:
             raise ValueError(
                 "❌ GoalMapper Error: frozen_pose not set before planning!"
             )
 
         actions[..., 0:16] = self.frozen_pose[..., 0:16]
-
-        # 2. Global Safety Clamp for Active Joints
         actions = torch.clamp(actions, -1.0, 1.0)
-
-        # 3. Right Arm Precision Mapping (Indices 17, 18, 19, 20)
-        # Buffered Ranges (Orig Min/Max + 20% Range Buffer):
-        arm_min = torch.tensor([-0.312, -0.098, -0.156, -0.098], device=actions.device)
-        arm_max = torch.tensor([1.172, 0.098, 0.236, 0.098], device=actions.device)
-
-        # Select the joints for all steps in the plan
-        arm_joints = actions[..., 17:21]
-
-        # Apply the linear transformation
-        remapped_arm = arm_min + (arm_joints + 1.0) * (arm_max - arm_min) / 2.0
-
-        # Re-insert into the action vector
-        actions[..., 17:21] = remapped_arm
-
         return actions
 
     def encode(self, pixels):

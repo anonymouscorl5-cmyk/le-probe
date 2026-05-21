@@ -44,6 +44,7 @@ from dataset.skeleton.projection_utils import (
     project_point,
     is_allowed_action_chain,
 )
+from lewm.reachability_constraint import ReachabilityMPCConstraint
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -139,6 +140,14 @@ class LEWMInferenceServer:
             action_space=Box(low=-1.0, high=1.0, shape=(4, 32)),
             n_envs=1,
             config=MockConfig(horizon=4, init_var=0.1),
+        )
+
+        # Reachable workspace for CEM (replaces 17–20 joint remap)
+        self.reach_constraint = ReachabilityMPCConstraint()
+        print(
+            "🌐 Reachability polytope active in CEM "
+            f"(hybrid limits, horizon={self.reach_constraint.cfg.time_horizon}s, "
+            f"γ={self.reach_constraint.gamma})"
         )
 
         # 5. State Buffering
@@ -306,9 +315,17 @@ class LEWMInferenceServer:
                     init_guess[..., 0:16] = self.agent.frozen_pose[0:16]
                     init_guess = init_guess.unsqueeze(0)
 
+                    self.reach_constraint.compute_polytope(raw_sim_state)
+                    reach_H, reach_d = self.reach_constraint.get_halfspaces()
+
                     obs_dict = {
                         "pixels": pixels_stacked,
                         "action": actions_stacked,
+                        "reach_H": reach_H.astype(np.float32)[np.newaxis, ...],
+                        "reach_d": reach_d.astype(np.float32)[np.newaxis, ...],
+                        "reach_wire32": raw_sim_state.astype(np.float32)[
+                            np.newaxis, ...
+                        ],
                     }
                     if "phase_idx" in req:
                         p_idx = int(req.get("phase_idx"))
@@ -327,21 +344,16 @@ class LEWMInferenceServer:
                 elif best_plan.ndim == 3:
                     best_plan = best_plan[0]  # (S, T, D) -> (T, D)
 
-                # Apply Manifold Enforcements and Precision Mapping to the ENTIRE plan
-                # 🧊 MANIFOLD ENFORCEMENT (0-15) 🧊
+                # Freeze left + head; keep protocol [-1, 1] on active joints
                 best_plan[:, 0:16] = self.initial_pose[0:16]
-
-                # 2. 🛡️ PRECISION MAPPING & PROTOCOL ENFORCEMENT 🛡️
-                arm_min = np.array([-0.312, -0.098, -0.156, -0.098])
-                arm_max = np.array([1.172, 0.098, 0.236, 0.098])
-                best_plan[:, 17:21] = (
-                    arm_min + (best_plan[:, 17:21] + 1.0) * (arm_max - arm_min) / 2.0
-                )
-
-                # 3. Final safety clip for active joints
                 best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
 
-                # 4. Delta Capping on the first step relative to history
+                reach_viol = self.reach_constraint.plan_violation(
+                    raw_sim_state, best_plan[-1]
+                )
+                print(f"   🌐 Reachability violation (final step): {reach_viol:.4f}")
+
+                # Delta Capping on the first step relative to history
                 target_action = best_plan[0].copy()
                 if len(self.history["actions"]) > 0:
                     prev_action = self.history["actions"][-1]
@@ -382,7 +394,10 @@ class LEWMInferenceServer:
                     msgpack.packb(
                         {
                             "action": best_plan.tolist(),
-                            "diagnostics": {"plan_time_ms": int(plan_time * 1000)},
+                            "diagnostics": {
+                                "plan_time_ms": int(plan_time * 1000),
+                                "reach_violation_final": float(reach_viol),
+                            },
                         },
                         use_bin_type=True,
                     )
