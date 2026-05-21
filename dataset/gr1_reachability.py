@@ -1,7 +1,9 @@
 """
-MuJoCo + pycapacity reachable workspace for Fourier GR-1.
-Mirrors: https://auctus-team.github.io/pycapacity/examples/reachable_workspace.html
-but uses the project's MuJoCo scene instead of Pinocchio/Panda.
+MuJoCo + pycapacity reachable workspace for Fourier GR-1 (legacy / exploration).
+
+Production MPC and teleop use the **fixed** hull in ``lewm/task_workspace.py``.
+This module remains for ``draw_polytope_on_rgb``, ``log_polytope_rerun``, and optional
+kinematic pycapacity experiments — not wired into ``lewm_server`` by default.
 """
 
 from __future__ import annotations
@@ -373,6 +375,93 @@ def draw_polytope_on_rgb(
             c, r = int(round(p2d[0])), int(round(p2d[1]))
             if _depth_visible(depth_buffer, c, r, z, depth_eps=depth_eps):
                 cv2.circle(out, (c, r), 5, ee_color, -1, cv2.LINE_AA)
+
+    return out
+
+
+# Default polytope / EE overlay color (BGR for OpenCV)
+DEFAULT_OVERLAY_BGR = (0, 255, 0)
+
+
+def draw_world_points_on_rgb(
+    rgb: np.ndarray,
+    points: np.ndarray,
+    cam_name: str,
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    *,
+    depth_buffer: np.ndarray | None = None,
+    color: tuple[int, int, int] = DEFAULT_OVERLAY_BGR,
+    radius: int = 7,
+    label_points: bool = True,
+    edges: list[tuple[int, int]] | None = None,
+    depth_eps: float = 0.003,
+) -> np.ndarray:
+    """Project world-frame 3D points onto a camera RGB frame (same blue as polytope overlay)."""
+    from dataset.skeleton.projection_utils import get_projection_matrix, project_point
+
+    try:
+        import cv2
+    except ImportError as e:
+        raise ImportError("opencv-python required for 2D point overlay") from e
+
+    cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name)
+    if cam_id == -1:
+        return rgb
+
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    h, w = rgb.shape[:2]
+    K = get_projection_matrix(cam_id, model, w, h)
+    R_cam, t_cam = _camera_world_to_image(model, data, cam_id)
+
+    out = np.asarray(rgb, dtype=np.uint8)
+    if not out.flags.writeable:
+        out = out.copy()
+
+    projected: list[tuple[np.ndarray, float] | None] = [None] * len(pts)
+    for i, p in enumerate(pts):
+        p2d, z = project_point(p, K, R_cam, t_cam)
+        if p2d is not None:
+            projected[i] = (p2d, z)
+
+    if edges:
+        for i, j in edges:
+            if i >= len(projected) or j >= len(projected):
+                continue
+            if projected[i] is None or projected[j] is None:
+                continue
+            p0, z0 = projected[i]
+            p1, z1 = projected[j]
+            _draw_depth_tested_line(
+                out,
+                depth_buffer,
+                p0,
+                z0,
+                p1,
+                z1,
+                color,
+                depth_eps=depth_eps,
+            )
+
+    for idx, pr in enumerate(projected):
+        if pr is None:
+            continue
+        p2d, z = pr
+        c, r = int(round(p2d[0])), int(round(p2d[1]))
+        if not _depth_visible(depth_buffer, c, r, z, depth_eps=depth_eps):
+            continue
+        cv2.circle(out, (c, r), radius, color, -1, cv2.LINE_AA)
+        if label_points:
+            cv2.putText(
+                out,
+                str(idx + 1),
+                (c + 6, r - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
 
     return out
 

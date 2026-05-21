@@ -27,7 +27,7 @@ from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
 from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import get_multi_view_encoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
-from lewm.reachability_constraint import INFEASIBLE_COST
+from lewm.task_workspace import TaskWorkspaceMPCConstraint, INFEASIBLE_COST
 from omegaconf import OmegaConf
 import numpy as np
 
@@ -128,9 +128,7 @@ class GoalMapper:
         self.goal_latent = None
         self.frozen_pose = None
 
-        from lewm.reachability_constraint import ReachabilityMPCConstraint
-
-        self._reach_mpc = ReachabilityMPCConstraint()
+        self._task_ws = TaskWorkspaceMPCConstraint()
 
         # 2. Image Transform (Standard LeWM 224x224)
         imagenet_stats = dt.dataset_stats.ImageNet
@@ -397,7 +395,7 @@ class GoalMapper:
         smoothness_weight = 100.0
         dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
 
-        dist = self._apply_reachability_gate(obs_dict, flat_plan_actions, dist)
+        dist = self._apply_task_workspace_gate(obs_dict, flat_plan_actions, dist)
 
         return dist.view(B, S)
 
@@ -405,27 +403,38 @@ class GoalMapper:
         """Proxy to the internal World Model's prediction logic."""
         return self.model.predict(*args, **kwargs)
 
-    def _apply_reachability_gate(self, obs_dict, flat_plan_actions, dist: torch.Tensor):
-        """Only feasible (in-hull) samples compete on reward; infeasible get +inf cost."""
-        reach_H = obs_dict.get("reach_H")
-        reach_d = obs_dict.get("reach_d")
-        reach_wire32 = obs_dict.get("reach_wire32")
-        if reach_H is None or reach_d is None or reach_wire32 is None:
+    def _apply_task_workspace_gate(
+        self, obs_dict, flat_plan_actions, dist: torch.Tensor
+    ):
+        """Only samples with final-step EE inside fixed task hull compete on reward."""
+        tw_H = obs_dict.get("task_workspace_H")
+        tw_d = obs_dict.get("task_workspace_d")
+        tw_wire32 = obs_dict.get("task_workspace_wire32")
+        if tw_H is None or tw_d is None or tw_wire32 is None:
             return dist
 
-        if isinstance(reach_H, torch.Tensor):
-            H = reach_H[0, 0].detach().cpu().numpy()
-            d = reach_d[0, 0].detach().cpu().numpy().reshape(-1)
-            wire32 = reach_wire32[0, 0].detach().cpu().numpy()
+        if isinstance(tw_H, torch.Tensor):
+            H = tw_H[0, 0].detach().cpu().numpy()
+            d = tw_d[0, 0].detach().cpu().numpy().reshape(-1)
+            wire32 = tw_wire32[0, 0].detach().cpu().numpy()
         else:
-            H = np.asarray(reach_H[0, 0], dtype=np.float64)
-            d = np.asarray(reach_d[0, 0], dtype=np.float64).reshape(-1)
-            wire32 = np.asarray(reach_wire32[0, 0], dtype=np.float64)
+            H = np.asarray(tw_H[0, 0], dtype=np.float64)
+            d = np.asarray(tw_d[0, 0], dtype=np.float64).reshape(-1)
+            wire32 = np.asarray(tw_wire32[0, 0], dtype=np.float64)
 
         plan_np = flat_plan_actions.detach().cpu().numpy()
-        eps = self._reach_mpc.feasibility_eps
-        feasible, violations = self._reach_mpc.feasible_mask_batch(
-            wire32, plan_np, H=H, d=d
+        eps = self._task_ws.feasibility_eps
+        final_only = obs_dict.get("task_workspace_check_final_only", True)
+        if isinstance(final_only, torch.Tensor):
+            final_only = bool(final_only.reshape(-1)[0].item())
+        elif isinstance(final_only, np.ndarray):
+            final_only = bool(np.asarray(final_only).reshape(-1)[0])
+        else:
+            final_only = bool(final_only)
+        feasible, violations = self._task_ws.feasible_mask_batch(
+            wire32,
+            plan_np,
+            check_all_steps=not final_only,
         )
         n_feas = int(feasible.sum())
         n_total = feasible.shape[0]
@@ -434,13 +443,13 @@ class GoalMapper:
             relaxed = violations <= eps * 100.0
             if int(relaxed.sum()) > 0:
                 print(
-                    f"⚠️ Reach gate: 0/{n_total} feasible at ε={eps:g}; "
+                    f"⚠️ Task workspace gate: 0/{n_total} feasible at ε={eps:g}; "
                     f"using relaxed ε={eps * 100:g} ({int(relaxed.sum())} samples)"
                 )
                 feasible = relaxed
             else:
                 print(
-                    f"⚠️ Reach gate: 0/{n_total} feasible even at relaxed ε; "
+                    f"⚠️ Task workspace gate: 0/{n_total} feasible even at relaxed ε; "
                     "skipping gate for this cost eval"
                 )
                 return dist
@@ -454,7 +463,7 @@ class GoalMapper:
     def manifold_squash(self, actions):
         """
         Freeze left side + head; clamp active joints to [-1, 1].
-        Reachability is enforced via feasibility gate in get_cost (no joint remap).
+        Task workspace is enforced via final-step EE gate in get_cost (no joint remap).
         """
         actions = actions.clone()
 

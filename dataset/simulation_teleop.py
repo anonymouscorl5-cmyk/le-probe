@@ -15,7 +15,6 @@ import mujoco
 import os
 import json
 import argparse
-import threading
 from PIL import Image
 from simulation_base import GR1MuJoCoBase
 from gr1_config import SCENE_PATH
@@ -23,17 +22,13 @@ from gr1_protocol import StandardScaler
 from gr1_config import COMPACT_WIRE_JOINTS
 
 try:
-    from dataset.gr1_reachability import (
-        GR1ReachabilityEngine,
-        TELEOP_ACTIVE_WIRE_IDX,
-        draw_polytope_on_rgb,
-        teleop_reachability_config,
-    )
+    from dataset.gr1_reachability import draw_polytope_on_rgb, log_polytope_rerun
+    from lewm.task_workspace import TaskWorkspaceMPCConstraint
 
-    REACHABILITY_AVAILABLE = True
+    TASK_WORKSPACE_AVAILABLE = True
 except ImportError as e:
-    REACHABILITY_AVAILABLE = False
-    _REACHABILITY_IMPORT_ERROR = e
+    TASK_WORKSPACE_AVAILABLE = False
+    _TASK_WORKSPACE_IMPORT_ERROR = e
 
 
 class GR1TeleopServer(GR1MuJoCoBase):
@@ -47,112 +42,49 @@ class GR1TeleopServer(GR1MuJoCoBase):
         scene_path=None,
         port=5556,
         lock_posture=False,
-        show_reachability=True,
-        reachability_horizon=0.25,
-        reachability_refresh_every=5,
-        reachability_include_hand=False,
-        reachability_limit_mode="hybrid",
-        reachability_dq_max=1.5,
-        reachability_quality="fast",
-        reachability_n_samples=None,
-        reachability_facet_dim=None,
-        reachability_fill_alpha=0.15,
+        show_task_workspace=False,
+        task_workspace_fill_alpha=0.15,
     ):
         super().__init__(scene_path or SCENE_PATH, restrict_ik=True)
         self.port = port
         self.lock_posture = lock_posture
         self.is_running = True
-        self.show_reachability = show_reachability and REACHABILITY_AVAILABLE
-        self.reachability_refresh_every = max(1, reachability_refresh_every)
-        self._reach_step_counter = 0
-        self._reach_engine = None
-        self._reach_cfg = None
-        self._reach_lock = threading.Lock()
-        self._reach_busy = False
-        self._last_reach_poly = None
-        self.reachability_fill_alpha = reachability_fill_alpha
+        self.show_task_workspace = show_task_workspace and TASK_WORKSPACE_AVAILABLE
+        self.task_workspace_fill_alpha = task_workspace_fill_alpha
+        self._task_ws = None
 
-        if show_reachability and not REACHABILITY_AVAILABLE:
-            print(f"⚠️ Reachability overlay disabled: {_REACHABILITY_IMPORT_ERROR}")
-        elif self.show_reachability:
-            active_idx = (
-                list(range(16, 26))
-                if reachability_include_hand
-                else TELEOP_ACTIVE_WIRE_IDX
-            )
-            self._reach_engine = GR1ReachabilityEngine(
-                scene_path or SCENE_PATH,
-                active_wire_idx=active_idx,
-            )
-            self._reach_cfg = teleop_reachability_config(
-                horizon=reachability_horizon,
-                limit_mode=reachability_limit_mode,
-                dq_max_rad_s=reachability_dq_max,
-                quality=reachability_quality,
-                n_samples=reachability_n_samples,
-                facet_dim=reachability_facet_dim,
-            )
-            dof_label = "arm+hand 10-DoF" if reachability_include_hand else "arm 7-DoF"
-            c = self._reach_cfg
+        if show_task_workspace and not TASK_WORKSPACE_AVAILABLE:
+            print(f"⚠️ Task workspace overlay disabled: {_TASK_WORKSPACE_IMPORT_ERROR}")
+        elif self.show_task_workspace:
+            self._task_ws = TaskWorkspaceMPCConstraint()
+            p = self._task_ws.poly
             print(
-                f"🌐 Reachability 2D overlay on all cameras (depth-occluded) "
-                f"({dof_label}, horizon={c.time_horizon}s, limits={c.limit_mode}, "
-                f"dq_max={c.dq_max_rad_s} rad/s, n_samples={c.n_samples}, "
-                f"facet_dim={c.facet_dim}, refresh every {self.reachability_refresh_every} steps)"
+                f"🌐 Task workspace overlay ON (fixed hull, {len(p.corner_points)} corners, "
+                f"{p.face_indices.shape[0]} faces)"
+            )
+
+    def _log_task_workspace_rerun(self):
+        if self._task_ws:
+            log_polytope_rerun(
+                self._task_ws.get_draw_polytope(),
+                entity_path="world/task_workspace",
+                wireframe_path="world/task_workspace_wireframe",
             )
 
     def _post_render_hook(self, name, rgb, depth=None):
-        """Draw latest reachable polytope wireframe on each camera frame before Rerun log."""
-        poly = None
-        if self.show_reachability:
-            with self._reach_lock:
-                poly = self._last_reach_poly
-        if poly is not None:
+        if self._task_ws is not None:
             drawn = draw_polytope_on_rgb(
                 rgb,
-                poly,
+                self._task_ws.get_draw_polytope(),
                 name,
                 self.model,
                 self.data,
                 depth_buffer=depth,
-                fill_alpha=self.reachability_fill_alpha,
+                fill_alpha=self.task_workspace_fill_alpha,
             )
             if drawn is not rgb:
                 rgb[:] = drawn
         super()._post_render_hook(name, rgb, depth=depth)
-
-    def _update_reachability_overlay(self, force=False):
-        """Recompute reachable workspace in a background thread; cache for 2D draw."""
-        if not self._reach_engine:
-            return
-        self._reach_step_counter += 1
-        if (
-            not force
-            and self._reach_step_counter % self.reachability_refresh_every != 0
-        ):
-            return
-        if self._reach_busy and not force:
-            return
-
-        qpos_snapshot = self.data.qpos.copy()
-        engine = self._reach_engine
-        cfg = self._reach_cfg
-
-        def _compute_and_log():
-            with self._reach_lock:
-                self._reach_busy = True
-            try:
-                engine.set_baseline_from_qpos(qpos_snapshot)
-                poly = engine.compute(cfg=cfg)
-                with self._reach_lock:
-                    self._last_reach_poly = poly
-            except Exception as e:
-                print(f"⚠️ Reachability compute failed: {e}")
-            finally:
-                with self._reach_lock:
-                    self._reach_busy = False
-
-        threading.Thread(target=_compute_and_log, daemon=True).start()
 
     def run(self):
         context = zmq.Context()
@@ -164,8 +96,8 @@ class GR1TeleopServer(GR1MuJoCoBase):
         print(
             f"🚀 Teleop Server Running on port {self.port} (Lock Posture: {self.lock_posture})"
         )
-        if self.show_reachability:
-            self._update_reachability_overlay(force=True)
+        if self.show_task_workspace:
+            self._log_task_workspace_rerun()
 
         while self.is_running:
             msg = socket.recv()
@@ -185,14 +117,12 @@ class GR1TeleopServer(GR1MuJoCoBase):
 
             if cmd == "reset":
                 self.reset_env(lock_posture=self.lock_posture)
-                self._update_reachability_overlay(force=True)
                 # Server is the Source of Normalized Truth
                 norm_state = StandardScaler().scale_state(self.get_state_32())
                 send_resp({"status": "reset_ok", "joints": norm_state.tolist()})
 
             elif cmd == "wild_randomize":
                 self.wild_reset()
-                self._update_reachability_overlay(force=True)
                 norm_state = StandardScaler().scale_state(self.get_state_32())
                 send_resp(
                     {"status": "wild_randomize_ok", "joints": norm_state.tolist()}
@@ -224,7 +154,6 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 phase = data.get("phase", 0)
                 offset_cm = data.get("offset_cm", 5)
                 self._handle_ik_pickup_logic(phase=phase, offset_cm=offset_cm)
-                self._update_reachability_overlay(force=True)
 
                 # Server is the Source of Normalized Truth
                 norm_state = StandardScaler().scale_state(self.get_state_32())
@@ -239,14 +168,12 @@ class GR1TeleopServer(GR1MuJoCoBase):
                     q_idx = self.model.jnt_qposadr[cube_id]
                     self.data.qpos[q_idx : q_idx + 7] = pose
                     mujoco.mj_forward(self.model, self.data)
-                self._update_reachability_overlay(force=True)
                 send_resp({"status": "cube_pose_ok"})
 
             elif "target" in data:
                 action_32 = np.array(data["target"], dtype=np.float32)
                 self.process_target_32(action_32)
                 self.dispatch_action(action_32, self.last_target_q)
-                self._update_reachability_overlay()
                 send_resp({"status": "step_ok"})
 
             elif cmd == "store_snapshot":
@@ -452,86 +379,21 @@ if __name__ == "__main__":
         help="Lock IK joints to specific targets",
     )
     parser.add_argument(
-        "--show-reachability",
+        "--task-workspace",
         action="store_true",
-        default=True,
-        help="Overlay reachable workspace wireframe on all 5 camera views",
+        help="Show fixed task workspace polytope on all cameras + Rerun",
     )
     parser.add_argument(
-        "--no-reachability",
-        action="store_true",
-        help="Disable reachability overlay",
-    )
-    parser.add_argument(
-        "--reachability-horizon",
-        type=float,
-        default=0.25,
-        help="Time horizon (seconds) for local reachable set",
-    )
-    parser.add_argument(
-        "--reachability-refresh-every",
-        type=int,
-        default=5,
-        help="Recompute reachability every N teleop steps",
-    )
-    parser.add_argument(
-        "--reachability-include-hand",
-        action="store_true",
-        help="Include thumb+index joints (slower, ~8s per update)",
-    )
-    parser.add_argument(
-        "--reachability-limit-mode",
-        choices=["xml", "mpc_box", "hybrid"],
-        default="hybrid",
-        help="Joint limit source: full XML, MPC tight box on wire 17-20, or hybrid (default)",
-    )
-    parser.add_argument(
-        "--reachability-dq-max",
-        type=float,
-        default=1.5,
-        help="Max joint speed (rad/s) in reachable-set model — larger hull when increased",
-    )
-    parser.add_argument(
-        "--reachability-quality",
-        choices=["fast", "balanced", "high"],
-        default="fast",
-        help="Sampling preset: fast (n=2,f=1), balanced (3,2), high (5,2). Overrides unless --reachability-n-samples set",
-    )
-    parser.add_argument(
-        "--reachability-n-samples",
-        type=int,
-        default=None,
-        help="Override pycapacity n_samples (more = richer/slower hull)",
-    )
-    parser.add_argument(
-        "--reachability-facet-dim",
-        type=int,
-        default=None,
-        help="Override pycapacity facet_dim (higher = better shape fidelity)",
-    )
-    parser.add_argument(
-        "--reachability-fill-alpha",
+        "--task-workspace-fill-alpha",
         type=float,
         default=0.15,
-        help="Semi-transparent fill strength on camera overlay (0 = wireframe only)",
+        help="Semi-transparent fill on camera overlay (0 = wireframe only)",
     )
     args = parser.parse_args()
-
-    refresh_every = args.reachability_refresh_every
-    if args.reachability_include_hand and refresh_every == 5:
-        refresh_every = 20
 
     GR1TeleopServer(
         port=args.port,
         lock_posture=args.lock_posture,
-        show_reachability=args.show_reachability and not args.no_reachability,
-        reachability_horizon=args.reachability_horizon,
-        reachability_refresh_every=refresh_every,
-        reachability_include_hand=args.reachability_include_hand,
-        reachability_limit_mode=args.reachability_limit_mode,
-        reachability_dq_max=args.reachability_dq_max,
-        reachability_quality=args.reachability_quality,
-        reachability_n_samples=args.reachability_n_samples,
-        reachability_facet_dim=args.reachability_facet_dim,
-        reachability_fill_alpha=args.reachability_fill_alpha,
+        show_task_workspace=args.task_workspace,
+        task_workspace_fill_alpha=args.task_workspace_fill_alpha,
     ).run()

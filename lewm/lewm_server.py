@@ -44,10 +44,7 @@ from dataset.skeleton.projection_utils import (
     project_point,
     is_allowed_action_chain,
 )
-from lewm.reachability_constraint import (
-    FEASIBILITY_CHECK_ALL_STEPS,
-    ReachabilityMPCConstraint,
-)
+from lewm.task_workspace import TaskWorkspaceMPCConstraint
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,13 +74,13 @@ class LEWMInferenceServer:
         use_multi_view=False,
         use_skeleton=False,
         use_dino=False,
-        use_reachability=False,
+        use_task_workspace=False,
     ):
         print(
             f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, "
-            f"Skeleton: {use_skeleton}, DINO: {use_dino}, Reachability: {use_reachability}) ---"
+            f"Skeleton: {use_skeleton}, DINO: {use_dino}, TaskWorkspace: {use_task_workspace}) ---"
         )
-        self.use_reachability = use_reachability
+        self.use_task_workspace = use_task_workspace
         self.scaler = StandardScaler()
         self.initial_pose = None
         self.use_multi_view = use_multi_view
@@ -148,20 +145,20 @@ class LEWMInferenceServer:
             config=MockConfig(horizon=4, init_var=0.1),
         )
 
-        self.reach_constraint = None
-        if self.use_reachability:
-            self.reach_constraint = ReachabilityMPCConstraint()
+        self.task_workspace = None
+        if self.use_task_workspace:
+            self.task_workspace = TaskWorkspaceMPCConstraint()
+            p = self.task_workspace.poly
             print(
-                "🌐 Reachability hard gate in CEM "
-                f"(hybrid limits, horizon={self.reach_constraint.cfg.time_horizon}s, "
-                f"ε={self.reach_constraint.feasibility_eps:g}, "
-                f"all_steps={FEASIBILITY_CHECK_ALL_STEPS})"
+                "🌐 Task workspace gate ON (fixed hull, final plan step only) "
+                f"— {len(p.corner_points)} corners, {p.H.shape[0]} facets, "
+                f"ε={self.task_workspace.feasibility_eps:g}"
             )
         else:
             print(
-                "🌐 Reachability CEM gate OFF (default). "
-                "CEM uses reward only; freeze + clamp only — no joint remap. "
-                "Pass --reachability to enable polytope gate."
+                "🌐 Task workspace gate OFF (default). "
+                "CEM uses reward only; freeze + clamp only. "
+                "Pass --task-workspace to enable."
             )
 
         # 5. State Buffering
@@ -333,16 +330,21 @@ class LEWMInferenceServer:
                         "pixels": pixels_stacked,
                         "action": actions_stacked,
                     }
-                    if self.use_reachability:
-                        self.reach_constraint.compute_polytope(raw_sim_state)
-                        reach_H, reach_d = self.reach_constraint.get_halfspaces()
-                        obs_dict["reach_H"] = reach_H.astype(np.float32)[
+                    if self.use_task_workspace:
+                        self.task_workspace.set_baseline_from_wire32(raw_sim_state)
+                        tw_H, tw_d = self.task_workspace.get_halfspaces()
+                        obs_dict["task_workspace_H"] = tw_H.astype(np.float32)[
                             np.newaxis, ...
                         ]
-                        obs_dict["reach_d"] = reach_d.astype(np.float32)[np.newaxis, ...]
-                        obs_dict["reach_wire32"] = raw_sim_state.astype(np.float32)[
+                        obs_dict["task_workspace_d"] = tw_d.astype(np.float32)[
                             np.newaxis, ...
                         ]
+                        obs_dict["task_workspace_wire32"] = raw_sim_state.astype(
+                            np.float32
+                        )[np.newaxis, ...]
+                        obs_dict["task_workspace_check_final_only"] = np.array(
+                            [[True]], dtype=np.bool_
+                        )
                     if "phase_idx" in req:
                         p_idx = int(req.get("phase_idx"))
                         obs_dict["phase_idx"] = torch.tensor(
@@ -365,19 +367,19 @@ class LEWMInferenceServer:
                 best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
 
                 diagnostics = {"plan_time_ms": 0}
-                if self.use_reachability:
-                    reach_viol = self.reach_constraint.plan_violation(
-                        raw_sim_state, best_plan
+                if self.use_task_workspace:
+                    tw_viol = self.task_workspace.plan_violation(
+                        raw_sim_state, best_plan, check_all_steps=False
                     )
-                    reach_feasible = self.reach_constraint.is_feasible(
-                        raw_sim_state, best_plan
+                    tw_feasible = self.task_workspace.is_feasible(
+                        raw_sim_state, best_plan, check_all_steps=False
                     )
                     print(
-                        f"   🌐 Reachability max violation (plan): {reach_viol:.4f}, "
-                        f"feasible={reach_feasible}"
+                        f"   🌐 Task workspace violation (final step): {tw_viol:.4f}, "
+                        f"feasible={tw_feasible}"
                     )
-                    diagnostics["reach_violation_max"] = float(reach_viol)
-                    diagnostics["reach_plan_feasible"] = bool(reach_feasible)
+                    diagnostics["task_workspace_violation"] = float(tw_viol)
+                    diagnostics["task_workspace_feasible"] = bool(tw_feasible)
 
                 plan_time = time.time() - start_time
                 diagnostics["plan_time_ms"] = int(plan_time * 1000)
@@ -534,9 +536,9 @@ if __name__ == "__main__":
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     parser.add_argument("--use_dino", action="store_true", default=False)
     parser.add_argument(
-        "--reachability",
+        "--task-workspace",
         action="store_true",
-        help="Enable CEM polytope compute + hard feasibility gate (slower planning)",
+        help="Enable fixed task workspace gate on CEM final-step EE",
     )
     args = parser.parse_args()
     server = LEWMInferenceServer(
@@ -545,6 +547,6 @@ if __name__ == "__main__":
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
         use_dino=args.use_dino,
-        use_reachability=args.reachability,
+        use_task_workspace=args.task_workspace,
     )
     server.run()
