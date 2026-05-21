@@ -27,6 +27,7 @@ from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
 from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import get_multi_view_encoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
+from lewm.reachability_constraint import INFEASIBLE_COST
 from omegaconf import OmegaConf
 import numpy as np
 
@@ -396,9 +397,7 @@ class GoalMapper:
         smoothness_weight = 100.0
         dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
 
-        reach_penalty = self._reachability_penalty(obs_dict, flat_plan_actions, B, S)
-        if reach_penalty is not None:
-            dist = dist + reach_penalty
+        dist = self._apply_reachability_gate(obs_dict, flat_plan_actions, dist)
 
         return dist.view(B, S)
 
@@ -406,13 +405,13 @@ class GoalMapper:
         """Proxy to the internal World Model's prediction logic."""
         return self.model.predict(*args, **kwargs)
 
-    def _reachability_penalty(self, obs_dict, flat_plan_actions, B: int, S: int):
-        """Task-space reachable polytope penalty (replaces 17–20 radian remap)."""
+    def _apply_reachability_gate(self, obs_dict, flat_plan_actions, dist: torch.Tensor):
+        """Only feasible (in-hull) samples compete on reward; infeasible get +inf cost."""
         reach_H = obs_dict.get("reach_H")
         reach_d = obs_dict.get("reach_d")
         reach_wire32 = obs_dict.get("reach_wire32")
         if reach_H is None or reach_d is None or reach_wire32 is None:
-            return None
+            return dist
 
         if isinstance(reach_H, torch.Tensor):
             H = reach_H[0, 0].detach().cpu().numpy()
@@ -424,16 +423,38 @@ class GoalMapper:
             wire32 = np.asarray(reach_wire32[0, 0], dtype=np.float64)
 
         plan_np = flat_plan_actions.detach().cpu().numpy()
-        penalties = self._reach_mpc.plan_penalty_batch(wire32, plan_np, H=H, d=d)
-        pen_t = torch.from_numpy(penalties).to(
-            device=flat_plan_actions.device, dtype=flat_plan_actions.dtype
+        eps = self._reach_mpc.feasibility_eps
+        feasible, violations = self._reach_mpc.feasible_mask_batch(
+            wire32, plan_np, H=H, d=d
         )
-        return pen_t * self._reach_mpc.gamma
+        n_feas = int(feasible.sum())
+        n_total = feasible.shape[0]
+
+        if n_feas == 0:
+            relaxed = violations <= eps * 100.0
+            if int(relaxed.sum()) > 0:
+                print(
+                    f"⚠️ Reach gate: 0/{n_total} feasible at ε={eps:g}; "
+                    f"using relaxed ε={eps * 100:g} ({int(relaxed.sum())} samples)"
+                )
+                feasible = relaxed
+            else:
+                print(
+                    f"⚠️ Reach gate: 0/{n_total} feasible even at relaxed ε; "
+                    "skipping gate for this cost eval"
+                )
+                return dist
+
+        feasible_t = torch.from_numpy(feasible).to(device=dist.device, dtype=torch.bool)
+        infeasible_cost = torch.tensor(
+            INFEASIBLE_COST, device=dist.device, dtype=dist.dtype
+        )
+        return torch.where(feasible_t, dist, infeasible_cost)
 
     def manifold_squash(self, actions):
         """
         Freeze left side + head; clamp active joints to [-1, 1].
-        Right-arm task limits come from reachable polytope penalty in get_cost.
+        Reachability is enforced via feasibility gate in get_cost (no joint remap).
         """
         actions = actions.clone()
 

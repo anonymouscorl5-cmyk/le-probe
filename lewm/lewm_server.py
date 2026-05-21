@@ -44,7 +44,10 @@ from dataset.skeleton.projection_utils import (
     project_point,
     is_allowed_action_chain,
 )
-from lewm.reachability_constraint import ReachabilityMPCConstraint
+from lewm.reachability_constraint import (
+    FEASIBILITY_CHECK_ALL_STEPS,
+    ReachabilityMPCConstraint,
+)
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -145,9 +148,10 @@ class LEWMInferenceServer:
         # Reachable workspace for CEM (replaces 17–20 joint remap)
         self.reach_constraint = ReachabilityMPCConstraint()
         print(
-            "🌐 Reachability polytope active in CEM "
+            "🌐 Reachability hard gate in CEM "
             f"(hybrid limits, horizon={self.reach_constraint.cfg.time_horizon}s, "
-            f"γ={self.reach_constraint.gamma})"
+            f"ε={self.reach_constraint.feasibility_eps:g}, "
+            f"all_steps={FEASIBILITY_CHECK_ALL_STEPS})"
         )
 
         # 5. State Buffering
@@ -349,21 +353,15 @@ class LEWMInferenceServer:
                 best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
 
                 reach_viol = self.reach_constraint.plan_violation(
-                    raw_sim_state, best_plan[-1]
+                    raw_sim_state, best_plan
                 )
-                print(f"   🌐 Reachability violation (final step): {reach_viol:.4f}")
-
-                # Delta Capping on the first step relative to history
-                target_action = best_plan[0].copy()
-                if len(self.history["actions"]) > 0:
-                    prev_action = self.history["actions"][-1]
-                    max_delta = 0.05
-                    delta = target_action[16:] - prev_action[16:]
-                    clipped_delta = np.clip(delta, -max_delta, max_delta)
-                    target_action[16:] = prev_action[16:] + clipped_delta
-                    target_action[0:16] = self.initial_pose[0:16]
-                    target_action[16:] = np.clip(target_action[16:], -1.0, 1.0)
-                    best_plan[0] = target_action
+                reach_feasible = self.reach_constraint.is_feasible(
+                    raw_sim_state, best_plan
+                )
+                print(
+                    f"   🌐 Reachability max violation (plan): {reach_viol:.4f}, "
+                    f"feasible={reach_feasible}"
+                )
 
                 plan_time = time.time() - start_time
 
@@ -396,7 +394,8 @@ class LEWMInferenceServer:
                             "action": best_plan.tolist(),
                             "diagnostics": {
                                 "plan_time_ms": int(plan_time * 1000),
-                                "reach_violation_final": float(reach_viol),
+                                "reach_violation_max": float(reach_viol),
+                                "reach_plan_feasible": bool(reach_feasible),
                             },
                         },
                         use_bin_type=True,

@@ -298,10 +298,15 @@ def run_mission(
                 plan_norm = np.array(resp["action"], dtype=np.float32)
                 diag = resp.get("diagnostics", {})
 
-                reach_viol = diag.get("reach_violation_final")
-                reach_msg = (
-                    f", reach_viol={reach_viol:.4f}" if reach_viol is not None else ""
+                reach_viol = diag.get(
+                    "reach_violation_max", diag.get("reach_violation_final")
                 )
+                reach_feas = diag.get("reach_plan_feasible")
+                reach_msg = ""
+                if reach_viol is not None:
+                    reach_msg = f", reach_viol={reach_viol:.4f}"
+                if reach_feas is not None:
+                    reach_msg += f", feasible={reach_feas}"
                 print(
                     "   🚀 Executing first action from plan (Solve Time: "
                     f"{diag.get('plan_time_ms')}ms, Horizon: {plan_norm.shape[0]}{reach_msg})"

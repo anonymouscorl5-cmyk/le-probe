@@ -24,10 +24,12 @@ from dataset.gr1_reachability import (
     teleop_reachability_config,
 )
 
-# Penalty scale vs reward (~50×) and smoothness (100×) in GoalMapper.get_cost
-DEFAULT_REACH_GAMMA = 75.0
-# One FK pass per CEM sample (final plan step) keeps 800-sample plans tractable
-PENALIZE_FINAL_STEP_ONLY = True
+# Squared slack outside {x | Hx <= d}; feasible if violation <= eps
+DEFAULT_FEASIBILITY_EPS = 1e-4
+# Cost assigned to infeasible CEM samples (must exceed any feasible total cost)
+INFEASIBLE_COST = 1e12
+# Check every horizon step for hard gate (stricter than final-step-only)
+FEASIBILITY_CHECK_ALL_STEPS = True
 
 
 def ensure_halfspaces(poly) -> tuple[np.ndarray, np.ndarray]:
@@ -54,16 +56,16 @@ def wire32_to_qpos(
 
 
 class ReachabilityMPCConstraint:
-    """Polytope from current pose + FK penalties on normalized CEM plans."""
+    """Polytope from current pose + FK feasibility checks on normalized CEM plans."""
 
     def __init__(
         self,
         scene_path: str = SCENE_PATH,
         cfg: Optional[ReachabilityConfig] = None,
-        gamma: float = DEFAULT_REACH_GAMMA,
+        feasibility_eps: float = DEFAULT_FEASIBILITY_EPS,
     ):
         self.cfg = cfg or teleop_reachability_config()
-        self.gamma = gamma
+        self.feasibility_eps = feasibility_eps
         self.engine = GR1ReachabilityEngine(scene_path=scene_path)
         self.scaler = StandardScaler()
         self._poly = None
@@ -99,8 +101,9 @@ class ReachabilityMPCConstraint:
         wire32_rad: np.ndarray,
         plan_norm: np.ndarray,
         *,
-        final_step_only: bool = PENALIZE_FINAL_STEP_ONLY,
+        check_all_steps: bool = FEASIBILITY_CHECK_ALL_STEPS,
     ) -> float:
+        """Max squared halfspace slack over checked plan steps (0 if inside hull)."""
         if self._H is None or self._d is None:
             return 0.0
 
@@ -111,25 +114,35 @@ class ReachabilityMPCConstraint:
         if plan_norm.ndim == 1:
             plan_norm = plan_norm.reshape(1, -1)
 
-        total = 0.0
         steps = (
-            [plan_norm.shape[0] - 1] if final_step_only else range(plan_norm.shape[0])
+            range(plan_norm.shape[0]) if check_all_steps else [plan_norm.shape[0] - 1]
         )
+        max_v = 0.0
         for t in steps:
             ee = self._fk_ee_after_plan_step(q0, plan_norm[t])
-            total += ee_halfspace_violation(ee, self._H, self._d)
-        return total
+            max_v = max(max_v, ee_halfspace_violation(ee, self._H, self._d))
+        return max_v
 
-    def plan_penalty_batch(
+    def is_feasible(
+        self,
+        wire32_rad: np.ndarray,
+        plan_norm: np.ndarray,
+        eps: Optional[float] = None,
+        **kwargs,
+    ) -> bool:
+        eps = self.feasibility_eps if eps is None else eps
+        return self.plan_violation(wire32_rad, plan_norm, **kwargs) <= eps
+
+    def plan_violation_batch(
         self,
         wire32_rad: np.ndarray,
         plan_norm_bs: np.ndarray,
         H: Optional[np.ndarray] = None,
         d: Optional[np.ndarray] = None,
         *,
-        final_step_only: bool = PENALIZE_FINAL_STEP_ONLY,
+        check_all_steps: bool = FEASIBILITY_CHECK_ALL_STEPS,
     ) -> np.ndarray:
-        """Per-sample violation costs (unnormalized); multiply by gamma in caller."""
+        """Per-sample max violation over plan steps."""
         H_use = np.asarray(H if H is not None else self._H, dtype=np.float64)
         d_use = np.asarray(d if d is not None else self._d, dtype=np.float64).reshape(
             -1
@@ -144,8 +157,24 @@ class ReachabilityMPCConstraint:
         try:
             for s in range(n):
                 out[s] = self.plan_violation(
-                    wire32_rad, plan_norm_bs[s], final_step_only=final_step_only
+                    wire32_rad, plan_norm_bs[s], check_all_steps=check_all_steps
                 )
         finally:
             self._H, self._d = old_H, old_d
         return out
+
+    def feasible_mask_batch(
+        self,
+        wire32_rad: np.ndarray,
+        plan_norm_bs: np.ndarray,
+        H: Optional[np.ndarray] = None,
+        d: Optional[np.ndarray] = None,
+        eps: Optional[float] = None,
+        **kwargs,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Returns (feasible_mask bool (N,), violations float (N,))."""
+        eps = self.feasibility_eps if eps is None else eps
+        violations = self.plan_violation_batch(
+            wire32_rad, plan_norm_bs, H=H, d=d, **kwargs
+        )
+        return violations <= eps, violations
