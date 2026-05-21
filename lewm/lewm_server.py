@@ -77,10 +77,13 @@ class LEWMInferenceServer:
         use_multi_view=False,
         use_skeleton=False,
         use_dino=False,
+        use_reachability=False,
     ):
         print(
-            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino}) ---"
+            f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, "
+            f"Skeleton: {use_skeleton}, DINO: {use_dino}, Reachability: {use_reachability}) ---"
         )
+        self.use_reachability = use_reachability
         self.scaler = StandardScaler()
         self.initial_pose = None
         self.use_multi_view = use_multi_view
@@ -145,14 +148,21 @@ class LEWMInferenceServer:
             config=MockConfig(horizon=4, init_var=0.1),
         )
 
-        # Reachable workspace for CEM (replaces 17–20 joint remap)
-        self.reach_constraint = ReachabilityMPCConstraint()
-        print(
-            "🌐 Reachability hard gate in CEM "
-            f"(hybrid limits, horizon={self.reach_constraint.cfg.time_horizon}s, "
-            f"ε={self.reach_constraint.feasibility_eps:g}, "
-            f"all_steps={FEASIBILITY_CHECK_ALL_STEPS})"
-        )
+        self.reach_constraint = None
+        if self.use_reachability:
+            self.reach_constraint = ReachabilityMPCConstraint()
+            print(
+                "🌐 Reachability hard gate in CEM "
+                f"(hybrid limits, horizon={self.reach_constraint.cfg.time_horizon}s, "
+                f"ε={self.reach_constraint.feasibility_eps:g}, "
+                f"all_steps={FEASIBILITY_CHECK_ALL_STEPS})"
+            )
+        else:
+            print(
+                "🌐 Reachability CEM gate OFF (default). "
+                "CEM uses reward only; freeze + clamp only — no joint remap. "
+                "Pass --reachability to enable polytope gate."
+            )
 
         # 5. State Buffering
         self.history = {"pixels": [], "actions": []}
@@ -319,18 +329,20 @@ class LEWMInferenceServer:
                     init_guess[..., 0:16] = self.agent.frozen_pose[0:16]
                     init_guess = init_guess.unsqueeze(0)
 
-                    self.reach_constraint.compute_polytope(raw_sim_state)
-                    reach_H, reach_d = self.reach_constraint.get_halfspaces()
-
                     obs_dict = {
                         "pixels": pixels_stacked,
                         "action": actions_stacked,
-                        "reach_H": reach_H.astype(np.float32)[np.newaxis, ...],
-                        "reach_d": reach_d.astype(np.float32)[np.newaxis, ...],
-                        "reach_wire32": raw_sim_state.astype(np.float32)[
-                            np.newaxis, ...
-                        ],
                     }
+                    if self.use_reachability:
+                        self.reach_constraint.compute_polytope(raw_sim_state)
+                        reach_H, reach_d = self.reach_constraint.get_halfspaces()
+                        obs_dict["reach_H"] = reach_H.astype(np.float32)[
+                            np.newaxis, ...
+                        ]
+                        obs_dict["reach_d"] = reach_d.astype(np.float32)[np.newaxis, ...]
+                        obs_dict["reach_wire32"] = raw_sim_state.astype(np.float32)[
+                            np.newaxis, ...
+                        ]
                     if "phase_idx" in req:
                         p_idx = int(req.get("phase_idx"))
                         obs_dict["phase_idx"] = torch.tensor(
@@ -352,18 +364,23 @@ class LEWMInferenceServer:
                 best_plan[:, 0:16] = self.initial_pose[0:16]
                 best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
 
-                reach_viol = self.reach_constraint.plan_violation(
-                    raw_sim_state, best_plan
-                )
-                reach_feasible = self.reach_constraint.is_feasible(
-                    raw_sim_state, best_plan
-                )
-                print(
-                    f"   🌐 Reachability max violation (plan): {reach_viol:.4f}, "
-                    f"feasible={reach_feasible}"
-                )
+                diagnostics = {"plan_time_ms": 0}
+                if self.use_reachability:
+                    reach_viol = self.reach_constraint.plan_violation(
+                        raw_sim_state, best_plan
+                    )
+                    reach_feasible = self.reach_constraint.is_feasible(
+                        raw_sim_state, best_plan
+                    )
+                    print(
+                        f"   🌐 Reachability max violation (plan): {reach_viol:.4f}, "
+                        f"feasible={reach_feasible}"
+                    )
+                    diagnostics["reach_violation_max"] = float(reach_viol)
+                    diagnostics["reach_plan_feasible"] = bool(reach_feasible)
 
                 plan_time = time.time() - start_time
+                diagnostics["plan_time_ms"] = int(plan_time * 1000)
 
                 # Diagnostic Logging: Action Stats
                 print(
@@ -390,14 +407,7 @@ class LEWMInferenceServer:
 
                 socket.send(
                     msgpack.packb(
-                        {
-                            "action": best_plan.tolist(),
-                            "diagnostics": {
-                                "plan_time_ms": int(plan_time * 1000),
-                                "reach_violation_max": float(reach_viol),
-                                "reach_plan_feasible": bool(reach_feasible),
-                            },
-                        },
+                        {"action": best_plan.tolist(), "diagnostics": diagnostics},
                         use_bin_type=True,
                     )
                 )
@@ -523,6 +533,11 @@ if __name__ == "__main__":
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     parser.add_argument("--use_dino", action="store_true", default=False)
+    parser.add_argument(
+        "--reachability",
+        action="store_true",
+        help="Enable CEM polytope compute + hard feasibility gate (slower planning)",
+    )
     args = parser.parse_args()
     server = LEWMInferenceServer(
         args.model,
@@ -530,5 +545,6 @@ if __name__ == "__main__":
         use_multi_view=args.multi_view,
         use_skeleton=args.use_skeleton,
         use_dino=args.use_dino,
+        use_reachability=args.reachability,
     )
     server.run()

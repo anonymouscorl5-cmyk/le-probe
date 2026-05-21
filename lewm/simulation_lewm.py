@@ -52,7 +52,7 @@ class GR1LEWMClient(GR1MuJoCoBase):
         use_multi_view=False,
         use_skeleton=False,
         use_dino=False,
-        show_reachability=True,
+        show_reachability=False,
         reachability_horizon=0.25,
         reachability_refresh_every=5,
         reachability_include_hand=False,
@@ -240,7 +240,7 @@ def run_mission(
     use_dino=False,
     instruction="Pick up the red cube",
     max_steps=100,
-    show_reachability=True,
+    show_reachability=False,
     reachability_horizon=0.25,
     reachability_refresh_every=5,
     reachability_include_hand=False,
@@ -365,9 +365,9 @@ if __name__ == "__main__":
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     parser.add_argument("--use_dino", action="store_true", default=False)
     parser.add_argument(
-        "--no-reachability",
+        "--reachability",
         action="store_true",
-        help="Disable reachable-workspace overlay on camera views",
+        help="Overlay reachable hull on cameras (background poly compute; slows rendering)",
     )
     parser.add_argument(
         "--reachability-horizon",
@@ -408,7 +408,7 @@ if __name__ == "__main__":
         args.multi_view,
         use_skeleton=args.use_skeleton,
         use_dino=args.use_dino,
-        show_reachability=not args.no_reachability,
+        show_reachability=args.reachability,
         reachability_horizon=args.reachability_horizon,
         reachability_refresh_every=args.reachability_refresh_every,
         reachability_include_hand=args.reachability_include_hand,
