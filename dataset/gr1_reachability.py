@@ -171,6 +171,109 @@ def _camera_world_to_image(
     return R_cam, t_cam
 
 
+def _depth_visible(
+    depth_buffer: np.ndarray | None,
+    col: int,
+    row: int,
+    z_cam: float,
+    *,
+    depth_eps: float = 0.003,
+) -> bool:
+    """True if point is in front of the MuJoCo-rendered surface at (col, row)."""
+    if depth_buffer is None:
+        return True
+    h, w = depth_buffer.shape
+    if col < 0 or row < 0 or col >= w or row >= h:
+        return False
+    scene_z = float(depth_buffer[row, col])
+    if not np.isfinite(scene_z) or scene_z <= 0:
+        return True
+    return z_cam <= scene_z + depth_eps
+
+
+def _draw_depth_tested_line(
+    out: np.ndarray,
+    depth_buffer: np.ndarray | None,
+    p0: np.ndarray,
+    z0: float,
+    p1: np.ndarray,
+    z1: float,
+    color: tuple[int, int, int],
+    *,
+    depth_eps: float = 0.003,
+) -> None:
+    """Rasterize a segment; skip pixels where the polytope lies behind the scene."""
+    import cv2
+
+    x0, y0 = float(p0[0]), float(p0[1])
+    x1, y1 = float(p1[0]), float(p1[1])
+    n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+    if n <= 1:
+        c, r = int(round(x0)), int(round(y0))
+        if _depth_visible(depth_buffer, c, r, z0, depth_eps=depth_eps):
+            cv2.circle(out, (c, r), 1, color, -1, cv2.LINE_AA)
+        return
+
+    for i in range(n):
+        t = i / (n - 1)
+        x = x0 + t * (x1 - x0)
+        y = y0 + t * (y1 - y0)
+        z = z0 + t * (z1 - z0)
+        c, r = int(round(x)), int(round(y))
+        if _depth_visible(depth_buffer, c, r, z, depth_eps=depth_eps):
+            out[r, c] = color
+
+
+def _fill_triangle_depth_tested(
+    out: np.ndarray,
+    depth_buffer: np.ndarray | None,
+    pts2d: np.ndarray,
+    zs: np.ndarray,
+    color: tuple[int, int, int],
+    alpha: float,
+    *,
+    depth_eps: float = 0.003,
+) -> None:
+    """Fill a triangle only where it is closer than the scene depth buffer."""
+    import cv2
+
+    xs = pts2d[:, 0]
+    ys = pts2d[:, 1]
+    xmin = max(0, int(np.floor(xs.min())))
+    xmax = min(out.shape[1] - 1, int(np.ceil(xs.max())))
+    ymin = max(0, int(np.floor(ys.min())))
+    ymax = min(out.shape[0] - 1, int(np.ceil(ys.max())))
+    if xmin > xmax or ymin > ymax:
+        return
+
+    v0 = pts2d[2] - pts2d[0]
+    v1 = pts2d[1] - pts2d[0]
+    denom = v0[0] * v1[1] - v1[0] * v0[1]
+    if abs(denom) < 1e-12:
+        return
+
+    mask = np.zeros(out.shape[:2], dtype=bool)
+    for row in range(ymin, ymax + 1):
+        for col in range(xmin, xmax + 1):
+            p = np.array([col, row], dtype=np.float64) - pts2d[0]
+            w2 = (p[0] * v1[1] - v1[0] * p[1]) / denom
+            w1 = (v0[0] * p[1] - p[0] * v0[1]) / denom
+            w0 = 1.0 - w1 - w2
+            if w0 < -1e-6 or w1 < -1e-6 or w2 < -1e-6:
+                continue
+            z = w0 * zs[0] + w1 * zs[1] + w2 * zs[2]
+            if _depth_visible(depth_buffer, col, row, z, depth_eps=depth_eps):
+                mask[row, col] = True
+
+    if not np.any(mask):
+        return
+    blended = out.astype(np.float32)
+    blended[mask] = (1.0 - alpha) * blended[mask] + alpha * np.array(
+        color, dtype=np.float32
+    )
+    out[:] = blended.astype(np.uint8)
+
+
 def draw_polytope_on_rgb(
     rgb: np.ndarray,
     poly,
@@ -178,15 +281,19 @@ def draw_polytope_on_rgb(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     *,
+    depth_buffer: np.ndarray | None = None,
     ee_body: str = EE_BODY,
     wire_color: tuple[int, int, int] = (0, 0, 255),
     ee_color: tuple[int, int, int] = (0, 0, 255),
     fill_alpha: float = 0.12,
+    depth_eps: float = 0.003,
 ) -> np.ndarray:
     """
     Project reachable polytope wireframe (+ current EE dot) onto a MuJoCo camera RGB frame.
 
     Uses the same projection path as ``dataset/skeleton/projection_utils`` and ``lewm_server``.
+    If ``depth_buffer`` is provided (metric depth from ``mujoco.Renderer`` with depth rendering
+    enabled), hull pixels behind the robot / table are not drawn.
     """
     from dataset.skeleton.projection_utils import get_projection_matrix, project_point
 
@@ -214,54 +321,58 @@ def draw_polytope_on_rgb(
             poly.find_faces()
             face_indices = getattr(poly, "face_indices", None)
 
-    projected: list[np.ndarray] = []
-    for v in verts:
-        p2d, _ = project_point(v, K, R_cam, t_cam)
-        if p2d is not None:
-            projected.append(p2d)
-
-    if projected and fill_alpha > 0:
-        hull_pts = np.array(projected, dtype=np.float32)
-        if len(hull_pts) >= 3:
-            hull = cv2.convexHull(hull_pts).astype(np.int32)
-            overlay = out.copy()
-            cv2.fillConvexPoly(overlay, hull, wire_color, lineType=cv2.LINE_AA)
-            cv2.addWeighted(overlay, fill_alpha, out, 1.0 - fill_alpha, 0, out)
-
     if face_indices is not None and len(face_indices) > 0:
         faces = np.asarray(face_indices, dtype=np.int64)
         for tri in faces:
-            pts = []
+            pts2d, zs = [], []
             for vi in (tri[0], tri[1], tri[2]):
-                p2d, _ = project_point(verts[vi], K, R_cam, t_cam)
+                p2d, z = project_point(verts[vi], K, R_cam, t_cam)
                 if p2d is not None:
-                    pts.append((int(round(p2d[0])), int(round(p2d[1]))))
-            if len(pts) == 3:
-                tri_np = np.array(pts, dtype=np.int32).reshape(-1, 1, 2)
-                cv2.polylines(out, [tri_np], True, wire_color, 1, cv2.LINE_AA)
-    elif projected:
-        for p in projected:
-            cv2.circle(
-                out,
-                (int(round(p[0])), int(round(p[1]))),
-                2,
-                wire_color,
-                -1,
-                cv2.LINE_AA,
-            )
+                    pts2d.append(p2d)
+                    zs.append(z)
+            if len(pts2d) != 3:
+                continue
+            pts2d_arr = np.array(pts2d, dtype=np.float64)
+            zs_arr = np.array(zs, dtype=np.float64)
+
+            if fill_alpha > 0:
+                _fill_triangle_depth_tested(
+                    out,
+                    depth_buffer,
+                    pts2d_arr,
+                    zs_arr,
+                    wire_color,
+                    fill_alpha,
+                    depth_eps=depth_eps,
+                )
+
+            for i, j in ((0, 1), (1, 2), (2, 0)):
+                _draw_depth_tested_line(
+                    out,
+                    depth_buffer,
+                    pts2d_arr[i],
+                    zs_arr[i],
+                    pts2d_arr[j],
+                    zs_arr[j],
+                    wire_color,
+                    depth_eps=depth_eps,
+                )
+    else:
+        for v in verts:
+            p2d, z = project_point(v, K, R_cam, t_cam)
+            if p2d is None:
+                continue
+            c, r = int(round(p2d[0])), int(round(p2d[1]))
+            if _depth_visible(depth_buffer, c, r, z, depth_eps=depth_eps):
+                cv2.circle(out, (c, r), 2, wire_color, -1, cv2.LINE_AA)
 
     ee_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, ee_body)
     if ee_id != -1:
-        p2d, _ = project_point(data.xpos[ee_id], K, R_cam, t_cam)
+        p2d, z = project_point(data.xpos[ee_id], K, R_cam, t_cam)
         if p2d is not None:
-            cv2.circle(
-                out,
-                (int(round(p2d[0])), int(round(p2d[1]))),
-                5,
-                ee_color,
-                -1,
-                cv2.LINE_AA,
-            )
+            c, r = int(round(p2d[0])), int(round(p2d[1]))
+            if _depth_visible(depth_buffer, c, r, z, depth_eps=depth_eps):
+                cv2.circle(out, (c, r), 5, ee_color, -1, cv2.LINE_AA)
 
     return out
 

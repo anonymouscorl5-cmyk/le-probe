@@ -11,12 +11,12 @@ def get_projection_matrix(cam_id, model, width, height):
 
 
 def project_point(p_3d, K, R_world_cam, t_world_cam):
-    """Projects a 3D world point to 2D image coordinates."""
+    """Projects a 3D world point to 2D image coordinates and camera-frame depth."""
     p_cam = R_world_cam.T @ (p_3d - t_world_cam)
     p_img = K @ p_cam
     if p_img[2] <= 0:
         return None, -1.0
-    return p_img[:2] / p_img[2], p_cam[2]
+    return p_img[:2] / p_img[2], float(p_cam[2])
 
 
 def is_allowed_action_chain(b_id, model):

@@ -80,12 +80,12 @@ class GR1TeleopServer(GR1MuJoCoBase):
             self._reach_cfg = teleop_reachability_config(horizon=reachability_horizon)
             dof_label = "arm+hand 10-DoF" if reachability_include_hand else "arm 7-DoF"
             print(
-                f"🌐 Reachability 2D overlay on all cameras "
+                f"🌐 Reachability 2D overlay on all cameras (depth-occluded) "
                 f"({dof_label}, horizon={reachability_horizon}s, "
                 f"refresh every {self.reachability_refresh_every} steps)"
             )
 
-    def _post_render_hook(self, name, rgb):
+    def _post_render_hook(self, name, rgb, depth=None):
         """Draw latest reachable polytope wireframe on each camera frame before Rerun log."""
         poly = None
         if self.show_reachability:
@@ -93,11 +93,17 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 poly = self._last_reach_poly
         if poly is not None:
             drawn = draw_polytope_on_rgb(
-                rgb, poly, name, self.model, self.data, fill_alpha=0.15
+                rgb,
+                poly,
+                name,
+                self.model,
+                self.data,
+                depth_buffer=depth,
+                fill_alpha=0.15,
             )
             if drawn is not rgb:
                 rgb[:] = drawn
-        super()._post_render_hook(name, rgb)
+        super()._post_render_hook(name, rgb, depth=depth)
 
     def _update_reachability_overlay(self, force=False):
         """Recompute reachable workspace in a background thread; cache for 2D draw."""

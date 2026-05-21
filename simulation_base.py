@@ -205,7 +205,7 @@ class GR1MuJoCoBase:
         with open(self.debug_log_path, "a") as f:
             f.write(f"[{t_str}] {msg}\n")
 
-    def _post_render_hook(self, name, rgb):
+    def _post_render_hook(self, name, rgb, depth=None):
         """Saves camera views to the filesystem for diagnostic-verification (Mirrors original teleop logic)."""
         # Save in a subdirectory for this specific camera inside the session folder
         cam_dir = self.base_log_dir / name
@@ -382,7 +382,10 @@ class GR1MuJoCoBase:
         for name in self.cam_names:
             self.renderer.update_scene(self.data, camera=name)
             rgb = self.renderer.render()
-            self._post_render_hook(name, rgb)
+            self.renderer.enable_depth_rendering()
+            depth = self.renderer.render().copy()
+            self.renderer.disable_depth_rendering()
+            self._post_render_hook(name, rgb, depth=depth)
             views[name] = rgb
             rr.log(name, rr.Image(rgb))
             self.frame_indices[name] += 1
