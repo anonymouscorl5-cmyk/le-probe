@@ -269,12 +269,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     parser.add_argument("--use_dino", action="store_true", default=False)
     parser.add_argument(
-        "--task-workspace",
+        "--task_workspace",
         action="store_true",
         help="Show fixed task workspace polytope on cameras + Rerun (viz only)",
     )
     parser.add_argument(
-        "--task-workspace-fill-alpha",
+        "--task_workspace_fill_alpha",
         type=float,
         default=0.15,
         help="Semi-transparent fill on camera overlay",

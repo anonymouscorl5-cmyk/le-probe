@@ -536,7 +536,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     parser.add_argument("--use_dino", action="store_true", default=False)
     parser.add_argument(
-        "--task-workspace",
+        "--task_workspace",
         action="store_true",
         help="Enable fixed task workspace gate on CEM final-step EE",
     )
