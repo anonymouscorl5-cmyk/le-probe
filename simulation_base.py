@@ -382,9 +382,9 @@ class GR1MuJoCoBase:
         for name in self.cam_names:
             self.renderer.update_scene(self.data, camera=name)
             rgb = self.renderer.render()
+            self._post_render_hook(name, rgb)
             views[name] = rgb
             rr.log(name, rr.Image(rgb))
-            self._post_render_hook(name, rgb)
             self.frame_indices[name] += 1
 
         self.render_step_idx += 1

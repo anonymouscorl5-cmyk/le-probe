@@ -15,11 +15,25 @@ import mujoco
 import os
 import json
 import argparse
+import threading
 from PIL import Image
 from simulation_base import GR1MuJoCoBase
 from gr1_config import SCENE_PATH
 from gr1_protocol import StandardScaler
 from gr1_config import COMPACT_WIRE_JOINTS
+
+try:
+    from dataset.gr1_reachability import (
+        GR1ReachabilityEngine,
+        TELEOP_ACTIVE_WIRE_IDX,
+        draw_polytope_on_rgb,
+        teleop_reachability_config,
+    )
+
+    REACHABILITY_AVAILABLE = True
+except ImportError as e:
+    REACHABILITY_AVAILABLE = False
+    _REACHABILITY_IMPORT_ERROR = e
 
 
 class GR1TeleopServer(GR1MuJoCoBase):
@@ -28,11 +42,95 @@ class GR1TeleopServer(GR1MuJoCoBase):
     Dedicated to the Streamlit Dashboard and IK Calibration.
     """
 
-    def __init__(self, scene_path=None, port=5556, lock_posture=False):
+    def __init__(
+        self,
+        scene_path=None,
+        port=5556,
+        lock_posture=False,
+        show_reachability=True,
+        reachability_horizon=0.25,
+        reachability_refresh_every=5,
+        reachability_include_hand=False,
+    ):
         super().__init__(scene_path or SCENE_PATH, restrict_ik=True)
         self.port = port
         self.lock_posture = lock_posture
         self.is_running = True
+        self.show_reachability = show_reachability and REACHABILITY_AVAILABLE
+        self.reachability_refresh_every = max(1, reachability_refresh_every)
+        self._reach_step_counter = 0
+        self._reach_engine = None
+        self._reach_cfg = None
+        self._reach_lock = threading.Lock()
+        self._reach_busy = False
+        self._last_reach_poly = None
+
+        if show_reachability and not REACHABILITY_AVAILABLE:
+            print(f"⚠️ Reachability overlay disabled: {_REACHABILITY_IMPORT_ERROR}")
+        elif self.show_reachability:
+            active_idx = (
+                list(range(16, 26))
+                if reachability_include_hand
+                else TELEOP_ACTIVE_WIRE_IDX
+            )
+            self._reach_engine = GR1ReachabilityEngine(
+                scene_path or SCENE_PATH,
+                active_wire_idx=active_idx,
+            )
+            self._reach_cfg = teleop_reachability_config(horizon=reachability_horizon)
+            dof_label = "arm+hand 10-DoF" if reachability_include_hand else "arm 7-DoF"
+            print(
+                f"🌐 Reachability 2D overlay on all cameras "
+                f"({dof_label}, horizon={reachability_horizon}s, "
+                f"refresh every {self.reachability_refresh_every} steps)"
+            )
+
+    def _post_render_hook(self, name, rgb):
+        """Draw latest reachable polytope wireframe on each camera frame before Rerun log."""
+        poly = None
+        if self.show_reachability:
+            with self._reach_lock:
+                poly = self._last_reach_poly
+        if poly is not None:
+            drawn = draw_polytope_on_rgb(
+                rgb, poly, name, self.model, self.data, fill_alpha=0.15
+            )
+            if drawn is not rgb:
+                rgb[:] = drawn
+        super()._post_render_hook(name, rgb)
+
+    def _update_reachability_overlay(self, force=False):
+        """Recompute reachable workspace in a background thread; cache for 2D draw."""
+        if not self._reach_engine:
+            return
+        self._reach_step_counter += 1
+        if (
+            not force
+            and self._reach_step_counter % self.reachability_refresh_every != 0
+        ):
+            return
+        if self._reach_busy and not force:
+            return
+
+        qpos_snapshot = self.data.qpos.copy()
+        engine = self._reach_engine
+        cfg = self._reach_cfg
+
+        def _compute_and_log():
+            with self._reach_lock:
+                self._reach_busy = True
+            try:
+                engine.set_baseline_from_qpos(qpos_snapshot)
+                poly = engine.compute(cfg=cfg)
+                with self._reach_lock:
+                    self._last_reach_poly = poly
+            except Exception as e:
+                print(f"⚠️ Reachability compute failed: {e}")
+            finally:
+                with self._reach_lock:
+                    self._reach_busy = False
+
+        threading.Thread(target=_compute_and_log, daemon=True).start()
 
     def run(self):
         context = zmq.Context()
@@ -44,6 +142,8 @@ class GR1TeleopServer(GR1MuJoCoBase):
         print(
             f"🚀 Teleop Server Running on port {self.port} (Lock Posture: {self.lock_posture})"
         )
+        if self.show_reachability:
+            self._update_reachability_overlay(force=True)
 
         while self.is_running:
             msg = socket.recv()
@@ -63,12 +163,14 @@ class GR1TeleopServer(GR1MuJoCoBase):
 
             if cmd == "reset":
                 self.reset_env(lock_posture=self.lock_posture)
+                self._update_reachability_overlay(force=True)
                 # Server is the Source of Normalized Truth
                 norm_state = StandardScaler().scale_state(self.get_state_32())
                 send_resp({"status": "reset_ok", "joints": norm_state.tolist()})
 
             elif cmd == "wild_randomize":
                 self.wild_reset()
+                self._update_reachability_overlay(force=True)
                 norm_state = StandardScaler().scale_state(self.get_state_32())
                 send_resp(
                     {"status": "wild_randomize_ok", "joints": norm_state.tolist()}
@@ -100,6 +202,7 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 phase = data.get("phase", 0)
                 offset_cm = data.get("offset_cm", 5)
                 self._handle_ik_pickup_logic(phase=phase, offset_cm=offset_cm)
+                self._update_reachability_overlay(force=True)
 
                 # Server is the Source of Normalized Truth
                 norm_state = StandardScaler().scale_state(self.get_state_32())
@@ -114,12 +217,14 @@ class GR1TeleopServer(GR1MuJoCoBase):
                     q_idx = self.model.jnt_qposadr[cube_id]
                     self.data.qpos[q_idx : q_idx + 7] = pose
                     mujoco.mj_forward(self.model, self.data)
+                self._update_reachability_overlay(force=True)
                 send_resp({"status": "cube_pose_ok"})
 
             elif "target" in data:
                 action_32 = np.array(data["target"], dtype=np.float32)
                 self.process_target_32(action_32)
                 self.dispatch_action(action_32, self.last_target_q)
+                self._update_reachability_overlay()
                 send_resp({"status": "step_ok"})
 
             elif cmd == "store_snapshot":
@@ -324,7 +429,45 @@ if __name__ == "__main__":
         default=True,
         help="Lock IK joints to specific targets",
     )
+    parser.add_argument(
+        "--show-reachability",
+        action="store_true",
+        default=True,
+        help="Overlay reachable workspace wireframe on all 5 camera views",
+    )
+    parser.add_argument(
+        "--no-reachability",
+        action="store_true",
+        help="Disable reachability overlay",
+    )
+    parser.add_argument(
+        "--reachability-horizon",
+        type=float,
+        default=0.25,
+        help="Time horizon (seconds) for local reachable set",
+    )
+    parser.add_argument(
+        "--reachability-refresh-every",
+        type=int,
+        default=5,
+        help="Recompute reachability every N teleop steps",
+    )
+    parser.add_argument(
+        "--reachability-include-hand",
+        action="store_true",
+        help="Include thumb+index joints (slower, ~8s per update)",
+    )
     args = parser.parse_args()
 
-    # Pass the toggle to the server
-    GR1TeleopServer(port=args.port, lock_posture=args.lock_posture).run()
+    refresh_every = args.reachability_refresh_every
+    if args.reachability_include_hand and refresh_every == 5:
+        refresh_every = 20
+
+    GR1TeleopServer(
+        port=args.port,
+        lock_posture=args.lock_posture,
+        show_reachability=args.show_reachability and not args.no_reachability,
+        reachability_horizon=args.reachability_horizon,
+        reachability_refresh_every=refresh_every,
+        reachability_include_hand=args.reachability_include_hand,
+    ).run()
