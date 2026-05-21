@@ -22,7 +22,7 @@ from gr1_protocol import StandardScaler
 from gr1_config import COMPACT_WIRE_JOINTS
 
 try:
-    from dataset.gr1_reachability import draw_polytope_on_rgb, log_polytope_rerun
+    from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
     from lewm.task_workspace import TaskWorkspaceMPCConstraint
 
     TASK_WORKSPACE_AVAILABLE = True
