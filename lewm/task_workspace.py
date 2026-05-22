@@ -24,6 +24,14 @@ if ROOT not in sys.path:
 from gr1_config import COMPACT_WIRE_JOINTS, SCENE_PATH
 from gr1_protocol import StandardScaler
 from dataset.polytope_utils import EE_BODY
+from gr1_scene_sync import (
+    apply_sim_scene_to_qpos,
+    build_qpos_from_wire32,
+    ee_body_xyz,
+    log_scene_snapshot,
+    scene_snapshot,
+    table_footprint_check,
+)
 
 # Squared slack outside {x | Hx <= d}; feasible if violation <= eps
 DEFAULT_FEASIBILITY_EPS = 1e-4
@@ -152,6 +160,7 @@ class TaskWorkspaceMPCConstraint:
         self.data = mujoco.MjData(self.model)
         self.scaler = StandardScaler()
         self._baseline_qpos = self.model.qpos0.copy()
+        self._baseline_sim_sync = True
         self.ee_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, EE_BODY
         )
@@ -162,35 +171,59 @@ class TaskWorkspaceMPCConstraint:
     def get_halfspaces(self) -> tuple[np.ndarray, np.ndarray]:
         return self._H, self._d
 
-    def set_baseline_from_wire32(self, wire32_rad: np.ndarray) -> None:
-        q = self._baseline_qpos.copy()
-        for i, name in enumerate(COMPACT_WIRE_JOINTS):
-            j_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
-            if j_id != -1:
-                q[self.model.jnt_qposadr[j_id]] = float(wire32_rad[i])
-        self._baseline_qpos = q
+    def set_baseline_from_wire32(
+        self,
+        wire32_rad: np.ndarray,
+        *,
+        sim_scene_sync: bool = True,
+        cube_xyz: np.ndarray | None = None,
+    ) -> None:
+        self._baseline_qpos = build_qpos_from_wire32(
+            self.model,
+            wire32_rad,
+            sim_scene_sync=sim_scene_sync,
+            cube_xyz=cube_xyz,
+        )
+        self._baseline_sim_sync = bool(sim_scene_sync)
 
     def _fk_ee_after_plan_prefix(
-        self, plan_norm: np.ndarray, end_exclusive: int
+        self,
+        plan_norm: np.ndarray,
+        end_exclusive: int,
+        *,
+        sim_scene_sync: bool | None = None,
+        cube_xyz: np.ndarray | None = None,
     ) -> np.ndarray:
         """FK after applying plan[0:end_exclusive] sequentially (matches CEM horizon semantics)."""
+        if sim_scene_sync is None:
+            sim_scene_sync = getattr(self, "_baseline_sim_sync", True)
         q = np.array(self._baseline_qpos, dtype=np.float64, copy=True)
         for t in range(end_exclusive):
             wire_rad = self.scaler.unscale_action(plan_norm[t])
             wire32_to_qpos(self.model, q, wire_rad)
+            if sim_scene_sync:
+                apply_sim_scene_to_qpos(self.model, q, cube_xyz=cube_xyz)
         self.data.qpos[:] = q
         mujoco.mj_forward(self.model, self.data)
-        return self.data.xpos[self.ee_body_id].copy()
+        return ee_body_xyz(self.model, self.data)
 
     def final_plan_step_ee(
-        self, wire32_rad: np.ndarray, plan_norm: np.ndarray
+        self,
+        wire32_rad: np.ndarray,
+        plan_norm: np.ndarray,
+        *,
+        cube_xyz: np.ndarray | None = None,
     ) -> np.ndarray:
         """Fingertip EE after applying the full planned horizon from the request-time baseline."""
-        self.set_baseline_from_wire32(np.asarray(wire32_rad, dtype=np.float64))
+        self.set_baseline_from_wire32(
+            np.asarray(wire32_rad, dtype=np.float64), cube_xyz=cube_xyz
+        )
         plan_norm = np.asarray(plan_norm, dtype=np.float64)
         if plan_norm.ndim == 1:
             plan_norm = plan_norm.reshape(1, -1)
-        return self._fk_ee_after_plan_prefix(plan_norm, plan_norm.shape[0])
+        return self._fk_ee_after_plan_prefix(
+            plan_norm, plan_norm.shape[0], cube_xyz=cube_xyz
+        )
 
     def plan_violation(
         self,
@@ -198,8 +231,11 @@ class TaskWorkspaceMPCConstraint:
         plan_norm: np.ndarray,
         *,
         check_all_steps: bool = False,
+        cube_xyz: np.ndarray | None = None,
     ) -> float:
-        self.set_baseline_from_wire32(np.asarray(wire32_rad, dtype=np.float64))
+        self.set_baseline_from_wire32(
+            np.asarray(wire32_rad, dtype=np.float64), cube_xyz=cube_xyz
+        )
         plan_norm = np.asarray(plan_norm, dtype=np.float64)
         if plan_norm.ndim == 1:
             plan_norm = plan_norm.reshape(1, -1)
@@ -207,7 +243,7 @@ class TaskWorkspaceMPCConstraint:
         steps = range(n) if check_all_steps else [n - 1]
         max_v = 0.0
         for t in steps:
-            ee = self._fk_ee_after_plan_prefix(plan_norm, t + 1)
+            ee = self._fk_ee_after_plan_prefix(plan_norm, t + 1, cube_xyz=cube_xyz)
             max_v = max(max_v, ee_halfspace_violation(ee, self._H, self._d))
         return max_v
 
@@ -227,6 +263,7 @@ class TaskWorkspaceMPCConstraint:
         plan_norm_bs: np.ndarray,
         *,
         check_all_steps: bool = False,
+        cube_xyz: np.ndarray | None = None,
     ) -> np.ndarray:
         plan_norm_bs = np.asarray(plan_norm_bs, dtype=np.float64)
         if plan_norm_bs.ndim == 2:
@@ -235,7 +272,10 @@ class TaskWorkspaceMPCConstraint:
         out = np.zeros(n, dtype=np.float64)
         for s in range(n):
             out[s] = self.plan_violation(
-                wire32_rad, plan_norm_bs[s], check_all_steps=check_all_steps
+                wire32_rad,
+                plan_norm_bs[s],
+                check_all_steps=check_all_steps,
+                cube_xyz=cube_xyz,
             )
         return out
 
@@ -250,6 +290,143 @@ class TaskWorkspaceMPCConstraint:
         violations = self.plan_violation_batch(wire32_rad, plan_norm_bs, **kwargs)
         return violations <= eps, violations
 
+    def fk_debug_report(
+        self,
+        wire32_rad: np.ndarray,
+        plan_norm: np.ndarray,
+        *,
+        check_final_only: bool = True,
+        cube_xyz: np.ndarray | None = None,
+    ) -> dict:
+        """
+        Structured FK audit for blue-dot vs plan debugging.
+        Compares full-chain final EE, last-row-only FK, and per-step EE.
+        """
+        wire32_rad = np.asarray(wire32_rad, dtype=np.float64).reshape(-1)
+        plan_norm = np.asarray(plan_norm, dtype=np.float64)
+        if plan_norm.ndim == 1:
+            plan_norm = plan_norm.reshape(1, -1)
+        n = int(plan_norm.shape[0])
+
+        # --- Sim-aligned FK (root z=0.95, cube from request or default) ---
+        self.set_baseline_from_wire32(
+            wire32_rad, sim_scene_sync=True, cube_xyz=cube_xyz
+        )
+        ee_baseline = self._fk_ee_after_plan_prefix(plan_norm, 0)
+        ee_per_step = [
+            self._fk_ee_after_plan_prefix(plan_norm, t + 1).tolist() for t in range(n)
+        ]
+        ee_full = np.asarray(ee_per_step[-1], dtype=np.float64)
+        ee_last_only = self._fk_ee_after_plan_prefix(plan_norm[-1:], 1)
+
+        self.data.qpos[:] = self._baseline_qpos
+        mujoco.mj_forward(self.model, self.data)
+        snap_baseline = scene_snapshot(self.model, self.data, label="fk_baseline")
+
+        q_final = np.array(self._baseline_qpos, dtype=np.float64, copy=True)
+        wire_last = self.scaler.unscale_action(plan_norm[-1])
+        wire32_to_qpos(self.model, q_final, wire_last)
+        apply_sim_scene_to_qpos(self.model, q_final)
+        self.data.qpos[:] = q_final
+        mujoco.mj_forward(self.model, self.data)
+        snap_final = scene_snapshot(self.model, self.data, label="fk_final")
+
+        # --- Legacy FK (qpos0 root z=0) for regression ---
+        q_leg = build_qpos_from_wire32(
+            self.model, wire32_rad, sim_scene_sync=False, legacy_qpos0_only=True
+        )
+        self.data.qpos[:] = q_leg
+        mujoco.mj_forward(self.model, self.data)
+        ee_baseline_legacy = ee_body_xyz(self.model, self.data).tolist()
+        wire32_to_qpos(self.model, q_leg, wire_last)
+        self.data.qpos[:] = q_leg
+        mujoco.mj_forward(self.model, self.data)
+        ee_final_legacy = ee_body_xyz(self.model, self.data).tolist()
+
+        wire_delta = float(np.linalg.norm(wire_last - wire32_rad))
+        chain_matches_last = bool(
+            np.allclose(ee_full, ee_last_only, atol=1e-5, rtol=1e-5)
+        )
+        legacy_final_delta = float(
+            np.linalg.norm(np.asarray(ee_final_legacy) - ee_full)
+        )
+
+        viol_full = self.plan_violation(
+            wire32_rad,
+            plan_norm,
+            check_all_steps=not check_final_only,
+            cube_xyz=cube_xyz,
+        )
+        viol_last_only = float(ee_halfspace_violation(ee_full, self._H, self._d))
+
+        per_step_table = [table_footprint_check(ee) for ee in ee_per_step]
+
+        report = {
+            "ee_body": EE_BODY,
+            "n_plan_steps": n,
+            "sim_scene_sync": True,
+            "scene_cube_xyz": (cube_xyz.tolist() if cube_xyz is not None else None),
+            "ee_baseline_xyz": ee_baseline.tolist(),
+            "ee_per_step_xyz": ee_per_step,
+            "ee_full_chain_final_xyz": ee_full.tolist(),
+            "ee_last_row_only_xyz": ee_last_only.tolist(),
+            "ee_baseline_legacy_root_z0_xyz": ee_baseline_legacy,
+            "ee_final_legacy_root_z0_xyz": ee_final_legacy,
+            "legacy_final_vs_sim_sync_delta_m": legacy_final_delta,
+            "chain_final_equals_last_row_fk": chain_matches_last,
+            "wire32_baseline_rad": wire32_rad.tolist(),
+            "wire32_last_row_rad": wire_last.tolist(),
+            "wire32_delta_norm_rad": wire_delta,
+            "plan_last_row_norm": plan_norm[-1].tolist(),
+            "table_footprint_per_step": per_step_table,
+            "scene_snapshot_baseline": snap_baseline,
+            "scene_snapshot_final": snap_final,
+            "violation_full_chain": float(viol_full),
+            "violation_last_row_only_ee": viol_last_only,
+            "feasible_full_chain": bool(viol_full <= self.feasibility_eps),
+            "feasible_last_row_only_ee": bool(viol_last_only <= self.feasibility_eps),
+        }
+        log_scene_snapshot(snap_baseline, prefix="[SCENE_DEBUG/fk]")
+        log_scene_snapshot(snap_final, prefix="[SCENE_DEBUG/fk]")
+        TaskWorkspaceMPCConstraint.log_fk_debug_report(report, prefix="[FK_DEBUG]")
+        return report
+
+    @staticmethod
+    def log_fk_debug_report(report: dict, *, prefix: str = "[FK_DEBUG]") -> None:
+        """Print a compact, grep-friendly FK audit block."""
+        ee0 = report.get("ee_baseline_xyz", [0, 0, 0])
+        eef = report.get("ee_full_chain_final_xyz", [0, 0, 0])
+        eel = report.get("ee_last_row_only_xyz", [0, 0, 0])
+        print(
+            f"{prefix} body={report.get('ee_body')} steps={report.get('n_plan_steps')} "
+            f"chain==last_row_fk={report.get('chain_final_equals_last_row_fk')}"
+        )
+        print(
+            f"{prefix} ee_baseline=({ee0[0]:.4f},{ee0[1]:.4f},{ee0[2]:.4f}) "
+            f"ee_full_chain=({eef[0]:.4f},{eef[1]:.4f},{eef[2]:.4f}) "
+            f"ee_last_row_only=({eel[0]:.4f},{eel[1]:.4f},{eel[2]:.4f})"
+        )
+        print(
+            f"{prefix} wire32_delta_norm={report.get('wire32_delta_norm_rad'):.4f} rad "
+            f"viol_chain={report.get('violation_full_chain'):.6f} "
+            f"viol_last_row={report.get('violation_last_row_only_ee'):.6f} "
+            f"feas_chain={report.get('feasible_full_chain')} "
+            f"feas_last_row={report.get('feasible_last_row_only_ee')}"
+        )
+        for i, ee in enumerate(report.get("ee_per_step_xyz", [])):
+            fp = (report.get("table_footprint_per_step") or [{}])[i]
+            print(
+                f"{prefix}   after_plan[{i}] ee=({ee[0]:.4f},{ee[1]:.4f},{ee[2]:.4f}) "
+                f"x_band={fp.get('x_in_cube_band')} y_band={fp.get('y_in_cube_band')} "
+                f"z_ok={fp.get('z_above_table_top')}"
+            )
+        leg = report.get("ee_final_legacy_root_z0_xyz")
+        if leg is not None:
+            print(
+                f"{prefix} LEGACY(root_z=0) final=({leg[0]:.4f},{leg[1]:.4f},{leg[2]:.4f}) "
+                f"delta_vs_sync={report.get('legacy_final_vs_sim_sync_delta_m', 0):.4f} m"
+            )
+
 
 __all__ = [
     "INFEASIBLE_COST",
@@ -258,4 +435,5 @@ __all__ = [
     "TaskWorkspacePolytope",
     "build_task_workspace_polytope",
     "ee_halfspace_violation",
+    "fk_debug_report",
 ]

@@ -410,8 +410,15 @@ class GoalMapper:
         tw_H = obs_dict.get("task_workspace_H")
         tw_d = obs_dict.get("task_workspace_d")
         tw_wire32 = obs_dict.get("task_workspace_wire32")
+        tw_cube = obs_dict.get("task_workspace_cube_xyz")
         if tw_H is None or tw_d is None or tw_wire32 is None:
             return dist
+        cube_xyz = None
+        if tw_cube is not None:
+            if isinstance(tw_cube, torch.Tensor):
+                cube_xyz = tw_cube[0, 0].detach().cpu().numpy().reshape(3)
+            else:
+                cube_xyz = np.asarray(tw_cube[0, 0], dtype=np.float64).reshape(3)
 
         if isinstance(tw_H, torch.Tensor):
             H = tw_H[0, 0].detach().cpu().numpy()
@@ -431,13 +438,49 @@ class GoalMapper:
             final_only = bool(np.asarray(final_only).reshape(-1)[0])
         else:
             final_only = bool(final_only)
+
+        n_total = int(plan_np.shape[0])
+        print(
+            f"[FK_DEBUG/gate] obs shapes H={np.asarray(tw_H).shape} "
+            f"d={np.asarray(tw_d).shape} wire32={np.asarray(tw_wire32).shape} "
+            f"plans={plan_np.shape} final_only={final_only} eps={eps:g}"
+        )
+
         feasible, violations = self._task_ws.feasible_mask_batch(
             wire32,
             plan_np,
             check_all_steps=not final_only,
+            cube_xyz=cube_xyz,
         )
         n_feas = int(feasible.sum())
-        n_total = feasible.shape[0]
+        viol = violations.astype(np.float64)
+        print(
+            f"[FK_DEBUG/gate] feasible={n_feas}/{n_total} "
+            f"viol min={viol.min():.6f} med={np.median(viol):.6f} max={viol.max():.6f}"
+        )
+
+        # CEM lane 0 (includes mean candidate): FK audit for winner semantics
+        if n_total > 0:
+            lane0 = self._task_ws.fk_debug_report(
+                wire32,
+                plan_np[0],
+                check_final_only=final_only,
+                cube_xyz=cube_xyz,
+            )
+            self._task_ws.log_fk_debug_report(lane0, prefix="[FK_DEBUG/gate/lane0]")
+
+        # Lowest-violation sample (closest to hull boundary from inside)
+        best_vi_idx = int(np.argmin(viol))
+        if best_vi_idx != 0 and n_total > 1:
+            lane_best_v = self._task_ws.fk_debug_report(
+                wire32,
+                plan_np[best_vi_idx],
+                check_final_only=final_only,
+                cube_xyz=cube_xyz,
+            )
+            self._task_ws.log_fk_debug_report(
+                lane_best_v, prefix=f"[FK_DEBUG/gate/lane_min_viol={best_vi_idx}]"
+            )
 
         if n_feas == 0:
             relaxed = violations <= eps * 100.0
@@ -453,6 +496,23 @@ class GoalMapper:
                     "skipping gate for this cost eval"
                 )
                 return dist
+
+        # Among reward-feasible elites, log FK for lowest-cost feasible sample
+        if n_feas > 0:
+            feas_idx = np.where(feasible)[0]
+            dist_np = dist.detach().cpu().numpy().reshape(-1)
+            best_cost_idx = int(feas_idx[np.argmin(dist_np[feas_idx])])
+            if best_cost_idx not in (0, best_vi_idx):
+                lane_best_c = self._task_ws.fk_debug_report(
+                    wire32,
+                    plan_np[best_cost_idx],
+                    check_final_only=final_only,
+                    cube_xyz=cube_xyz,
+                )
+                self._task_ws.log_fk_debug_report(
+                    lane_best_c,
+                    prefix=f"[FK_DEBUG/gate/lane_min_cost_feasible={best_cost_idx}]",
+                )
 
         feasible_t = torch.from_numpy(feasible).to(device=dist.device, dtype=torch.bool)
         infeasible_cost = torch.tensor(
