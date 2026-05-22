@@ -25,7 +25,7 @@ TABLE_TOP_Z = 0.82
 CUBE_X_RANGE = (0.27, 0.63)
 CUBE_Y_RANGE = (-0.23, 0.23)
 
-SCENE_DEBUG = os.environ.get("LEWM_SCENE_DEBUG", "1").strip().lower() in (
+SCENE_DEBUG = os.environ.get("LEWM_SCENE_DEBUG", "0").strip().lower() in (
     "1",
     "true",
     "yes",

@@ -453,34 +453,6 @@ class GoalMapper:
             cube_xyz=cube_xyz,
         )
         n_feas = int(feasible.sum())
-        viol = violations.astype(np.float64)
-        print(
-            f"[FK_DEBUG/gate] feasible={n_feas}/{n_total} "
-            f"viol min={viol.min():.6f} med={np.median(viol):.6f} max={viol.max():.6f}"
-        )
-
-        # CEM lane 0 (includes mean candidate): FK audit for winner semantics
-        if n_total > 0:
-            lane0 = self._task_ws.fk_debug_report(
-                wire32,
-                plan_np[0],
-                check_final_only=final_only,
-                cube_xyz=cube_xyz,
-            )
-            self._task_ws.log_fk_debug_report(lane0, prefix="[FK_DEBUG/gate/lane0]")
-
-        # Lowest-violation sample (closest to hull boundary from inside)
-        best_vi_idx = int(np.argmin(viol))
-        if best_vi_idx != 0 and n_total > 1:
-            lane_best_v = self._task_ws.fk_debug_report(
-                wire32,
-                plan_np[best_vi_idx],
-                check_final_only=final_only,
-                cube_xyz=cube_xyz,
-            )
-            self._task_ws.log_fk_debug_report(
-                lane_best_v, prefix=f"[FK_DEBUG/gate/lane_min_viol={best_vi_idx}]"
-            )
 
         if n_feas == 0:
             relaxed = violations <= eps * 100.0
@@ -496,23 +468,6 @@ class GoalMapper:
                     "skipping gate for this cost eval"
                 )
                 return dist
-
-        # Among reward-feasible elites, log FK for lowest-cost feasible sample
-        if n_feas > 0:
-            feas_idx = np.where(feasible)[0]
-            dist_np = dist.detach().cpu().numpy().reshape(-1)
-            best_cost_idx = int(feas_idx[np.argmin(dist_np[feas_idx])])
-            if best_cost_idx not in (0, best_vi_idx):
-                lane_best_c = self._task_ws.fk_debug_report(
-                    wire32,
-                    plan_np[best_cost_idx],
-                    check_final_only=final_only,
-                    cube_xyz=cube_xyz,
-                )
-                self._task_ws.log_fk_debug_report(
-                    lane_best_c,
-                    prefix=f"[FK_DEBUG/gate/lane_min_cost_feasible={best_cost_idx}]",
-                )
 
         feasible_t = torch.from_numpy(feasible).to(device=dist.device, dtype=torch.bool)
         infeasible_cost = torch.tensor(

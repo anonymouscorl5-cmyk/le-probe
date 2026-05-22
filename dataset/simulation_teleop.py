@@ -21,7 +21,6 @@ from gr1_config import COMPACT_WIRE_JOINTS
 from inference_http import serve_http, TELEOP_PATH
 from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
 from lewm.task_workspace import TaskWorkspaceMPCConstraint
-from gr1_scene_sync import SCENE_DEBUG, log_scene_snapshot, scene_snapshot
 
 
 class GR1TeleopServer(GR1MuJoCoBase):
@@ -149,29 +148,8 @@ class GR1TeleopServer(GR1MuJoCoBase):
 
         if "target" in data:
             action_32 = np.array(data["target"], dtype=np.float32)
-            if SCENE_DEBUG:
-                self.data.qpos[:] = self.last_target_q
-                mujoco.mj_forward(self.model, self.data)
-                log_scene_snapshot(
-                    scene_snapshot(self.model, self.data, label="teleop_before_target"),
-                    prefix="[SCENE_DEBUG/teleop]",
-                )
             self.process_target_32(action_32)
             self.dispatch_action(action_32, self.last_target_q)
-            if SCENE_DEBUG:
-                log_scene_snapshot(
-                    scene_snapshot(self.model, self.data, label="teleop_after_target"),
-                    prefix="[SCENE_DEBUG/teleop]",
-                )
-                if self._task_ws is not None:
-                    fk = self._task_ws.fk_debug_report(
-                        self.get_state_32(), action_32.reshape(1, -1)
-                    )
-                    print(
-                        f"[SCENE_DEBUG/teleop] FK one-row final (sim-sync) "
-                        f"{fk.get('ee_full_chain_final_xyz')} "
-                        f"legacy_z0 {fk.get('ee_final_legacy_root_z0_xyz')}"
-                    )
             return self._enrich_response({"status": "step_ok"})
 
         if cmd == "store_snapshot":
@@ -267,16 +245,6 @@ class GR1TeleopServer(GR1MuJoCoBase):
             q_reach_h = self.solve_ik(
                 pos_w_h, quat_down, pos_i_h, pos_t_h, posture_cost=1e-6
             )
-            if SCENE_DEBUG:
-                print(
-                    f"[SCENE_DEBUG/ik] phase=0 cube={cube_pos.tolist()} "
-                    f"targets wrist={pos_w_h.tolist()} index={pos_i_h.tolist()}"
-                )
-                log_scene_snapshot(
-                    scene_snapshot(self.model, self.data, label="ik_phase0_pre"),
-                    prefix="[SCENE_DEBUG/teleop]",
-                )
-
             self.dispatch_action(
                 self.qpos_to_action_32(q_reach_h),
                 q_reach_h,
@@ -294,11 +262,6 @@ class GR1TeleopServer(GR1MuJoCoBase):
             q_reach_l = self.solve_ik(
                 pos_w_l, quat_down, pos_i_l, pos_t_l, posture_cost=1e-6
             )
-            if SCENE_DEBUG:
-                print(
-                    f"[SCENE_DEBUG/ik] phase=1 cube={cube_pos.tolist()} "
-                    f"targets index={pos_i_l.tolist()}"
-                )
             # ✅ WIDE OPEN HAND: Force fingers to 0.0 (Open)
             for f_idx in [50, 51, 52, 53, 54, 55, 56]:
                 if f_idx < len(q_reach_l):

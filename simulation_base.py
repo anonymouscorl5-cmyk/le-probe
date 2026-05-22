@@ -18,7 +18,6 @@ from gr1_config import (
     IK_POSTURE_LOCKS,
 )
 from gr1_protocol import StandardScaler
-from gr1_scene_sync import SCENE_DEBUG, log_scene_snapshot, scene_snapshot
 
 # Suppress performance warnings from qpsolvers
 warnings.filterwarnings("ignore", category=UserWarning, module="qpsolvers")
@@ -445,19 +444,6 @@ class GR1MuJoCoBase:
         # Save target for next chunk (VLA Trajectory Threading)
         self._last_interp_q = target_q.copy()
 
-        if SCENE_DEBUG:
-            wire32_actual = self.get_state_32()
-            wire32_target = self.unscaler.unscale_action(action_32_norm)
-            q_err = float(np.linalg.norm(wire32_actual - wire32_target))
-            print(
-                f"[SCENE_DEBUG/dispatch_action] steps={total_steps} "
-                f"|actual_qpos-wire32|={q_err:.4f} rad"
-            )
-            log_scene_snapshot(
-                scene_snapshot(self.model, self.data, label="after_dispatch"),
-                prefix="[SCENE_DEBUG/sim]",
-            )
-
     def reset_env(self, lock_posture=False, randomize_cube=True):
         """Resets the simulation with optional postural locking."""
         print(f"🎲 Resetting environment (Lock Posture: {lock_posture})...")
@@ -574,17 +560,3 @@ class GR1MuJoCoBase:
                 if i in self.coupling_map:
                     for distal_idx in self.coupling_map[i]:
                         self.last_target_q[distal_idx] = rad
-
-        if SCENE_DEBUG:
-            self.data.qpos[:] = self.last_target_q
-            mujoco.mj_forward(self.model, self.data)
-            n_coupled = sum(len(v) for v in self.coupling_map.values())
-            print(
-                f"[SCENE_DEBUG/process_target_32] active_wire={sorted(self.active_joints_this_command)} "
-                f"coupling_writes={n_coupled} "
-                f"norm_max={float(np.nanmax(np.abs(action_32_norm))):.4f}"
-            )
-            log_scene_snapshot(
-                scene_snapshot(self.model, self.data, label="after_process_target_32"),
-                prefix="[SCENE_DEBUG/sim]",
-            )

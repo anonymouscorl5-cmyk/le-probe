@@ -28,7 +28,6 @@ from gr1_scene_sync import (
     apply_sim_scene_to_qpos,
     build_qpos_from_wire32,
     ee_body_xyz,
-    log_scene_snapshot,
     scene_snapshot,
     table_footprint_check,
 )
@@ -386,46 +385,7 @@ class TaskWorkspaceMPCConstraint:
             "feasible_full_chain": bool(viol_full <= self.feasibility_eps),
             "feasible_last_row_only_ee": bool(viol_last_only <= self.feasibility_eps),
         }
-        log_scene_snapshot(snap_baseline, prefix="[SCENE_DEBUG/fk]")
-        log_scene_snapshot(snap_final, prefix="[SCENE_DEBUG/fk]")
-        TaskWorkspaceMPCConstraint.log_fk_debug_report(report, prefix="[FK_DEBUG]")
         return report
-
-    @staticmethod
-    def log_fk_debug_report(report: dict, *, prefix: str = "[FK_DEBUG]") -> None:
-        """Print a compact, grep-friendly FK audit block."""
-        ee0 = report.get("ee_baseline_xyz", [0, 0, 0])
-        eef = report.get("ee_full_chain_final_xyz", [0, 0, 0])
-        eel = report.get("ee_last_row_only_xyz", [0, 0, 0])
-        print(
-            f"{prefix} body={report.get('ee_body')} steps={report.get('n_plan_steps')} "
-            f"chain==last_row_fk={report.get('chain_final_equals_last_row_fk')}"
-        )
-        print(
-            f"{prefix} ee_baseline=({ee0[0]:.4f},{ee0[1]:.4f},{ee0[2]:.4f}) "
-            f"ee_full_chain=({eef[0]:.4f},{eef[1]:.4f},{eef[2]:.4f}) "
-            f"ee_last_row_only=({eel[0]:.4f},{eel[1]:.4f},{eel[2]:.4f})"
-        )
-        print(
-            f"{prefix} wire32_delta_norm={report.get('wire32_delta_norm_rad'):.4f} rad "
-            f"viol_chain={report.get('violation_full_chain'):.6f} "
-            f"viol_last_row={report.get('violation_last_row_only_ee'):.6f} "
-            f"feas_chain={report.get('feasible_full_chain')} "
-            f"feas_last_row={report.get('feasible_last_row_only_ee')}"
-        )
-        for i, ee in enumerate(report.get("ee_per_step_xyz", [])):
-            fp = (report.get("table_footprint_per_step") or [{}])[i]
-            print(
-                f"{prefix}   after_plan[{i}] ee=({ee[0]:.4f},{ee[1]:.4f},{ee[2]:.4f}) "
-                f"x_band={fp.get('x_in_cube_band')} y_band={fp.get('y_in_cube_band')} "
-                f"z_ok={fp.get('z_above_table_top')}"
-            )
-        leg = report.get("ee_final_legacy_root_z0_xyz")
-        if leg is not None:
-            print(
-                f"{prefix} LEGACY(root_z=0) final=({leg[0]:.4f},{leg[1]:.4f},{leg[2]:.4f}) "
-                f"delta_vs_sync={report.get('legacy_final_vs_sim_sync_delta_m', 0):.4f} m"
-            )
 
 
 __all__ = [

@@ -262,9 +262,7 @@ class LEWMInferenceServer:
                 self.agent.frozen_pose = torch.tensor(
                     self.initial_pose, device=DEVICE
                 ).float()
-                print(
-                    f"🧊 Initial Pose Anchored: Left Shoulder Pitch = {self.initial_pose[0]:.4f}"
-                )
+                print("🧊 Initial Pose Anchored.")
 
             # Pixels History (V, C, H, W)
             try:
@@ -360,7 +358,6 @@ class LEWMInferenceServer:
                 )
 
             best_plan = outputs["actions"].cpu().numpy()
-            print(f"best_plan: {best_plan.shape}")
             if best_plan.ndim == 4:
                 best_plan = best_plan[0, 0]  # (B, S, T, D) -> (T, D)
             elif best_plan.ndim == 3:
@@ -369,8 +366,6 @@ class LEWMInferenceServer:
             # Freeze left + head; keep protocol [-1, 1] on active joints
             best_plan[:, 0:16] = self.initial_pose[0:16]
             best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
-            print(f"best_plan after freeze and clip: {best_plan.shape}")
-
             diagnostics = {"plan_time_ms": 0}
             if self.use_task_workspace:
                 fk_report = self.task_workspace.fk_debug_report(
@@ -378,9 +373,6 @@ class LEWMInferenceServer:
                     best_plan,
                     check_final_only=True,
                     cube_xyz=cube_xyz,
-                )
-                TaskWorkspaceMPCConstraint.log_fk_debug_report(
-                    fk_report, prefix="[FK_DEBUG/server]"
                 )
                 plan_final_ee = np.asarray(
                     fk_report["ee_full_chain_final_xyz"], dtype=np.float64
