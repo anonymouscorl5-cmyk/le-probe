@@ -7,6 +7,8 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 # --------------------------
 
+import argparse
+
 from tqdm import tqdm
 
 from inference_http import InferenceHTTPClient, TELEOP_PATH, TELEOP_TIMEOUT_S
@@ -36,8 +38,6 @@ def automate_wild_harvest(num_samples=1000, base_url="http://127.0.0.1:5556"):
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--base_url",

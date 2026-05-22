@@ -27,22 +27,15 @@ from simulation_base import GR1MuJoCoBase
 from gr1_protocol import StandardScaler
 from gr1_config import SCENE_PATH
 from inference_http import InferenceHTTPClient, pack_np
+from dataset.polytope_utils import (
+    draw_polytope_on_rgb,
+    draw_world_points_on_rgb,
+    log_polytope_rerun,
+)
+from lewm.task_workspace import TaskWorkspaceMPCConstraint
 
-try:
-    from dataset.polytope_utils import (
-        draw_polytope_on_rgb,
-        draw_world_points_on_rgb,
-        log_polytope_rerun,
-    )
-    from lewm.task_workspace import TaskWorkspaceMPCConstraint
-
-    # BGR: blue dot = server FK of final plan step (CEM gate check); green = live EE in draw_polytope
-    PLAN_FINAL_EE_BGR = (0, 0, 255)
-
-    TASK_WORKSPACE_AVAILABLE = True
-except ImportError as e:
-    TASK_WORKSPACE_AVAILABLE = False
-    _TASK_WORKSPACE_IMPORT_ERROR = e
+# BGR: blue dot = server FK of final plan step (CEM gate check); green = live EE in draw_polytope
+PLAN_FINAL_EE_BGR = (0, 0, 255)
 
 
 class GR1LEWMClient(GR1MuJoCoBase):
@@ -61,14 +54,12 @@ class GR1LEWMClient(GR1MuJoCoBase):
         self.use_skeleton = use_skeleton
         self.use_dino = use_dino
 
-        self.show_task_workspace = show_task_workspace and TASK_WORKSPACE_AVAILABLE
+        self.show_task_workspace = show_task_workspace
         self.task_workspace_fill_alpha = task_workspace_fill_alpha
         self._task_ws = None
         self._plan_final_ee_xyz: np.ndarray | None = None
 
-        if show_task_workspace and not TASK_WORKSPACE_AVAILABLE:
-            print(f"⚠️ Task workspace overlay disabled: {_TASK_WORKSPACE_IMPORT_ERROR}")
-        elif self.show_task_workspace:
+        if self.show_task_workspace:
             self._task_ws = TaskWorkspaceMPCConstraint()
             p = self._task_ws.poly
             print(

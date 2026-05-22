@@ -19,15 +19,8 @@ from gr1_config import SCENE_PATH
 from gr1_protocol import StandardScaler
 from gr1_config import COMPACT_WIRE_JOINTS
 from inference_http import serve_http, TELEOP_PATH
-
-try:
-    from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
-    from lewm.task_workspace import TaskWorkspaceMPCConstraint
-
-    TASK_WORKSPACE_AVAILABLE = True
-except ImportError as e:
-    TASK_WORKSPACE_AVAILABLE = False
-    _TASK_WORKSPACE_IMPORT_ERROR = e
+from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
+from lewm.task_workspace import TaskWorkspaceMPCConstraint
 
 
 class GR1TeleopServer(GR1MuJoCoBase):
@@ -48,13 +41,11 @@ class GR1TeleopServer(GR1MuJoCoBase):
         self.port = port
         self.lock_posture = lock_posture
         self.is_running = True
-        self.show_task_workspace = show_task_workspace and TASK_WORKSPACE_AVAILABLE
+        self.show_task_workspace = show_task_workspace
         self.task_workspace_fill_alpha = task_workspace_fill_alpha
         self._task_ws = None
 
-        if show_task_workspace and not TASK_WORKSPACE_AVAILABLE:
-            print(f"⚠️ Task workspace overlay disabled: {_TASK_WORKSPACE_IMPORT_ERROR}")
-        elif self.show_task_workspace:
+        if self.show_task_workspace:
             self._task_ws = TaskWorkspaceMPCConstraint()
             p = self._task_ws.poly
             print(

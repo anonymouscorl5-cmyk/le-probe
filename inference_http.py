@@ -7,9 +7,16 @@ HTTP transport for remote inference and teleop (msgpack bodies). Works with ``ng
 
 from __future__ import annotations
 
+import traceback
+
 import msgpack
 import numpy as np
 import requests
+import uvicorn
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 DEFAULT_TIMEOUT_S = 120.0
 TELEOP_TIMEOUT_S = 300.0
@@ -99,10 +106,6 @@ def create_app(
     handler, rpc_path: str = PLAN_PATH, title: str = "Cortex Inference Server"
 ):
     """Build a Starlette ASGI app: ``handler(req_dict) -> resp_dict``."""
-    from starlette.applications import Starlette
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response
-    from starlette.routing import Route
 
     async def health(_request: Request):
         return JSONResponse(
@@ -120,8 +123,6 @@ def create_app(
                 status_code=status,
             )
         except Exception as e:
-            import traceback
-
             traceback.print_exc()
             return Response(
                 content=encode_body({"error": str(e)}),
@@ -145,8 +146,6 @@ def serve_http(
     rpc_path: str = PLAN_PATH,
     title: str = "Cortex Inference Server",
 ) -> None:
-    import uvicorn
-
     app = create_app(handler, rpc_path=rpc_path, title=title)
     print(
         f"🌐 HTTP server: http://{host}:{port}  "

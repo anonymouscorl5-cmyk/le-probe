@@ -15,6 +15,7 @@ from typing import Optional
 
 import mujoco
 import numpy as np
+from scipy.spatial import ConvexHull
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -119,8 +120,6 @@ def build_task_workspace_polytope(
 ) -> TaskWorkspacePolytope:
     corners = TASK_WORKSPACE_CORNERS
     pts = expand_corners_for_hull(corners, samples_per_arc=samples_per_arc)
-
-    from scipy.spatial import ConvexHull
 
     hull = ConvexHull(pts)
     H = np.asarray(hull.equations[:, :3], dtype=np.float64)
