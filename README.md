@@ -131,6 +131,16 @@ While the above GIF shows DINOv3 representations for all frames in an episode, w
   <img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="240" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)">
 </div>
 
+#### Task Workspace
+
+So far, all the results that we've seen above have been a consequence of hardcoded constraints on the right arm joints to prevent movements like tucking the arm behind the back which aren't a part of the data distribution, hence leading to an OOD problem. As a more sustainable solution, a task workspace has been created which is simply a polytope constructed using some key points around the workspace. This polytope is supposed to be task-specific and is used to control the end position of the right hand finger tips during sampling to remain within the workspace. Here's an attempt of the above checkpoint with the task workspace without any of the remapping constraints we had previously hardcoded.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints + Task Workspace)</b>
+  <hr width="720">
+  <img src="assets/task_workspace.gif" width="720" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints + Task Workspace)">
+</div>
+
 ### 4. Interpretability
 
 #### Next Steps
@@ -264,7 +274,7 @@ To run the stabilized VLA policy in simulation, the model weights/configs are av
 
 #### Inference
 
-1. **Inference Server**: Was run using [**`vla/GR00T_N1_E2E.ipynb`**](vla/GR00T_N1_E2E.ipynb) using a Pinggy tunnel.
+1. **Inference Server**: Was run using [**`vla/GR00T_N1_E2E.ipynb`**](vla/GR00T_N1_E2E.ipynb) using a ngrok tunnel.
    ```bash
    .venv/bin/python vla/gr00t_server.py --weights <path to pretrained_model folder>
    ```
@@ -291,34 +301,40 @@ Following the training, all goal states in the dataset were harvested in the lat
 
 #### Inference
 
-1. **Inference Server**: Was run using [**`lewm/LEWM_E2E.ipynb`**](lewm/LEWM_E2E.ipynb) using a Pinggy tunnel.
-   ```bash
-   # For Single-View
-   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
+1. **Inference Server**: Was run using [**`lewm/LEWM_E2E.ipynb`**](lewm/LEWM_E2E.ipynb) using a ngrok tunnel.
+  ```bash
+  # For Single-View
+  .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth
 
-   # For Multi-View
-   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth --multi_view
+  # For Multi-View
+  .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v2.ckpt --gallery goal_gallery.pth --multi_view
 
-   # For Multi-View + Skeletal Priors
-   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v6.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton
+  # For Multi-View + Skeletal Priors
+  .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v6.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton
 
-   # For Multi-View + Skeletal Priors + DINOv3 Waypoints
-   .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v1.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton --use_dino
-   ```
+  # For Multi-View + Skeletal Priors + DINOv3 Waypoints
+  .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v1.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton --use_dino
+
+  # For Multi-View + Skeletal Priors + DINOv3 Waypoints
+  .venv/bin/python lewm/lewm_server.py  --model gr1_reward_tuned_v1.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton --use_dino --task_workspace
+  ```
 
 2. **Simulation Host**:
    ```bash
    # For Single-View
-   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
+   .venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app
 
    # For Multi-View
-   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view
+   .venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view
 
    # For Multi-View + Skeletal Priors
-   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton
+   .venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view --use_skeleton
 
    # For Multi-View + Skeletal Priors + DINOv3 Waypoints
-   .venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton --use_dino
+   .venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view --use_skeleton --use_dino
+
+  # For Multi-View + Skeletal Priors + DINOv3 Waypoints + Task Workspace
+  .venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view --use_skeleton --use_dino --task_workspace
    ```
 
 ### 4. Interpretability
@@ -362,7 +378,7 @@ cd interpretability/neuronpedia
 make webapp-localhost-dev
 ```
 
-2. **Start the Engine (Colab)**: The engine runs on colab using a Pinggy tunnel
+2. **Start the Engine (Colab)**: The engine runs on colab using a ngrok tunnel
 ```bash
 .venv/bin/python interpretability/dashboard/engine.py \
     --repo vedpatwardhan/gr1_pickup_grasp \

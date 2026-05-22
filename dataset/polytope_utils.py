@@ -1,5 +1,5 @@
 """
-MuJoCo + pycapacity reachable workspace for Fourier GR-1 (legacy / exploration).
+MuJoCo reachable workspace for Fourier GR-1 (legacy / exploration).
 
 Production MPC and teleop use the **fixed** hull in ``lewm/task_workspace.py``.
 This module remains for ``draw_polytope_on_rgb``, ``log_polytope_rerun``, and optional

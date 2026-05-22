@@ -54,7 +54,7 @@ CONFIG = {
 @app.get("/api/robot-dataset/frames/{idx}.jpg")
 async def get_frame(idx: int):
     """
-    Proxies a frame request to the Colab/Pinggy bridge.
+    Proxies a frame request to the Colab/ngrok bridge.
     The bridge handles all the math for mapping the index to a dataset sample and patch.
     """
     if not CONFIG["remote_url"]:
@@ -63,7 +63,7 @@ async def get_frame(idx: int):
             detail="Cloud bridge URL not configured. Set COLAB_BRIDGE_URL in .env or use --remote-url",
         )
 
-    # REMOTE MODE: Proxy to Colab/Pinggy
+    # REMOTE MODE: Proxy to Colab/ngrok
     url = f"{CONFIG['remote_url'].rstrip('/')}/api/robot-dataset/frames/{idx}.jpg"
     try:
         # Increase timeout for cloud bridge (some frames might take a second to extract)
@@ -79,7 +79,7 @@ async def get_frame(idx: int):
         print(f"❌ Connection error: {e}")
         raise HTTPException(
             status_code=502,
-            detail=f"Connection to Colab bridge failed. Is the Pinggy tunnel alive? {e}",
+            detail=f"Connection to Colab bridge failed. Is the ngrok tunnel alive? {e}",
         )
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
@@ -89,7 +89,7 @@ async def get_frame(idx: int):
 @app.get("/api/robot-dataset/gallery/{idx}.jpg")
 async def get_gallery(idx: int, patches: str = ""):
     """
-    Proxies a gallery request to the Colab/Pinggy bridge.
+    Proxies a gallery request to the Colab/ngrok bridge.
     """
     if not CONFIG["remote_url"]:
         raise HTTPException(status_code=501, detail="Cloud bridge URL not configured.")
@@ -107,7 +107,7 @@ async def get_gallery(idx: int, patches: str = ""):
 @app.post("/api/attribution/generate-graph")
 async def generate_graph(request_data: dict):
     """
-    Proxies a graph generation request to the Colab/Pinggy bridge.
+    Proxies a graph generation request to the Colab/ngrok bridge.
     """
     if not CONFIG["remote_url"]:
         raise HTTPException(
@@ -142,7 +142,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--remote-url",
         type=str,
-        help="Pinggy/Ngrok URL of the Colab bridge (overrides .env)",
+        help="ngrok/Ngrok URL of the Colab bridge (overrides .env)",
     )
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()

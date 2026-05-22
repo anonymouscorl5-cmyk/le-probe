@@ -20,7 +20,7 @@ Finally, the performance was evaluated using [**`LEWM_E2E.ipynb`**](LEWM_E2E.ipy
 - [`tune_reward_head.py`](tune_reward_head.py): A utility to tune the reward head of the LeWM with additional snapshots.
 - [`harvest_goals.py`](harvest_goals.py): Utility to pre-compute goal embeddings for testing.
 - [`diagnose_mpc.py`](diagnose_mpc.py): A utility to visualize the CEM planner's latent trajectory (the planning algorithm). This is not an online server but just a sanity check after training.
-- [`LeWM_E2E.ipynb`](LeWM_E2E.ipynb): Notebook to run the server for the model (tunneled through Pinggy).
+- [`LeWM_E2E.ipynb`](LeWM_E2E.ipynb): Notebook to run the server for the model (tunneled through ngrok).
 - [`lewm_server.py`](lewm_server.py): HTTP inference host (`POST /plan`, msgpack) used in the notebook.
 - [`goal_mapper.py`](goal_mapper.py): Manages latent goal memory and manifold traversal.
 - [`goal_utils.py`](goal_utils.py): Utilities for handling goal embeddings.
@@ -117,7 +117,7 @@ The previous attempt did show some signs of learning the broader motion of grasp
 <div align="center">
   <b>DINOv3 Representation of Episode</b>
   <hr width="720">
-  <img src="assets/dino_skeletal_priors.gif" width="720" alt="DINOv3 Representation of Episode">
+  <img src="../assets/dino_skeletal_priors.gif" width="720" alt="DINOv3 Representation of Episode">
 </div>
 
 While the above GIF shows DINOv3 representations for all frames in an episode, we only rely on 4 frames in every 32-frame episode. That representation is passed in to an additional reward head on top of the predictor to ensure that every transition tries to close in to the upcoming sub-goal. This does demonstrate that now we are able to follow the grasp trajectory of the training data more closely than any previous experiments, especially the first phase of approaching the cube.
@@ -125,7 +125,17 @@ While the above GIF shows DINOv3 representations for all frames in an episode, w
 <div align="center">
   <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)</b>
   <hr width="240">
-  <img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="240" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)">
+  <img src="../assets/lewm_grasp_multiview_skeleton_dino.gif" width="240" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints)">
+</div>
+
+### Task Workspace
+
+So far, all the results that we've seen above have been a consequence of hardcoded constraints on the right arm joints to prevent movements like tucking the arm behind the back which aren't a part of the data distribution, hence leading to an OOD problem. As a more sustainable solution, a task workspace has been created which is simply a polytope constructed using some key points around the workspace. This polytope is supposed to be task-specific and is used to control the end position of the right hand finger tips during sampling to remain within the workspace. Here's an attempt of the above checkpoint with the task workspace without any of the remapping constraints we had previously hardcoded.
+
+<div align="center">
+  <b>LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints + Task Workspace)</b>
+  <hr width="720">
+  <img src="../assets/task_workspace.gif" width="720" alt="LeWM: Grasp Execution (Multi-View + Skeletal Priors + DINOv3 Waypoints + Task Workspace)">
 </div>
 
 ## 🎨 Motivation for Interpretability
@@ -165,13 +175,25 @@ To test the World Model and MPC planner:
 
 # For Multi-View + Skeletal Priors + DINOv3 Waypoints
 .venv/bin/python lewm/lewm_server.py --model gr1_reward_tuned_v1.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton --use_dino
+
+# For Multi-View + Skeletal Priors + DINOv3 Waypoints
+.venv/bin/python lewm/lewm_server.py  --model gr1_reward_tuned_v1.ckpt --gallery goal_gallery.pth --multi_view --use_skeleton --use_dino --task_workspace
 ```
 
 #### Simulation Host
 ```bash
-# Local (server on same machine)
-.venv/bin/python lewm/simulation_lewm.py --base_url http://127.0.0.1:5555
+# For Single-View
+.venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app
 
-# Remote via ngrok: ngrok http 5555, then pass the https URL
+# For Multi-View
+.venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view
+
+# For Multi-View + Skeletal Priors
 .venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view --use_skeleton
+
+# For Multi-View + Skeletal Priors + DINOv3 Waypoints
+.venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view --use_skeleton --use_dino
+
+# For Multi-View + Skeletal Priors + DINOv3 Waypoints + Task Workspace
+.venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view --use_skeleton --use_dino --task_workspace
 ```
