@@ -40,7 +40,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--base-url",
+        "--base_url",
         type=str,
         default="http://127.0.0.1:5556",
         help="Teleop HTTP server (POST /teleop)",

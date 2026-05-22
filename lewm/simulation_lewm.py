@@ -287,7 +287,7 @@ def run_mission(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--base-url",
+        "--base_url",
         type=str,
         default=None,
         help="MPC server base URL (e.g. https://xxxx.ngrok-free.app or http://127.0.0.1:5555)",

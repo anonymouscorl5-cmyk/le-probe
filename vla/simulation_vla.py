@@ -155,7 +155,7 @@ if __name__ == "__main__":
     parser.add_argument("--instruction", type=str, default="Pick up the red cube")
     parser.add_argument("--chunks", type=int, default=10)
     parser.add_argument(
-        "--base-url",
+        "--base_url",
         type=str,
         default=None,
         help="VLA server base URL (e.g. https://xxxx.ngrok-free.app)",

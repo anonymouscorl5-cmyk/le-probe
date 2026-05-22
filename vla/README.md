@@ -71,5 +71,5 @@ To run the stabilized VLA policy in simulation:
 
 2. **Simulation Host**: Start the MuJoCo environment.
    ```bash
-   python vla/simulation_vla.py --base-url https://<id>.ngrok-free.app --chunks <num_chunks>
+   python vla/simulation_vla.py --base_url https://<id>.ngrok-free.app --chunks <num_chunks>
    ```

@@ -170,8 +170,8 @@ To test the World Model and MPC planner:
 #### Simulation Host
 ```bash
 # Local (server on same machine)
-.venv/bin/python lewm/simulation_lewm.py --base-url http://127.0.0.1:5555
+.venv/bin/python lewm/simulation_lewm.py --base_url http://127.0.0.1:5555
 
 # Remote via ngrok: ngrok http 5555, then pass the https URL
-.venv/bin/python lewm/simulation_lewm.py --base-url https://<id>.ngrok-free.app --multi_view --use_skeleton
+.venv/bin/python lewm/simulation_lewm.py --base_url https://<id>.ngrok-free.app --multi_view --use_skeleton
 ```
