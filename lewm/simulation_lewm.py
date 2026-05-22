@@ -30,8 +30,15 @@ from gr1_protocol import StandardScaler
 from gr1_config import SCENE_PATH
 
 try:
-    from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
+    from dataset.polytope_utils import (
+        draw_polytope_on_rgb,
+        draw_world_points_on_rgb,
+        log_polytope_rerun,
+    )
     from lewm.task_workspace import TaskWorkspaceMPCConstraint
+
+    # BGR: blue dot = server FK of final plan step (CEM gate check); green = live EE in draw_polytope
+    PLAN_FINAL_EE_BGR = (0, 0, 255)
 
     TASK_WORKSPACE_AVAILABLE = True
 except ImportError as e:
@@ -59,6 +66,7 @@ class GR1LEWMClient(GR1MuJoCoBase):
         self.show_task_workspace = show_task_workspace and TASK_WORKSPACE_AVAILABLE
         self.task_workspace_fill_alpha = task_workspace_fill_alpha
         self._task_ws = None
+        self._plan_final_ee_xyz: np.ndarray | None = None
 
         if show_task_workspace and not TASK_WORKSPACE_AVAILABLE:
             print(f"⚠️ Task workspace overlay disabled: {_TASK_WORKSPACE_IMPORT_ERROR}")
@@ -99,6 +107,20 @@ class GR1LEWMClient(GR1MuJoCoBase):
                 self.data,
                 depth_buffer=depth,
                 fill_alpha=self.task_workspace_fill_alpha,
+            )
+            if drawn is not rgb:
+                rgb[:] = drawn
+        if self._plan_final_ee_xyz is not None:
+            drawn = draw_world_points_on_rgb(
+                rgb,
+                self._plan_final_ee_xyz.reshape(1, 3),
+                name,
+                self.model,
+                self.data,
+                depth_buffer=depth,
+                color=PLAN_FINAL_EE_BGR,
+                radius=8,
+                label_points=False,
             )
             if drawn is not rgb:
                 rgb[:] = drawn
@@ -211,11 +233,24 @@ def run_mission(
 
                 tw_viol = diag.get("task_workspace_violation")
                 tw_feas = diag.get("task_workspace_feasible")
+                ee_xyz = diag.get("plan_final_ee_xyz")
+                if ee_xyz is not None and len(ee_xyz) == 3:
+                    sim._plan_final_ee_xyz = np.asarray(ee_xyz, dtype=np.float64)
+                    rr.log(
+                        "world/plan_final_ee",
+                        rr.Points3D(
+                            sim._plan_final_ee_xyz.reshape(1, 3),
+                            radii=0.02,
+                            colors=[0, 80, 255],
+                        ),
+                    )
                 tw_msg = ""
                 if tw_viol is not None:
                     tw_msg = f", task_viol(final)={tw_viol:.4f}"
                 if tw_feas is not None:
                     tw_msg += f", feasible={tw_feas}"
+                if ee_xyz is not None:
+                    tw_msg += f", plan_final_ee=({ee_xyz[0]:.3f}, {ee_xyz[1]:.3f}, {ee_xyz[2]:.3f})"
                 print(
                     "   🚀 Executing first action from plan (Solve Time: "
                     f"{diag.get('plan_time_ms')}ms, Horizon: {plan_norm.shape[0]}{tw_msg})"

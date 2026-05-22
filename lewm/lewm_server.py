@@ -368,6 +368,9 @@ class LEWMInferenceServer:
 
                 diagnostics = {"plan_time_ms": 0}
                 if self.use_task_workspace:
+                    plan_final_ee = self.task_workspace.final_plan_step_ee(
+                        raw_sim_state, best_plan
+                    )
                     tw_viol = self.task_workspace.plan_violation(
                         raw_sim_state, best_plan, check_all_steps=False
                     )
@@ -376,10 +379,17 @@ class LEWMInferenceServer:
                     )
                     print(
                         f"   🌐 Task workspace violation (final step): {tw_viol:.4f}, "
-                        f"feasible={tw_feasible}"
+                        f"feasible={tw_feasible}, "
+                        f"plan_final_ee=({plan_final_ee[0]:.3f}, {plan_final_ee[1]:.3f}, "
+                        f"{plan_final_ee[2]:.3f})"
                     )
                     diagnostics["task_workspace_violation"] = float(tw_viol)
                     diagnostics["task_workspace_feasible"] = bool(tw_feasible)
+                    diagnostics["plan_final_ee_xyz"] = [
+                        float(plan_final_ee[0]),
+                        float(plan_final_ee[1]),
+                        float(plan_final_ee[2]),
+                    ]
 
                 plan_time = time.time() - start_time
                 diagnostics["plan_time_ms"] = int(plan_time * 1000)

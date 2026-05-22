@@ -171,6 +171,21 @@ class TaskWorkspaceMPCConstraint:
                 q[self.model.jnt_qposadr[j_id]] = float(wire32_rad[i])
         self._baseline_qpos = q
 
+    def final_plan_step_ee(
+        self, wire32_rad: np.ndarray, plan_norm: np.ndarray
+    ) -> np.ndarray:
+        """Index-tip world position used for the final-step task-workspace gate."""
+        self.set_baseline_from_wire32(np.asarray(wire32_rad, dtype=np.float64))
+        plan_norm = np.asarray(plan_norm, dtype=np.float64)
+        if plan_norm.ndim == 1:
+            plan_norm = plan_norm.reshape(1, -1)
+        q = np.array(self._baseline_qpos, dtype=np.float64, copy=True)
+        wire_rad = self.scaler.unscale_action(plan_norm[-1])
+        wire32_to_qpos(self.model, q, wire_rad)
+        self.data.qpos[:] = q
+        mujoco.mj_forward(self.model, self.data)
+        return self.data.xpos[self.ee_body_id].copy()
+
     def plan_violation(
         self,
         wire32_rad: np.ndarray,
