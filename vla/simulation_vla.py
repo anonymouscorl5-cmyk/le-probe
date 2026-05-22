@@ -47,8 +47,10 @@ class GR1VLAClient(GR1MuJoCoBase):
 
         self.vla_client = InferenceHTTPClient(base_url)
         if not self.vla_client.health():
-            print(
-                f"⚠️ VLA server health check failed at {base_url} (will retry on first plan)"
+            raise RuntimeError(
+                f"VLA server health check failed at {base_url}/health — "
+                "is gr00t_server.py running with HTTP (not ZMQ)? "
+                "Restart the GPU server after pulling the HTTP migration."
             )
         print(f"🔗 VLA HTTP client → {base_url}")
 

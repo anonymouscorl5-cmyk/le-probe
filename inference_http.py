@@ -51,19 +51,23 @@ class InferenceHTTPClient:
         self.timeout_s = timeout_s
         self.endpoint = endpoint
         self._headers = {
-            "Content-Type": "application/msgpack",
-            "Accept": "application/msgpack",
+            "Content-Type": "application/octet-stream",
+            "Accept": "application/octet-stream",
             "Ngrok-Skip-Browser-Warning": "true",
         }
 
     def health(self) -> bool:
+        """True only if the cortex HTTP inference server is reachable."""
         try:
             r = requests.get(
                 f"{self.base_url}{HEALTH_PATH}",
                 headers=self._headers,
                 timeout=10,
             )
-            return r.status_code == 200
+            if r.status_code != 200:
+                return False
+            data = r.json()
+            return data.get("transport") == "http+msgpack"
         except Exception:
             return False
 
@@ -74,7 +78,12 @@ class InferenceHTTPClient:
             headers=self._headers,
             timeout=self.timeout_s,
         )
-        r.raise_for_status()
+        if not r.ok:
+            detail = r.text[:500] if r.text else r.reason
+            raise requests.HTTPError(
+                f"{r.status_code} {r.reason} for {r.url}: {detail}",
+                response=r,
+            )
         return decode_body(r.content)
 
     def plan(self, payload: dict) -> dict:
@@ -89,17 +98,17 @@ class InferenceHTTPClient:
 def create_app(
     handler, rpc_path: str = PLAN_PATH, title: str = "Cortex Inference Server"
 ):
-    """Build a FastAPI app: ``handler(req_dict) -> resp_dict``."""
-    from fastapi import FastAPI, Request
-    from fastapi.responses import Response
+    """Build a Starlette ASGI app: ``handler(req_dict) -> resp_dict``."""
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response
+    from starlette.routing import Route
 
-    app = FastAPI(title=title)
+    async def health(_request: Request):
+        return JSONResponse(
+            {"status": "ok", "transport": "http+msgpack", "rpc_path": rpc_path}
+        )
 
-    @app.get(HEALTH_PATH)
-    async def health():
-        return {"status": "ok", "transport": "http+msgpack", "rpc_path": rpc_path}
-
-    @app.post(rpc_path)
     async def rpc(request: Request):
         try:
             req = decode_body(await request.body())
@@ -107,7 +116,7 @@ def create_app(
             status = 500 if "error" in resp and "status" not in resp else 200
             return Response(
                 content=encode_body(resp),
-                media_type="application/msgpack",
+                media_type="application/octet-stream",
                 status_code=status,
             )
         except Exception as e:
@@ -116,11 +125,17 @@ def create_app(
             traceback.print_exc()
             return Response(
                 content=encode_body({"error": str(e)}),
-                media_type="application/msgpack",
+                media_type="application/octet-stream",
                 status_code=500,
             )
 
-    return app
+    return Starlette(
+        debug=False,
+        routes=[
+            Route(HEALTH_PATH, health, methods=["GET"]),
+            Route(rpc_path, rpc, methods=["POST"]),
+        ],
+    )
 
 
 def serve_http(

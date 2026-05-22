@@ -78,8 +78,10 @@ class GR1LEWMClient(GR1MuJoCoBase):
 
         self.client = InferenceHTTPClient(base_url)
         if not self.client.health():
-            print(
-                f"⚠️ MPC server health check failed at {base_url} (will retry on first plan)"
+            raise RuntimeError(
+                f"MPC server health check failed at {base_url}/health — "
+                "is lewm_server.py running with HTTP (not ZMQ)? "
+                "Restart the GPU server after pulling the HTTP migration."
             )
 
         print(
