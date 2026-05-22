@@ -31,14 +31,16 @@ from gr1_protocol import StandardScaler
 from gr1_config import SCENE_PATH
 from inference_http import InferenceHTTPClient, pack_np
 from dataset.polytope_utils import (
+    EE_OVERLAY_BGR,
+    EE_OVERLAY_RADIUS,
     draw_polytope_on_rgb,
     draw_world_points_on_rgb,
     log_polytope_rerun,
 )
 from lewm.task_workspace import get_task_workspace_draw_polytope
 
-# BGR: blue = chained FK of full horizon (CEM / task-workspace target); green = live EE
-PLAN_FINAL_EE_BGR = (0, 0, 255)
+# Planned final EE (MPC blue-dot FK) — same green as live index tip in draw_polytope_on_rgb.
+PLAN_FINAL_EE_BGR = EE_OVERLAY_BGR
 # Must match lewm_server MockConfig(horizon=4) and action_space shape (4, 32).
 MPC_HORIZON = 4
 
@@ -118,7 +120,7 @@ class GR1LEWMClient(GR1MuJoCoBase):
                 self.data,
                 depth_buffer=depth,
                 color=PLAN_FINAL_EE_BGR,
-                radius=8,
+                radius=EE_OVERLAY_RADIUS,
                 label_points=False,
             )
             if drawn is not rgb:
@@ -224,14 +226,8 @@ def run_mission(
                 ee_xyz = diag.get("plan_final_ee_xyz")
                 if ee_xyz is not None and len(ee_xyz) == 3:
                     sim._plan_final_ee_xyz = np.asarray(ee_xyz, dtype=np.float64)
-                    rr.log(
-                        "world/plan_final_ee",
-                        rr.Points3D(
-                            sim._plan_final_ee_xyz.reshape(1, 3),
-                            radii=0.02,
-                            colors=[0, 80, 255],
-                        ),
-                    )
+                else:
+                    sim._plan_final_ee_xyz = None
                 tw_msg = ""
                 if tw_viol is not None:
                     tw_msg = f", task_viol(final)={tw_viol:.4f}"

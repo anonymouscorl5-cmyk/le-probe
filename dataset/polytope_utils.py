@@ -22,6 +22,9 @@ if ROOT not in sys.path:
 from dataset.skeleton.projection_utils import get_projection_matrix, project_point
 
 EE_BODY = "R_index_tip_link"
+# OpenCV BGR + circle radius: live fingertip and planned final EE (2D camera overlay).
+EE_OVERLAY_BGR = (0, 255, 0)
+EE_OVERLAY_RADIUS = 5
 
 
 def _camera_world_to_image(
@@ -150,8 +153,8 @@ def draw_polytope_on_rgb(
     *,
     depth_buffer: np.ndarray | None = None,
     ee_body: str = EE_BODY,
-    wire_color: tuple[int, int, int] = (0, 255, 0),
-    ee_color: tuple[int, int, int] = (0, 255, 0),
+    wire_color: tuple[int, int, int] = EE_OVERLAY_BGR,
+    ee_color: tuple[int, int, int] = EE_OVERLAY_BGR,
     fill_alpha: float = 0.12,
     depth_eps: float = 0.003,
 ) -> np.ndarray:
@@ -232,7 +235,7 @@ def draw_polytope_on_rgb(
         if p2d is not None:
             c, r = int(round(p2d[0])), int(round(p2d[1]))
             if _depth_visible(depth_buffer, c, r, z, depth_eps=depth_eps):
-                cv2.circle(out, (c, r), 5, ee_color, -1, cv2.LINE_AA)
+                cv2.circle(out, (c, r), EE_OVERLAY_RADIUS, ee_color, -1, cv2.LINE_AA)
 
     return out
 
@@ -245,13 +248,13 @@ def draw_world_points_on_rgb(
     data: mujoco.MjData,
     *,
     depth_buffer: np.ndarray | None = None,
-    color: tuple[int, int, int] = (0, 255, 0),
-    radius: int = 7,
+    color: tuple[int, int, int] = EE_OVERLAY_BGR,
+    radius: int = EE_OVERLAY_RADIUS,
     label_points: bool = True,
     edges: list[tuple[int, int]] | None = None,
     depth_eps: float = 0.003,
 ) -> np.ndarray:
-    """Project world-frame 3D points onto a camera RGB frame (same blue as polytope overlay)."""
+    """Project world-frame 3D points onto a camera RGB frame (default: same green as live EE)."""
     from dataset.skeleton.projection_utils import get_projection_matrix, project_point
 
     try:
