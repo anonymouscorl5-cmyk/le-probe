@@ -37,8 +37,23 @@ def unpack_np(d: dict) -> np.ndarray:
     return np.frombuffer(d["data"], dtype=d["dtype"]).reshape(d["shape"])
 
 
+def _to_msgpack_safe(obj):
+    """Recursively convert numpy scalars/arrays so msgpack and JSON audit logs succeed."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, dict):
+        return {k: _to_msgpack_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_msgpack_safe(x) for x in obj]
+    return obj
+
+
 def encode_body(obj: dict) -> bytes:
-    return msgpack.packb(obj, use_bin_type=True)
+    return msgpack.packb(_to_msgpack_safe(obj), use_bin_type=True)
 
 
 def decode_body(data: bytes) -> dict:

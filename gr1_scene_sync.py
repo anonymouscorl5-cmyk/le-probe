@@ -112,7 +112,7 @@ def scene_snapshot(
     root_q = data.qpos[root_sl].tolist() if root_sl is not None else None
     cube_q = data.qpos[cube_sl].tolist() if cube_sl is not None else None
 
-    bodies = {EE_BODY: ee_body_xyz(model, data, EE_BODY)}
+    bodies = {EE_BODY: ee_body_xyz(model, data, EE_BODY).tolist()}
     for b in extra_bodies:
         bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, b)
         if bid >= 0:

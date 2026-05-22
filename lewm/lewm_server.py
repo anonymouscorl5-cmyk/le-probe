@@ -43,7 +43,7 @@ from dataset.skeleton.projection_utils import (
     is_allowed_action_chain,
 )
 from lewm.task_workspace import TaskWorkspaceMPCConstraint
-from inference_http import serve_http, unpack_np
+from inference_http import serve_http, unpack_np, _to_msgpack_safe
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -464,7 +464,7 @@ class LEWMInferenceServer:
             }
             log_file = os.path.join(ROOT_DIR, "lewm_lifecycle_audit.json")
             with open(log_file, "a") as f:
-                f.write(json.dumps(log_entry) + "\n")
+                f.write(json.dumps(_to_msgpack_safe(log_entry)) + "\n")
 
         except Exception as e:
             print(f"⚠️ Diagnostic logging failed: {e}")
