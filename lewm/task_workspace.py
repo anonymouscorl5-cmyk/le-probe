@@ -122,6 +122,21 @@ class TaskWorkspacePolytope:
         return None
 
 
+_DRAW_POLYTOPE_CACHE: TaskWorkspacePolytope | None = None
+
+
+def get_task_workspace_draw_polytope(
+    samples_per_arc: int = ARC_SAMPLES_PER_TRIPLET,
+) -> TaskWorkspacePolytope:
+    """Cached fixed hull for viz only (no extra MuJoCo model)."""
+    global _DRAW_POLYTOPE_CACHE
+    if _DRAW_POLYTOPE_CACHE is None:
+        _DRAW_POLYTOPE_CACHE = build_task_workspace_polytope(
+            samples_per_arc=samples_per_arc
+        )
+    return _DRAW_POLYTOPE_CACHE
+
+
 def build_task_workspace_polytope(
     samples_per_arc: int = ARC_SAMPLES_PER_TRIPLET,
 ) -> TaskWorkspacePolytope:
@@ -394,6 +409,7 @@ __all__ = [
     "TaskWorkspaceMPCConstraint",
     "TaskWorkspacePolytope",
     "build_task_workspace_polytope",
+    "get_task_workspace_draw_polytope",
     "ee_halfspace_violation",
     "fk_debug_report",
 ]

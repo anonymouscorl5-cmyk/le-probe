@@ -20,7 +20,7 @@ from gr1_protocol import StandardScaler
 from gr1_config import COMPACT_WIRE_JOINTS
 from inference_http import serve_http, TELEOP_PATH
 from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
-from lewm.task_workspace import TaskWorkspaceMPCConstraint
+from lewm.task_workspace import get_task_workspace_draw_polytope
 
 
 class GR1TeleopServer(GR1MuJoCoBase):
@@ -43,29 +43,31 @@ class GR1TeleopServer(GR1MuJoCoBase):
         self.is_running = True
         self.show_task_workspace = show_task_workspace
         self.task_workspace_fill_alpha = task_workspace_fill_alpha
-        self._task_ws = None
+        self._tw_poly = None
 
         if self.show_task_workspace:
-            self._task_ws = TaskWorkspaceMPCConstraint()
-            p = self._task_ws.poly
+            self._tw_poly = get_task_workspace_draw_polytope()
             print(
-                f"🌐 Task workspace overlay ON (fixed hull, {len(p.corner_points)} corners, "
-                f"{p.face_indices.shape[0]} faces)"
+                f"🌐 Task workspace overlay ON (fixed hull, {len(self._tw_poly.corner_points)} corners, "
+                f"{self._tw_poly.face_indices.shape[0]} faces)"
             )
 
+    def _render_needs_depth(self) -> bool:
+        return self.show_task_workspace
+
     def _log_task_workspace_rerun(self):
-        if self._task_ws:
+        if self._tw_poly is not None:
             log_polytope_rerun(
-                self._task_ws.get_draw_polytope(),
+                self._tw_poly,
                 entity_path="world/task_workspace",
                 wireframe_path="world/task_workspace_wireframe",
             )
 
     def _post_render_hook(self, name, rgb, depth=None):
-        if self._task_ws is not None:
+        if self._tw_poly is not None:
             drawn = draw_polytope_on_rgb(
                 rgb,
-                self._task_ws.get_draw_polytope(),
+                self._tw_poly,
                 name,
                 self.model,
                 self.data,

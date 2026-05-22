@@ -99,15 +99,15 @@ def _fill_triangle_depth_tested(
     depth_eps: float = 0.003,
 ) -> None:
     """Fill a triangle only where it is closer than the scene depth buffer."""
-    import cv2
+    tri = np.round(pts2d).astype(np.int32)
+    if tri.shape != (3, 2):
+        return
 
-    xs = pts2d[:, 0]
-    ys = pts2d[:, 1]
-    xmin = max(0, int(np.floor(xs.min())))
-    xmax = min(out.shape[1] - 1, int(np.ceil(xs.max())))
-    ymin = max(0, int(np.floor(ys.min())))
-    ymax = min(out.shape[0] - 1, int(np.ceil(ys.max())))
-    if xmin > xmax or ymin > ymax:
+    h, w = out.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, tri, 255)
+    rows, cols = np.where(mask > 0)
+    if rows.size == 0:
         return
 
     v0 = pts2d[2] - pts2d[0]
@@ -116,25 +116,28 @@ def _fill_triangle_depth_tested(
     if abs(denom) < 1e-12:
         return
 
-    mask = np.zeros(out.shape[:2], dtype=bool)
-    for row in range(ymin, ymax + 1):
-        for col in range(xmin, xmax + 1):
-            p = np.array([col, row], dtype=np.float64) - pts2d[0]
-            w2 = (p[0] * v1[1] - v1[0] * p[1]) / denom
-            w1 = (v0[0] * p[1] - p[0] * v0[1]) / denom
-            w0 = 1.0 - w1 - w2
-            if w0 < -1e-6 or w1 < -1e-6 or w2 < -1e-6:
-                continue
-            z = w0 * zs[0] + w1 * zs[1] + w2 * zs[2]
-            if _depth_visible(depth_buffer, col, row, z, depth_eps=depth_eps):
-                mask[row, col] = True
+    p = np.stack([cols, rows], axis=1).astype(np.float64) - pts2d[0]
+    w2 = (p[:, 0] * v1[1] - v1[0] * p[:, 1]) / denom
+    w1 = (v0[0] * p[:, 1] - p[:, 0] * v0[1]) / denom
+    w0 = 1.0 - w1 - w2
+    z_pix = w0 * zs[0] + w1 * zs[1] + w2 * zs[2]
 
-    if not np.any(mask):
+    if depth_buffer is not None:
+        scene_z = depth_buffer[rows, cols]
+        visible = (
+            (~np.isfinite(scene_z)) | (scene_z <= 0) | (z_pix <= scene_z + depth_eps)
+        )
+    else:
+        visible = np.ones(rows.shape[0], dtype=bool)
+
+    if not np.any(visible):
         return
+    rows, cols, z_pix = rows[visible], cols[visible], z_pix[visible]
+    del z_pix  # unused after visibility; kept for API symmetry
+
     blended = out.astype(np.float32)
-    blended[mask] = (1.0 - alpha) * blended[mask] + alpha * np.array(
-        color, dtype=np.float32
-    )
+    c = np.array(color, dtype=np.float32)
+    blended[rows, cols] = (1.0 - alpha) * blended[rows, cols] + alpha * c
     out[:] = blended.astype(np.uint8)
 
 

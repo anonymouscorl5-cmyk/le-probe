@@ -205,6 +205,10 @@ class GR1MuJoCoBase:
         with open(self.debug_log_path, "a") as f:
             f.write(f"[{t_str}] {msg}\n")
 
+    def _render_needs_depth(self) -> bool:
+        """Subclasses override when overlays need a depth pass (task workspace, plan EE dot)."""
+        return False
+
     def _post_render_hook(self, name, rgb, depth=None):
         """Saves camera views to the filesystem for diagnostic-verification (Mirrors original teleop logic)."""
         # Save in a subdirectory for this specific camera inside the session folder
@@ -379,12 +383,15 @@ class GR1MuJoCoBase:
         views = {}
         rr.set_time("sim_step", sequence=self.render_step_idx)
 
+        need_depth = self._render_needs_depth()
         for name in self.cam_names:
             self.renderer.update_scene(self.data, camera=name)
             rgb = self.renderer.render()
-            self.renderer.enable_depth_rendering()
-            depth = self.renderer.render().copy()
-            self.renderer.disable_depth_rendering()
+            depth = None
+            if need_depth:
+                self.renderer.enable_depth_rendering()
+                depth = self.renderer.render().copy()
+                self.renderer.disable_depth_rendering()
             self._post_render_hook(name, rgb, depth=depth)
             views[name] = rgb
             rr.log(name, rr.Image(rgb))

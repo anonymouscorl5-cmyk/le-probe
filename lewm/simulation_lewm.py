@@ -35,7 +35,7 @@ from dataset.polytope_utils import (
     draw_world_points_on_rgb,
     log_polytope_rerun,
 )
-from lewm.task_workspace import TaskWorkspaceMPCConstraint
+from lewm.task_workspace import get_task_workspace_draw_polytope
 
 # BGR: blue = chained FK of full horizon (CEM / task-workspace target); green = live EE
 PLAN_FINAL_EE_BGR = (0, 0, 255)
@@ -61,15 +61,14 @@ class GR1LEWMClient(GR1MuJoCoBase):
 
         self.show_task_workspace = show_task_workspace
         self.task_workspace_fill_alpha = task_workspace_fill_alpha
-        self._task_ws = None
+        self._tw_poly = None
         self._plan_final_ee_xyz: np.ndarray | None = None
 
         if self.show_task_workspace:
-            self._task_ws = TaskWorkspaceMPCConstraint()
-            p = self._task_ws.poly
+            self._tw_poly = get_task_workspace_draw_polytope()
             print(
-                f"🌐 LeWM sim: fixed task polytope viz (local copy, {len(p.corner_points)} corners, "
-                f"{p.face_indices.shape[0]} faces) — not sent to server"
+                f"🌐 LeWM sim: fixed task polytope viz ({len(self._tw_poly.corner_points)} corners, "
+                f"{self._tw_poly.face_indices.shape[0]} faces) — not sent to server"
             )
 
         self.client = InferenceHTTPClient(base_url)
@@ -85,20 +84,23 @@ class GR1LEWMClient(GR1MuJoCoBase):
             f"Skeleton: {use_skeleton}, DINO: {use_dino})"
         )
 
+    def _render_needs_depth(self) -> bool:
+        return self.show_task_workspace or self._plan_final_ee_xyz is not None
+
     def _log_task_workspace_rerun(self):
-        if not self._task_ws:
+        if self._tw_poly is None:
             return
         log_polytope_rerun(
-            self._task_ws.get_draw_polytope(),
+            self._tw_poly,
             entity_path="world/task_workspace",
             wireframe_path="world/task_workspace_wireframe",
         )
 
     def _post_render_hook(self, name, rgb, depth=None):
-        if self._task_ws is not None:
+        if self._tw_poly is not None:
             drawn = draw_polytope_on_rgb(
                 rgb,
-                self._task_ws.get_draw_polytope(),
+                self._tw_poly,
                 name,
                 self.model,
                 self.data,
