@@ -1,6 +1,9 @@
 """
 ORACLE MPC SIMULATION DRIVER
 Role: Client for the LEWM MPC Server. Drives the MuJoCo robot in closed-loop.
+
+Plan/run alignment: execute the full CEM horizon (4 steps) per server solve before
+replanning; server action history advances by the same four steps.
 """
 
 # --- Path Stabilization ---
@@ -34,8 +37,10 @@ from dataset.polytope_utils import (
 )
 from lewm.task_workspace import TaskWorkspaceMPCConstraint
 
-# BGR: blue dot = server FK of final plan step (CEM gate check); green = live EE in draw_polytope
+# BGR: blue = chained FK of full horizon (CEM / task-workspace target); green = live EE
 PLAN_FINAL_EE_BGR = (0, 0, 255)
+# Must match lewm_server MockConfig(horizon=4) and action_space shape (4, 32).
+MPC_HORIZON = 4
 
 
 class GR1LEWMClient(GR1MuJoCoBase):
@@ -232,19 +237,20 @@ def run_mission(
                     tw_msg += f", feasible={tw_feas}"
                 if ee_xyz is not None:
                     tw_msg += f", plan_final_ee=({ee_xyz[0]:.3f}, {ee_xyz[1]:.3f}, {ee_xyz[2]:.3f})"
+                execute_steps = min(MPC_HORIZON, len(plan_norm))
                 print(
-                    "   🚀 Executing first action from plan (Solve Time: "
-                    f"{diag.get('plan_time_ms')}ms, Horizon: {plan_norm.shape[0]}{tw_msg})"
+                    f"   🚀 Executing full plan plan[0:{execute_steps}] (plan/run {execute_steps}-{execute_steps}; "
+                    f"solve {diag.get('plan_time_ms')}ms{tw_msg})"
                 )
 
-                chunk_size = min(5, len(plan_norm))
-                for i in range(chunk_size):
+                for i in range(execute_steps):
                     curr_action_norm = plan_norm[i]
                     curr_action_raw = sim.scaler.unscale_action(curr_action_norm)
 
                     audit_history.append(
                         {
                             "step": step_idx,
+                            "plan_index": i,
                             "action_norm": curr_action_norm.tolist(),
                             "action_raw": curr_action_raw.tolist(),
                             "sim_state": sim.get_state_32().tolist(),

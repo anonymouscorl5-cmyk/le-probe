@@ -392,10 +392,11 @@ class LEWMInferenceServer:
                 instruction=req.get("instruction", "Unknown"),
             )
 
-            # Update history with the first action of the plan (which is normalized)
-            self.history["actions"].append(best_plan[0])
-            if len(self.history["actions"]) > 3:
-                self.history["actions"].pop(0)
+            # Plan/run 4-4: commit each step of the executed horizon (3-frame action queue).
+            for t in range(best_plan.shape[0]):
+                self.history["actions"].append(best_plan[t])
+                if len(self.history["actions"]) > 3:
+                    self.history["actions"].pop(0)
 
             return {"action": best_plan.tolist(), "diagnostics": diagnostics}
 

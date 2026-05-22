@@ -170,20 +170,27 @@ class TaskWorkspaceMPCConstraint:
                 q[self.model.jnt_qposadr[j_id]] = float(wire32_rad[i])
         self._baseline_qpos = q
 
+    def _fk_ee_after_plan_prefix(
+        self, plan_norm: np.ndarray, end_exclusive: int
+    ) -> np.ndarray:
+        """FK after applying plan[0:end_exclusive] sequentially (matches CEM horizon semantics)."""
+        q = np.array(self._baseline_qpos, dtype=np.float64, copy=True)
+        for t in range(end_exclusive):
+            wire_rad = self.scaler.unscale_action(plan_norm[t])
+            wire32_to_qpos(self.model, q, wire_rad)
+        self.data.qpos[:] = q
+        mujoco.mj_forward(self.model, self.data)
+        return self.data.xpos[self.ee_body_id].copy()
+
     def final_plan_step_ee(
         self, wire32_rad: np.ndarray, plan_norm: np.ndarray
     ) -> np.ndarray:
-        """Index-tip world position used for the final-step task-workspace gate."""
+        """Fingertip EE after applying the full planned horizon from the request-time baseline."""
         self.set_baseline_from_wire32(np.asarray(wire32_rad, dtype=np.float64))
         plan_norm = np.asarray(plan_norm, dtype=np.float64)
         if plan_norm.ndim == 1:
             plan_norm = plan_norm.reshape(1, -1)
-        q = np.array(self._baseline_qpos, dtype=np.float64, copy=True)
-        wire_rad = self.scaler.unscale_action(plan_norm[-1])
-        wire32_to_qpos(self.model, q, wire_rad)
-        self.data.qpos[:] = q
-        mujoco.mj_forward(self.model, self.data)
-        return self.data.xpos[self.ee_body_id].copy()
+        return self._fk_ee_after_plan_prefix(plan_norm, plan_norm.shape[0])
 
     def plan_violation(
         self,
@@ -196,17 +203,11 @@ class TaskWorkspaceMPCConstraint:
         plan_norm = np.asarray(plan_norm, dtype=np.float64)
         if plan_norm.ndim == 1:
             plan_norm = plan_norm.reshape(1, -1)
-        steps = (
-            range(plan_norm.shape[0]) if check_all_steps else [plan_norm.shape[0] - 1]
-        )
+        n = plan_norm.shape[0]
+        steps = range(n) if check_all_steps else [n - 1]
         max_v = 0.0
         for t in steps:
-            q = np.array(self._baseline_qpos, dtype=np.float64, copy=True)
-            wire_rad = self.scaler.unscale_action(plan_norm[t])
-            wire32_to_qpos(self.model, q, wire_rad)
-            self.data.qpos[:] = q
-            mujoco.mj_forward(self.model, self.data)
-            ee = self.data.xpos[self.ee_body_id].copy()
+            ee = self._fk_ee_after_plan_prefix(plan_norm, t + 1)
             max_v = max(max_v, ee_halfspace_violation(ee, self._H, self._d))
         return max_v
 
