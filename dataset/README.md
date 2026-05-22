@@ -36,7 +36,7 @@ I use a custom-built Streamlit dashboard for real-time control, IK requests, and
   - Contains options for controlling the robot manually through the sliders, using the IK solver for consistent movement, the recording of episodes into the dataset, monitoring of distance between the right hand fingers and the cube, etc.
 
 - [`simulation_teleop.py`](simulation_teleop.py):
-  - ZMQ server driving the MuJoCo simulation and handling 32-DoF IK requests and supports all the features listed in the `teleop_ui.py` dashboard.
+  - HTTP server (`POST /teleop`, msgpack) driving MuJoCo and handling 32-DoF IK requests for the `teleop_ui.py` dashboard.
   - Currently the IK solver operates in a grasp move, but essentially a few tweaks to the target coordinates can allow operations in a cup movement as well.
 
 - [`lerobot_manager.py`](lerobot_manager.py):

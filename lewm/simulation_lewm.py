@@ -17,8 +17,6 @@ import os
 import datetime
 import json
 import numpy as np
-import zmq
-import msgpack
 import time
 import argparse
 import rerun as rr
@@ -28,6 +26,7 @@ from PIL import Image
 from simulation_base import GR1MuJoCoBase
 from gr1_protocol import StandardScaler
 from gr1_config import SCENE_PATH
+from inference_http import InferenceHTTPClient, pack_np
 
 try:
     from dataset.polytope_utils import (
@@ -49,8 +48,7 @@ except ImportError as e:
 class GR1LEWMClient(GR1MuJoCoBase):
     def __init__(
         self,
-        server_host="localhost",
-        server_port=5555,
+        base_url="http://127.0.0.1:5555",
         use_multi_view=False,
         use_skeleton=False,
         use_dino=False,
@@ -78,14 +76,15 @@ class GR1LEWMClient(GR1MuJoCoBase):
                 f"{p.face_indices.shape[0]} faces) — not sent to server"
             )
 
-        # ZMQ Context
-        self.context = zmq.Context()
-        self.client = self.context.socket(zmq.REQ)
-        self.client.setsockopt(zmq.RCVTIMEO, 120000)
-        self.client.connect(f"tcp://{server_host}:{server_port}")
+        self.client = InferenceHTTPClient(base_url)
+        if not self.client.health():
+            print(
+                f"⚠️ MPC server health check failed at {base_url} (will retry on first plan)"
+            )
 
         print(
-            f"🔗 Connected to MPC Server at {server_host}:{server_port} (Multi-View: {use_multi_view}, Skeleton: {use_skeleton}, DINO: {use_dino})"
+            f"🔗 MPC HTTP client → {base_url} (Multi-View: {use_multi_view}, "
+            f"Skeleton: {use_skeleton}, DINO: {use_dino})"
         )
 
     def _log_task_workspace_rerun(self):
@@ -128,14 +127,6 @@ class GR1LEWMClient(GR1MuJoCoBase):
 
     def capture_observation(self, instruction):
         """Captures required camera views and state."""
-
-        def pack_np(arr):
-            return {
-                "data": arr.tobytes(),
-                "shape": list(arr.shape),
-                "dtype": str(arr.dtype),
-            }
-
         state = self.get_state_32()
 
         payload = {
@@ -189,8 +180,7 @@ class GR1LEWMClient(GR1MuJoCoBase):
 
 
 def run_mission(
-    server_host,
-    server_port,
+    base_url,
     use_multi_view,
     use_skeleton=False,
     use_dino=False,
@@ -200,8 +190,7 @@ def run_mission(
     task_workspace_fill_alpha=0.15,
 ):
     sim = GR1LEWMClient(
-        server_host=server_host,
-        server_port=server_port,
+        base_url=base_url,
         use_multi_view=use_multi_view,
         use_skeleton=use_skeleton,
         use_dino=use_dino,
@@ -224,8 +213,7 @@ def run_mission(
             print(
                 f"[{time.strftime('%H:%M:%S')}] 🧠 Requesting MPC Plan (Universal Gallery)..."
             )
-            sim.client.send(msgpack.packb(obs_payload, use_bin_type=True))
-            resp = msgpack.unpackb(sim.client.recv(), raw=False)
+            resp = sim.client.plan(obs_payload)
 
             if "action" in resp:
                 plan_norm = np.array(resp["action"], dtype=np.float32)
@@ -298,8 +286,18 @@ def run_mission(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", type=str, default="localhost")
-    parser.add_argument("--port", type=int, default=5555)
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default=None,
+        help="MPC server base URL (e.g. https://xxxx.ngrok-free.app or http://127.0.0.1:5555)",
+    )
+    parser.add_argument(
+        "--host", type=str, default="127.0.0.1", help="Legacy: builds base URL"
+    )
+    parser.add_argument(
+        "--port", type=int, default=5555, help="Legacy: builds base URL"
+    )
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     parser.add_argument("--use_dino", action="store_true", default=False)
@@ -319,9 +317,9 @@ if __name__ == "__main__":
     rr.init("gr1_lewm", spawn=False)
     rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
 
+    base_url = args.base_url or f"http://{args.host}:{args.port}"
     run_mission(
-        args.host,
-        args.port,
+        base_url,
         args.multi_view,
         use_skeleton=args.use_skeleton,
         use_dino=args.use_dino,

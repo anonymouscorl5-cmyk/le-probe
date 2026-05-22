@@ -7,39 +7,44 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 # --------------------------
 
-import zmq
-import msgpack
-import time
 from tqdm import tqdm
 
+from inference_http import InferenceHTTPClient, TELEOP_PATH, TELEOP_TIMEOUT_S
 
-def automate_wild_harvest(num_samples=1000, port=5556):
-    context = zmq.Context()
-    socket = context.socket(zmq.REQ)
-    socket.connect(f"tcp://127.0.0.1:{port}")
 
-    print(f"🌀 Starting Automated Wild Harvest ({num_samples} samples)...")
+def automate_wild_harvest(num_samples=1000, base_url="http://127.0.0.1:5556"):
+    client = InferenceHTTPClient(
+        base_url,
+        timeout_s=TELEOP_TIMEOUT_S,
+        endpoint=TELEOP_PATH,
+    )
+
+    print(f"🌀 Starting Automated Wild Harvest ({num_samples} samples) → {base_url}")
 
     for i in tqdm(range(num_samples)):
-        # 1. Wild Randomize
-        socket.send(msgpack.packb({"command": "wild_randomize"}))
-        resp = msgpack.unpackb(socket.recv(), raw=False)
+        resp = client.command({"command": "wild_randomize"})
         if resp.get("status") != "wild_randomize_ok":
             print(f"❌ Error: Wild randomize failed at iteration {i}")
             break
 
-        # 2. Store Snapshot
-        socket.send(msgpack.packb({"command": "store_snapshot"}))
-        resp = msgpack.unpackb(socket.recv(), raw=False)
+        resp = client.command({"command": "store_snapshot"})
         if resp.get("status") != "snapshot_ok":
             print(f"❌ Error: Snapshot failed at iteration {i}")
             break
 
-        # Optional: slight delay to allow renderer to breathe
-        # time.sleep(0.01)
-
-    print(f"✅ Automated Wild Harvest complete! 1,000 failure modes captured.")
+    print(f"✅ Automated Wild Harvest complete! {num_samples} failure modes captured.")
 
 
 if __name__ == "__main__":
-    automate_wild_harvest(1000)
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default="http://127.0.0.1:5556",
+        help="Teleop HTTP server (POST /teleop)",
+    )
+    parser.add_argument("-n", type=int, default=1000)
+    args = parser.parse_args()
+    automate_wild_harvest(args.n, base_url=args.base_url)

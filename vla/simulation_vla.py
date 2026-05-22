@@ -10,8 +10,6 @@ if ROOT_DIR not in sys.path:
 import os
 import datetime
 import numpy as np
-import zmq
-import msgpack
 import time
 import argparse
 import rerun as rr
@@ -21,6 +19,7 @@ from PIL import Image
 import mujoco
 from simulation_base import GR1MuJoCoBase
 from gr1_protocol import StandardScaler
+from inference_http import InferenceHTTPClient, pack_np
 
 
 class GR1VLAClient(GR1MuJoCoBase):
@@ -32,8 +31,7 @@ class GR1VLAClient(GR1MuJoCoBase):
     def __init__(
         self,
         scene_path=None,
-        server_host="localhost",
-        server_port=5555,
+        base_url="http://127.0.0.1:5555",
     ):
         super().__init__(scene_path) if scene_path else super().__init__()
 
@@ -47,21 +45,16 @@ class GR1VLAClient(GR1MuJoCoBase):
         with open(self.debug_log_path, "w") as f:
             f.write(f"--- VLA DEBUG LOG INITIALIZED: {datetime.datetime.now()} ---\n")
 
-        self.vla_context = zmq.Context()
-        self.vla_client = self.vla_context.socket(zmq.REQ)
-        self.vla_client.setsockopt(zmq.RCVTIMEO, 120000)
-        self.vla_client.connect(f"tcp://{server_host}:{server_port}")
+        self.vla_client = InferenceHTTPClient(base_url)
+        if not self.vla_client.health():
+            print(
+                f"⚠️ VLA server health check failed at {base_url} (will retry on first plan)"
+            )
+        print(f"🔗 VLA HTTP client → {base_url}")
 
     def capture_vla_observation(self, instruction):
         """Captures 5-cam view (resized to 224x224) and raw state."""
         mujoco.mj_forward(self.model, self.data)
-
-        def pack_np(arr):
-            return {
-                "data": arr.tobytes(),
-                "shape": list(arr.shape),
-                "dtype": str(arr.dtype),
-            }
 
         # ✅ UNIVERSAL HANDSHAKE: Scale state based on mode
         raw_state = self.get_state_32()
@@ -101,8 +94,7 @@ class GR1VLAClient(GR1MuJoCoBase):
                 f"[{time.strftime('%H:%M:%S')}] 🧠 Requesting Chunk {chunk_idx+1}/{max_chunks}..."
             )
             try:
-                self.vla_client.send(msgpack.packb(obs_payload, use_bin_type=True))
-                resp = msgpack.unpackb(self.vla_client.recv(), raw=False)
+                resp = self.vla_client.plan(obs_payload)
 
                 if "action" in resp:
                     actions = resp["action"]
@@ -162,13 +154,24 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GR-1 Autonomous Mission Driver")
     parser.add_argument("--instruction", type=str, default="Pick up the red cube")
     parser.add_argument("--chunks", type=int, default=10)
-    parser.add_argument("--host", type=str, default="localhost", help="VLA Server host")
-    parser.add_argument("--port", "-p", type=int, default=5555, help="VLA Server port")
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default=None,
+        help="VLA server base URL (e.g. https://xxxx.ngrok-free.app)",
+    )
+    parser.add_argument(
+        "--host", type=str, default="127.0.0.1", help="Legacy: builds base URL"
+    )
+    parser.add_argument(
+        "--port", "-p", type=int, default=5555, help="Legacy: builds base URL"
+    )
     args = parser.parse_args()
 
     # Re-init Rerun for standalone local run
     rr.init("gr1_vla", spawn=False)
     rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
 
-    sim = GR1VLAClient(server_host=args.host, server_port=args.port)
+    base_url = args.base_url or f"http://{args.host}:{args.port}"
+    sim = GR1VLAClient(base_url=base_url)
     sim.run(instruction=args.instruction, max_chunks=args.chunks)

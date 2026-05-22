@@ -12,7 +12,7 @@ For evaluating the trained model, we used the [**`GR00T_N1_E2E.ipynb`**](GR00T_N
 
 - [`GR00T_N1_BC.ipynb`](GR00T_N1_BC.ipynb): Behavioral Cloning training and audit logs.
 - [`GR00T_N1_E2E.ipynb`](GR00T_N1_E2E.ipynb): End-to-end evaluation pipeline.
-- [`gr00t_server.py`](gr00t_server.py): The ZMQ inference host.
+- [`gr00t_server.py`](gr00t_server.py): HTTP inference host (`POST /plan`, msgpack).
 - [`simulation_vla.py`](simulation_vla.py): MuJoCo simulation environment for VLA testing.
 
 ## 📊 Results
@@ -64,12 +64,12 @@ Pre-trained model weights are available on Google Drive:
 ### 2. Inference
 To run the stabilized VLA policy in simulation:
 
-1. **Inference Server**: Start the server (I'm tunnelling from [**`GR00T_N1_E2E.ipynb`**](GR00T_N1_E2E.ipynb) on Colab using Pinggy).
+1. **Inference Server**: Start the server (tunnel with `ngrok http 5555` from Colab or GPU box).
    ```bash
-   .venv/bin/python vla/gr00t_server.py --weights <path to pretrained_model folder>
+   .venv/bin/python vla/gr00t_server.py --weights <path to pretrained_model folder> -p 5555
    ```
 
 2. **Simulation Host**: Start the MuJoCo environment.
    ```bash
-   python vla/simulation_vla.py --host <host> --port <port> --chunks <num_chunks>
+   python vla/simulation_vla.py --base-url https://<id>.ngrok-free.app --chunks <num_chunks>
    ```

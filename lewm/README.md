@@ -21,7 +21,7 @@ Finally, the performance was evaluated using [**`LEWM_E2E.ipynb`**](LEWM_E2E.ipy
 - [`harvest_goals.py`](harvest_goals.py): Utility to pre-compute goal embeddings for testing.
 - [`diagnose_mpc.py`](diagnose_mpc.py): A utility to visualize the CEM planner's latent trajectory (the planning algorithm). This is not an online server but just a sanity check after training.
 - [`LeWM_E2E.ipynb`](LeWM_E2E.ipynb): Notebook to run the server for the model (tunneled through Pinggy).
-- [`lewm_server.py`](lewm_server.py): The ZMQ inference host used in the notebook.
+- [`lewm_server.py`](lewm_server.py): HTTP inference host (`POST /plan`, msgpack) used in the notebook.
 - [`goal_mapper.py`](goal_mapper.py): Manages latent goal memory and manifold traversal.
 - [`goal_utils.py`](goal_utils.py): Utilities for handling goal embeddings.
 - [`simulation_lewm.py`](simulation_lewm.py): MuJoCo simulation environment for LeWM testing.
@@ -169,15 +169,9 @@ To test the World Model and MPC planner:
 
 #### Simulation Host
 ```bash
-# For Single-View
-.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port>
+# Local (server on same machine)
+.venv/bin/python lewm/simulation_lewm.py --base-url http://127.0.0.1:5555
 
-# For Multi-View
-.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view
-
-# For Multi-View + Skeletal Priors
-.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton
-
-# For Multi-View + Skeletal Priors + DINOv3 Waypoints
-.venv/bin/python lewm/simulation_lewm.py --host <host> --port <port> --multi_view --use_skeleton --use_dino
+# Remote via ngrok: ngrok http 5555, then pass the https URL
+.venv/bin/python lewm/simulation_lewm.py --base-url https://<id>.ngrok-free.app --multi_view --use_skeleton
 ```

@@ -1,7 +1,5 @@
 import streamlit as st
 import numpy as np
-import zmq
-import msgpack
 import json
 import os
 import time
@@ -14,20 +12,30 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from gr1_config import COMPACT_WIRE_JOINTS
+from inference_http import InferenceHTTPClient, TELEOP_PATH, TELEOP_TIMEOUT_S
 
 st.set_page_config(page_title="Le-Probe: Teleop Dashboard", layout="wide")
 
 
-# --- Setup ZMQ Socket ---
+# --- Teleop HTTP client (MuJoCo server on :5556) ---
+DEFAULT_TELEOP_URL = "http://127.0.0.1:5556"
+
+
 @st.cache_resource
-def get_zmq_socket():
-    context = zmq.Context()
-    socket = context.socket(zmq.REQ)
-    socket.connect("tcp://127.0.0.1:5556")
-    return socket
+def get_teleop_client(base_url: str = DEFAULT_TELEOP_URL):
+    return InferenceHTTPClient(
+        base_url,
+        timeout_s=TELEOP_TIMEOUT_S,
+        endpoint=TELEOP_PATH,
+    )
 
 
-socket = get_zmq_socket()
+teleop_url = st.sidebar.text_input(
+    "Teleop server URL",
+    value=DEFAULT_TELEOP_URL,
+    help="Local default; use ngrok URL if sim runs remotely",
+)
+client = get_teleop_client(teleop_url)
 
 # --- Initialize Session State ---
 if "target_buffer" not in st.session_state:
@@ -66,9 +74,7 @@ if "active_joints" not in st.session_state:
 
 def send_command(payload):
     try:
-        socket.send(msgpack.packb(payload, use_bin_type=True))
-        resp = socket.recv()
-        data = msgpack.unpackb(resp, raw=False)
+        data = client.command(payload)
         st.session_state.upload_queue = data.get("upload_queue", 0)
         st.session_state.total_episodes = data.get("total_episodes", 0)
         st.session_state.batch_status = data.get("batch_status", 0)
@@ -76,7 +82,7 @@ def send_command(payload):
             st.session_state.physics = data["physics"]
         return data
     except Exception as e:
-        st.error(f"ZMQ Error: {e}")
+        st.error(f"Teleop HTTP error: {e}")
         return None
 
 

@@ -8,8 +8,6 @@ if ROOT_DIR not in sys.path:
 # --------------------------
 
 import numpy as np
-import zmq
-import msgpack
 import rerun as rr
 import mujoco
 import os
@@ -20,6 +18,7 @@ from simulation_base import GR1MuJoCoBase
 from gr1_config import SCENE_PATH
 from gr1_protocol import StandardScaler
 from gr1_config import COMPACT_WIRE_JOINTS
+from inference_http import serve_http, TELEOP_PATH
 
 try:
     from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
@@ -33,7 +32,7 @@ except ImportError as e:
 
 class GR1TeleopServer(GR1MuJoCoBase):
     """
-    Reactive Teleoperation Server (REP Socket).
+    Reactive Teleoperation Server (HTTP + msgpack).
     Dedicated to the Streamlit Dashboard and IK Calibration.
     """
 
@@ -86,160 +85,151 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 rgb[:] = drawn
         super()._post_render_hook(name, rgb, depth=depth)
 
-    def run(self):
-        context = zmq.Context()
-        socket = context.socket(zmq.REP)
-        socket.bind(f"tcp://*:{self.port}")
+    def _enrich_response(self, payload: dict) -> dict:
+        payload.update(
+            {
+                "upload_queue": self.recorder.pending_uploads,
+                "total_episodes": self.recorder.total_episodes,
+                "batch_status": self.recorder.episodes_since_sync,
+                "physics": self.get_physics_state(),
+            }
+        )
+        return payload
 
+    def process_request(self, data: dict) -> dict:
+        cmd = data.get("command")
+
+        if cmd == "reset":
+            self.reset_env(lock_posture=self.lock_posture)
+            norm_state = StandardScaler().scale_state(self.get_state_32())
+            return self._enrich_response(
+                {"status": "reset_ok", "joints": norm_state.tolist()}
+            )
+
+        if cmd == "wild_randomize":
+            self.wild_reset()
+            norm_state = StandardScaler().scale_state(self.get_state_32())
+            return self._enrich_response(
+                {"status": "wild_randomize_ok", "joints": norm_state.tolist()}
+            )
+
+        if cmd == "sync":
+            self.recorder.force_sync()
+            return self._enrich_response({"status": "sync_started"})
+
+        if cmd == "start_recording":
+            self.recorder.start_episode(data.get("task", "Pick up red cube"))
+            self.is_recording = True
+            return self._enrich_response({"status": "recording_started"})
+
+        if cmd == "stop_recording":
+            self.recorder.stop_episode()
+            self.is_recording = False
+            return self._enrich_response({"status": "recording_stopped"})
+
+        if cmd == "discard_recording":
+            self.recorder.discard_episode()
+            self.is_recording = False
+            return self._enrich_response({"status": "recording_discarded"})
+
+        if cmd == "poll_status":
+            return self._enrich_response({"status": "status_ok"})
+
+        if cmd == "ik_pickup":
+            phase = data.get("phase", 0)
+            offset_cm = data.get("offset_cm", 5)
+            self._handle_ik_pickup_logic(phase=phase, offset_cm=offset_cm)
+            norm_state = StandardScaler().scale_state(self.get_state_32())
+            return self._enrich_response(
+                {"status": "ik_pickup_ok", "joints": norm_state.tolist()}
+            )
+
+        if cmd == "set_cube_pose":
+            pose = np.array(data["pose"], dtype=np.float32)
+            cube_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint"
+            )
+            if cube_id != -1:
+                q_idx = self.model.jnt_qposadr[cube_id]
+                self.data.qpos[q_idx : q_idx + 7] = pose
+                mujoco.mj_forward(self.model, self.data)
+            return self._enrich_response({"status": "cube_pose_ok"})
+
+        if "target" in data:
+            action_32 = np.array(data["target"], dtype=np.float32)
+            self.process_target_32(action_32)
+            self.dispatch_action(action_32, self.last_target_q)
+            return self._enrich_response({"status": "step_ok"})
+
+        if cmd == "store_snapshot":
+            raw_state = self.get_state_32()
+            norm_state = StandardScaler().scale_state(raw_state)
+            physics = self.get_physics_state()
+
+            cube_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint"
+            )
+            cube_qpos = []
+            if cube_id != -1:
+                q_idx = self.model.jnt_qposadr[cube_id]
+                cube_qpos = self.data.qpos[q_idx : q_idx + 7].tolist()
+
+            snapshot = {
+                "observation.state": norm_state.tolist(),
+                "action": norm_state.tolist(),
+                "progress": (1.0 - physics["target_dist"]) * 10.0,
+                "cube_qpos": cube_qpos,
+            }
+
+            cam_mapping = {
+                "observation.images.world_center": "world_center",
+                "observation.images.world_left": "world_left",
+                "observation.images.world_right": "world_right",
+                "observation.images.world_top": "world_top",
+                "observation.images.world_wrist": "world_wrist",
+            }
+
+            for key, cam_name in cam_mapping.items():
+                self.renderer.update_scene(self.data, camera=cam_name)
+                rgb = self.renderer.render()
+                img = Image.fromarray(rgb).resize((224, 224))
+                snapshot[key] = np.array(img).transpose(2, 0, 1).tolist()
+
+            snap_dir = os.path.join(
+                ROOT_DIR,
+                "datasets",
+                "vedpatwardhan",
+                "gr1_reward_pred_v2",
+            )
+            os.makedirs(snap_dir, exist_ok=True)
+
+            existing_wild = [f for f in os.listdir(snap_dir) if f.startswith("wild_")]
+            next_idx = len(existing_wild)
+            snap_path = os.path.join(snap_dir, f"wild_{next_idx:04d}.json")
+
+            with open(snap_path, "w") as f:
+                json.dump(snapshot, f)
+
+            print(
+                f"📸 Snapshot {next_idx:04d} stored at {snap_path} "
+                f"(Reward: {snapshot['progress']:.4f})"
+            )
+            return self._enrich_response({"status": "snapshot_ok", "index": next_idx})
+
+        return self._enrich_response({"status": "unknown"})
+
+    def run(self, host: str = "0.0.0.0"):
         rr.init("gr1_teleop", spawn=False)
         rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
-        print(
-            f"🚀 Teleop Server Running on port {self.port} (Lock Posture: {self.lock_posture})"
-        )
         if self.show_task_workspace:
             self._log_task_workspace_rerun()
-
-        while self.is_running:
-            msg = socket.recv()
-            data = msgpack.unpackb(msg, raw=False)
-            cmd = data.get("command")
-
-            def send_resp(payload):
-                payload.update(
-                    {
-                        "upload_queue": self.recorder.pending_uploads,
-                        "total_episodes": self.recorder.total_episodes,
-                        "batch_status": self.recorder.episodes_since_sync,
-                        "physics": self.get_physics_state(),
-                    }
-                )
-                socket.send(msgpack.packb(payload))
-
-            if cmd == "reset":
-                self.reset_env(lock_posture=self.lock_posture)
-                # Server is the Source of Normalized Truth
-                norm_state = StandardScaler().scale_state(self.get_state_32())
-                send_resp({"status": "reset_ok", "joints": norm_state.tolist()})
-
-            elif cmd == "wild_randomize":
-                self.wild_reset()
-                norm_state = StandardScaler().scale_state(self.get_state_32())
-                send_resp(
-                    {"status": "wild_randomize_ok", "joints": norm_state.tolist()}
-                )
-
-            elif cmd == "sync":
-                self.recorder.force_sync()
-                send_resp({"status": "sync_started"})
-
-            elif cmd == "start_recording":
-                self.recorder.start_episode(data.get("task", "Pick up red cube"))
-                self.is_recording = True
-                send_resp({"status": "recording_started"})
-
-            elif cmd == "stop_recording":
-                self.recorder.stop_episode()
-                self.is_recording = False
-                send_resp({"status": "recording_stopped"})
-
-            elif cmd == "discard_recording":
-                self.recorder.discard_episode()
-                self.is_recording = False
-                send_resp({"status": "recording_discarded"})
-
-            elif cmd == "poll_status":
-                send_resp({"status": "status_ok"})
-
-            elif cmd == "ik_pickup":
-                phase = data.get("phase", 0)
-                offset_cm = data.get("offset_cm", 5)
-                self._handle_ik_pickup_logic(phase=phase, offset_cm=offset_cm)
-
-                # Server is the Source of Normalized Truth
-                norm_state = StandardScaler().scale_state(self.get_state_32())
-                send_resp({"status": "ik_pickup_ok", "joints": norm_state.tolist()})
-
-            elif cmd == "set_cube_pose":
-                pose = np.array(data["pose"], dtype=np.float32)
-                cube_id = mujoco.mj_name2id(
-                    self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint"
-                )
-                if cube_id != -1:
-                    q_idx = self.model.jnt_qposadr[cube_id]
-                    self.data.qpos[q_idx : q_idx + 7] = pose
-                    mujoco.mj_forward(self.model, self.data)
-                send_resp({"status": "cube_pose_ok"})
-
-            elif "target" in data:
-                action_32 = np.array(data["target"], dtype=np.float32)
-                self.process_target_32(action_32)
-                self.dispatch_action(action_32, self.last_target_q)
-                send_resp({"status": "step_ok"})
-
-            elif cmd == "store_snapshot":
-                # 1. Capture All Data
-                raw_state = self.get_state_32()
-                norm_state = StandardScaler().scale_state(raw_state)
-                physics = self.get_physics_state()
-
-                # Capture Cube Pose (Full 7-DoF for future-proof restoration)
-                cube_id = mujoco.mj_name2id(
-                    self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint"
-                )
-                cube_qpos = []
-                if cube_id != -1:
-                    q_idx = self.model.jnt_qposadr[cube_id]
-                    cube_qpos = self.data.qpos[q_idx : q_idx + 7].tolist()
-
-                # 2. Build Payload with all 5 Camera Views
-                snapshot = {
-                    "observation.state": norm_state.tolist(),
-                    "action": norm_state.tolist(),  # Dummy action (current state)
-                    "progress": (1.0 - physics["target_dist"]) * 10.0,
-                    "cube_qpos": cube_qpos,
-                }
-
-                cam_mapping = {
-                    "observation.images.world_center": "world_center",
-                    "observation.images.world_left": "world_left",
-                    "observation.images.world_right": "world_right",
-                    "observation.images.world_top": "world_top",
-                    "observation.images.world_wrist": "world_wrist",
-                }
-
-                for key, cam_name in cam_mapping.items():
-                    self.renderer.update_scene(self.data, camera=cam_name)
-                    rgb = self.renderer.render()
-                    img = Image.fromarray(rgb).resize((224, 224))
-                    # Store as (C, H, W) list
-                    snapshot[key] = np.array(img).transpose(2, 0, 1).tolist()
-
-                # 3. Save to Next Available Index in v2 Dataset
-                snap_dir = os.path.join(
-                    ROOT_DIR,
-                    "datasets",
-                    "vedpatwardhan",
-                    "gr1_reward_pred_v2",
-                )
-                os.makedirs(snap_dir, exist_ok=True)
-
-                # Check for "wild_" prefix to distinguish from harvested spectrum
-                existing_wild = [
-                    f for f in os.listdir(snap_dir) if f.startswith("wild_")
-                ]
-                next_idx = len(existing_wild)
-                snap_path = os.path.join(snap_dir, f"wild_{next_idx:04d}.json")
-
-                with open(snap_path, "w") as f:
-                    json.dump(snapshot, f)
-
-                print(
-                    f"📸 Snapshot {next_idx:04d} stored at {snap_path} (Reward: {snapshot['progress']:.4f})"
-                )
-                send_resp({"status": "snapshot_ok", "index": next_idx})
-
-            else:
-                send_resp({"status": "unknown"})
+        serve_http(
+            self.process_request,
+            host=host,
+            port=self.port,
+            rpc_path=TELEOP_PATH,
+            title="GR-1 Teleop Server",
+        )
 
     def _handle_ik_pickup_logic(self, phase=0, offset_cm=5):
         """Hardened multi-phase IK solver for red cube (Extreme Constraint Edition)."""
@@ -371,7 +361,8 @@ class GR1TeleopServer(GR1MuJoCoBase):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GR-1 Teleop Server")
-    parser.add_argument("--port", type=int, default=5556, help="ZMQ Port")
+    parser.add_argument("--port", type=int, default=5556, help="HTTP listen port")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="HTTP bind address")
     parser.add_argument(
         "--lock-posture",
         action="store_true",
@@ -396,4 +387,4 @@ if __name__ == "__main__":
         lock_posture=args.lock_posture,
         show_task_workspace=args.task_workspace,
         task_workspace_fill_alpha=args.task_workspace_fill_alpha,
-    ).run()
+    ).run(host=args.host)

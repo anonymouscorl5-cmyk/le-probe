@@ -7,8 +7,6 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 # --------------------------
 
-import zmq
-import msgpack
 import torch
 import numpy as np
 import time
@@ -22,6 +20,7 @@ from lerobot.policies.groot.modeling_groot import GrootPolicy
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.utils.constants import OBS_STATE
 from lerobot.utils.random_utils import set_seed
+from inference_http import serve_http, unpack_np
 
 # -----------------------------------------------------------------------------
 # 1. HARDWARE & COMPATIBILITY
@@ -108,10 +107,6 @@ class GR00TInferenceServer:
 
     def construct_raw_batch(self, req, instruction):
         """Replicates LeRobot Dataset/Trainer batch construction (Flat Dict for Pipeline)."""
-        unpack_np = lambda d: (
-            np.frombuffer(d["data"], dtype=d["dtype"]).reshape(d["shape"])
-        )
-
         # 1. Flat Batch Dict
         batch = {}
         cams = ["world_top", "world_left", "world_right", "world_center", "world_wrist"]
@@ -171,69 +166,51 @@ class GR00TInferenceServer:
         except Exception as e:
             print(f"⚠️ Diagnostic logging failed: {e}")
 
+    def process_request(self, req: dict) -> dict:
+        try:
+            instruction = req.get("instruction", "Pick up the red cube")
+            batch = self.construct_raw_batch(req, instruction)
+            processed_batch = self.preprocessor(batch)
+
+            with torch.inference_mode():
+                action_chunk = self.policy.predict_action_chunk(processed_batch)
+
+            actions_t = self.postprocessor(action_chunk)
+            actions_np = actions_t.cpu().numpy()
+
+            if actions_np.ndim == 3:
+                final_actions = actions_np[0]
+            elif actions_np.ndim == 2:
+                final_actions = actions_np
+            else:
+                final_actions = actions_np[0]
+
+            print(
+                f"[{time.strftime('%H:%M:%S')}] 🧠 Inference (Aligned Stack). Actions: {final_actions.shape}"
+            )
+            self.log_diagnostics(
+                batch, processed_batch, action_chunk, actions_t, instruction
+            )
+            return {"action": actions_np.tolist()}
+
+        except Exception as e:
+            print(f"❌ Server Error: {e}")
+            traceback.print_exc()
+            return {"error": str(e)}
+
     def run(self, host="0.0.0.0"):
-        context = zmq.Context()
-        socket = context.socket(zmq.REP)
-        socket.bind(f"tcp://{host}:{self.port}")
-        print(f"🚀 GR-1 VLA Server listening on port {self.port}...")
-
-        while True:
-            try:
-                message = socket.recv()
-                req = msgpack.unpackb(message, raw=False)
-                instruction = req.get("instruction", "Pick up the red cube")
-
-                # 1. Construct Raw Batch
-                batch = self.construct_raw_batch(req, instruction)
-
-                # 2. Pre-process (Canonical Callstack)
-                processed_batch = self.preprocessor(batch)
-
-                # 3. Model Inference
-                with torch.inference_mode():
-                    action_chunk = self.policy.predict_action_chunk(processed_batch)
-
-                # 4. Post-process (Canonical Callstack)
-                # Note: postprocessor handles tensor -> EnvTransition -> processing -> tensor conversion
-                actions_t = self.postprocessor(action_chunk)
-
-                # Convert to numpy for transport
-                actions_np = actions_t.cpu().numpy()
-
-                # LOGGING: Support both chunked and single-step returns
-                if actions_np.ndim == 3:
-                    final_actions = actions_np[0]
-                elif actions_np.ndim == 2:
-                    final_actions = actions_np
-                else:
-                    # Single step case (B, D) -> (D,)
-                    final_actions = actions_np[0]
-
-                print(
-                    f"[{time.strftime('%H:%M:%S')}] 🧠 Inference (Aligned Stack). Actions: {final_actions.shape}"
-                )
-
-                self.log_diagnostics(
-                    batch, processed_batch, action_chunk, actions_t, instruction
-                )
-                socket.send(
-                    msgpack.packb({"action": actions_np.tolist()}, use_bin_type=True)
-                )
-
-            except Exception as e:
-                print(f"❌ Server Error: {e}")
-                traceback.print_exc()
-                socket.send(msgpack.packb({"error": str(e)}, use_bin_type=True))
+        serve_http(self.process_request, host=host, port=self.port)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", "-w", type=str, default="nvidia/GR00T-N1.5-3B")
-    parser.add_argument("--port", "-p", type=int, default=5555)
+    parser.add_argument("--port", "-p", type=int, default=5555, help="HTTP listen port")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="HTTP bind address")
     parser.add_argument("--tag", "-t", type=str, default="gr1")
     args = parser.parse_args()
 
     server = GR00TInferenceServer(
         embodiment_tag=args.tag, port=args.port, weights_path=args.weights
     )
-    server.run()
+    server.run(host=args.host)

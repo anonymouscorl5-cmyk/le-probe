@@ -1,6 +1,6 @@
 """
 ORACLE MPC INFERENCE SERVER (Gallery Edition)
-Role: Standalone ZMQ server hosting the JEPA world model and CEM solver.
+Role: Standalone HTTP server hosting the JEPA world model and CEM solver.
 Mandatory: Requires goal_gallery.pth
 """
 
@@ -19,8 +19,6 @@ import os
 from pathlib import Path
 
 
-import zmq
-import msgpack
 import torch
 import numpy as np
 import time
@@ -45,6 +43,7 @@ from dataset.skeleton.projection_utils import (
     is_allowed_action_chain,
 )
 from lewm.task_workspace import TaskWorkspaceMPCConstraint
+from inference_http import serve_http, unpack_np
 
 # Configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -169,265 +168,244 @@ class LEWMInferenceServer:
         os.makedirs(self.audit_dir, exist_ok=True)
         self.step_counter = 0
 
-    def run(self, host="0.0.0.0"):
-        context = zmq.Context()
-        socket = context.socket(zmq.REP)
-        socket.bind(f"tcp://{host}:{PORT}")
-        print(f"🚀 LEWM Server LISTENING on port {PORT}...")
+    def process_request(self, req: dict) -> dict:
+        """Handle one planning request; returns action + diagnostics or error."""
+        try:
+            self.step_counter += 1
 
-        while True:
+            # 0. Get state of robot
+            raw_sim_state = unpack_np(req.get("state"))
+
+            # 1. Perception Unpacking
+            if self.use_multi_view:
+                cam_keys = [
+                    "observation.images.world_center",
+                    "observation.images.world_left",
+                    "observation.images.world_right",
+                    "observation.images.world_top",
+                    "observation.images.world_wrist",
+                ]
+                views = []
+                for k in cam_keys:
+                    raw_img = unpack_np(req.get(k))
+                    # Transform to (C, H, W)
+                    transformed = self.agent.transform({"pixels": raw_img})
+                    if self.use_skeleton:
+                        # Get state of cube
+                        raw_cube_pos = None
+                        if "cube_pos" in req:
+                            raw_cube_pos = unpack_np(req.get("cube_pos"))
+
+                        # Render skeleton for this view on-the-fly!
+                        skel_mask = self.render_skeleton_mask(
+                            view_name=k.split(".")[-1],
+                            raw_sim_state=raw_sim_state,
+                            raw_cube_pos=raw_cube_pos,
+                        )
+
+                        # Concatenate normalized RGB with float skeleton mask
+                        transformed_rgb = transformed["pixels"].to(DEVICE)
+                        skel_tensor = (
+                            torch.from_numpy(skel_mask).float().unsqueeze(0).to(DEVICE)
+                            / 255.0
+                        )
+                        transformed["pixels"] = torch.cat(
+                            [transformed_rgb, skel_tensor], dim=0
+                        )
+
+                        # Inputs Visual Audit Saving Hook
+                        view_name = k.split(".")[-1]
+                        rgb_vis = raw_img
+                        skel_vis = skel_mask
+                        skel_3ch = np.stack([skel_vis] * 3, axis=-1)
+                        side_by_side = np.hstack([rgb_vis, skel_3ch])
+                        audit_path = os.path.join(
+                            self.audit_dir,
+                            f"step_{self.step_counter:03d}_{view_name}.png",
+                        )
+                        Image.fromarray(side_by_side).save(audit_path)
+                    views.append(transformed["pixels"])
+
+                # Current frame is (V, C, H, W)
+                current_pixels = torch.stack(views, dim=0).to(DEVICE)
+            else:
+                raw_image = unpack_np(req.get("observation.images.world_center"))
+                transformed = self.agent.transform({"pixels": raw_image})
+                # Current frame is (1, C, H, W) for single-view consistency
+                current_pixels = transformed["pixels"].unsqueeze(0).to(DEVICE)
+
+            print(
+                f"📷 Received {5 if self.use_multi_view else 1}-View Frame. "
+                f"current_pixels: {current_pixels.shape} ({current_pixels.dtype}) |"
+                f" raw_sim_state: {raw_sim_state.shape} ({raw_sim_state.dtype})"
+            )
+
+            # Grounding: Normalize the current state for history alignment
+            norm_state = self.scaler.scale_state(raw_sim_state)
+
+            # 🧊 DYNAMIC FREEZE ANCHOR: Capture initial pose on first step
+            if self.initial_pose is None:
+                self.initial_pose = norm_state.copy()
+                self.agent.frozen_pose = torch.tensor(
+                    self.initial_pose, device=DEVICE
+                ).float()
+                print(
+                    f"🧊 Initial Pose Anchored: Left Shoulder Pitch = {self.initial_pose[0]:.4f}"
+                )
+
+            # Pixels History (V, C, H, W)
             try:
-                message = socket.recv()
-                req = msgpack.unpackb(message, raw=False)
-                self.step_counter += 1
+                self.history["pixels"].pop(0)
+            except IndexError:
+                pass
+            while len(self.history["pixels"]) < 3:
+                self.history["pixels"].append(current_pixels.clone())
 
-                def unpack_np(d):
-                    return np.frombuffer(d["data"], dtype=d["dtype"]).reshape(
-                        d["shape"]
-                    )
+            # Action History: Pad to size 3 on step 0, then slide naturally at the end of the loop
+            if not self.history["actions"]:
+                while len(self.history["actions"]) < 3:
+                    self.history["actions"].append(norm_state.copy())
 
-                # 0. Get state of robot
-                raw_sim_state = unpack_np(req.get("state"))
+            # pixels_stacked: (B=1, T_history=3, V, C, H, W)
+            pixels_stacked = torch.stack(self.history["pixels"]).unsqueeze(0).to(DEVICE)
+            # (B=1, S=1, T_history=3, V, C, H, W)
+            pixels_stacked = pixels_stacked.unsqueeze(1)
 
-                # 1. Perception Unpacking
-                if self.use_multi_view:
-                    cam_keys = [
-                        "observation.images.world_center",
-                        "observation.images.world_left",
-                        "observation.images.world_right",
-                        "observation.images.world_top",
-                        "observation.images.world_wrist",
-                    ]
-                    views = []
-                    for k in cam_keys:
-                        raw_img = unpack_np(req.get(k))
-                        # Transform to (C, H, W)
-                        transformed = self.agent.transform({"pixels": raw_img})
-                        if self.use_skeleton:
-                            # Get state of cube
-                            raw_cube_pos = None
-                            if "cube_pos" in req:
-                                raw_cube_pos = unpack_np(req.get("cube_pos"))
+            actions_stacked = (
+                torch.tensor(np.stack(self.history["actions"]), dtype=torch.float32)
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .to(DEVICE)
+            )
 
-                            # Render skeleton for this view on-the-fly!
-                            skel_mask = self.render_skeleton_mask(
-                                view_name=k.split(".")[-1],
-                                raw_sim_state=raw_sim_state,
-                                raw_cube_pos=raw_cube_pos,
-                            )
+            print(
+                f"📊 [Telemetry] Queue Context: Pixels History={len(self.history['pixels'])}, Actions History={len(self.history['actions'])} | "
+                f"Pixels Stacked: {pixels_stacked.shape} ({pixels_stacked.dtype}) | "
+                f"Actions Stacked: {actions_stacked.shape} ({actions_stacked.dtype})"
+            )
+            print(
+                f"🧠 Step: Planning (800 parallel samples, Shape: {pixels_stacked.shape})..."
+            )
+            start_time = time.time()
+            with torch.inference_mode():
+                # 🚀 WARM-START CEM: Pass previous action as initial guess
+                last_executed_action = actions_stacked[:, :, -1:, :]  # (1, 1, 1, 32)
 
-                            # Concatenate normalized RGB with float skeleton mask
-                            transformed_rgb = transformed["pixels"].to(DEVICE)
-                            skel_tensor = (
-                                torch.from_numpy(skel_mask)
-                                .float()
-                                .unsqueeze(0)
-                                .to(DEVICE)
-                                / 255.0
-                            )
-                            transformed["pixels"] = torch.cat(
-                                [transformed_rgb, skel_tensor], dim=0
-                            )
-
-                            # Inputs Visual Audit Saving Hook
-                            view_name = k.split(".")[-1]
-                            rgb_vis = raw_img
-                            skel_vis = skel_mask
-                            skel_3ch = np.stack([skel_vis] * 3, axis=-1)
-                            side_by_side = np.hstack([rgb_vis, skel_3ch])
-                            audit_path = os.path.join(
-                                self.audit_dir,
-                                f"step_{self.step_counter:03d}_{view_name}.png",
-                            )
-                            Image.fromarray(side_by_side).save(audit_path)
-                        views.append(transformed["pixels"])
-
-                    # Current frame is (V, C, H, W)
-                    current_pixels = torch.stack(views, dim=0).to(DEVICE)
-                else:
-                    raw_image = unpack_np(req.get("observation.images.world_center"))
-                    transformed = self.agent.transform({"pixels": raw_image})
-                    # Current frame is (1, C, H, W) for single-view consistency
-                    current_pixels = transformed["pixels"].unsqueeze(0).to(DEVICE)
-
-                print(
-                    f"📷 Received {5 if self.use_multi_view else 1}-View Frame. "
-                    f"current_pixels: {current_pixels.shape} ({current_pixels.dtype}) |"
-                    f" raw_sim_state: {raw_sim_state.shape} ({raw_sim_state.dtype})"
-                )
-
-                # Grounding: Normalize the current state for history alignment
-                norm_state = self.scaler.scale_state(raw_sim_state)
-
-                # 🧊 DYNAMIC FREEZE ANCHOR: Capture initial pose on first step
-                if self.initial_pose is None:
-                    self.initial_pose = norm_state.copy()
-                    self.agent.frozen_pose = torch.tensor(
-                        self.initial_pose, device=DEVICE
-                    ).float()
-                    print(
-                        f"🧊 Initial Pose Anchored: Left Shoulder Pitch = {self.initial_pose[0]:.4f}"
-                    )
-
-                # Pixels History (V, C, H, W)
-                try:
-                    self.history["pixels"].pop(0)
-                except IndexError:
-                    pass
-                while len(self.history["pixels"]) < 3:
-                    self.history["pixels"].append(current_pixels.clone())
-
-                # Action History: Pad to size 3 on step 0, then slide naturally at the end of the loop
-                if not self.history["actions"]:
-                    while len(self.history["actions"]) < 3:
-                        self.history["actions"].append(norm_state.copy())
-
-                # pixels_stacked: (B=1, T_history=3, V, C, H, W)
-                pixels_stacked = (
-                    torch.stack(self.history["pixels"]).unsqueeze(0).to(DEVICE)
-                )
-                # (B=1, S=1, T_history=3, V, C, H, W)
-                pixels_stacked = pixels_stacked.unsqueeze(1)
-
-                actions_stacked = (
-                    torch.tensor(np.stack(self.history["actions"]), dtype=torch.float32)
-                    .unsqueeze(0)
-                    .unsqueeze(0)
+                # (1, 1, 1, 32) -> (1, 32) -> (4, 32) -> (1, 4, 32)
+                # Use .repeat() instead of .expand() to avoid memory aliasing errors in CEM
+                init_guess = (
+                    last_executed_action.squeeze(0)
+                    .squeeze(0)
+                    .repeat(4, 1)  # Updated to match horizon 4
                     .to(DEVICE)
+                    .float()
                 )
 
-                print(
-                    f"📊 [Telemetry] Queue Context: Pixels History={len(self.history['pixels'])}, Actions History={len(self.history['actions'])} | "
-                    f"Pixels Stacked: {pixels_stacked.shape} ({pixels_stacked.dtype}) | "
-                    f"Actions Stacked: {actions_stacked.shape} ({actions_stacked.dtype})"
-                )
-                print(
-                    f"🧠 Step: Planning (800 parallel samples, Shape: {pixels_stacked.shape})..."
-                )
-                start_time = time.time()
-                with torch.inference_mode():
-                    # 🚀 WARM-START CEM: Pass previous action as initial guess
-                    last_executed_action = actions_stacked[
-                        :, :, -1:, :
-                    ]  # (1, 1, 1, 32)
+                # 🧊 FREEZE SAMPLING SPACE (0-15) 🧊
+                # We ensure the solver starts with the joints frozen to their initial pose
+                init_guess[..., 0:16] = self.agent.frozen_pose[0:16]
+                init_guess = init_guess.unsqueeze(0)
 
-                    # (1, 1, 1, 32) -> (1, 32) -> (4, 32) -> (1, 4, 32)
-                    # Use .repeat() instead of .expand() to avoid memory aliasing errors in CEM
-                    init_guess = (
-                        last_executed_action.squeeze(0)
-                        .squeeze(0)
-                        .repeat(4, 1)  # Updated to match horizon 4
-                        .to(DEVICE)
-                        .float()
-                    )
-
-                    # 🧊 FREEZE SAMPLING SPACE (0-15) 🧊
-                    # We ensure the solver starts with the joints frozen to their initial pose
-                    init_guess[..., 0:16] = self.agent.frozen_pose[0:16]
-                    init_guess = init_guess.unsqueeze(0)
-
-                    obs_dict = {
-                        "pixels": pixels_stacked,
-                        "action": actions_stacked,
-                    }
-                    if self.use_task_workspace:
-                        self.task_workspace.set_baseline_from_wire32(raw_sim_state)
-                        tw_H, tw_d = self.task_workspace.get_halfspaces()
-                        obs_dict["task_workspace_H"] = tw_H.astype(np.float32)[
-                            np.newaxis, ...
-                        ]
-                        obs_dict["task_workspace_d"] = tw_d.astype(np.float32)[
-                            np.newaxis, ...
-                        ]
-                        obs_dict["task_workspace_wire32"] = raw_sim_state.astype(
-                            np.float32
-                        )[np.newaxis, ...]
-                        obs_dict["task_workspace_check_final_only"] = np.array(
-                            [[True]], dtype=np.bool_
-                        )
-                    if "phase_idx" in req:
-                        p_idx = int(req.get("phase_idx"))
-                        obs_dict["phase_idx"] = torch.tensor(
-                            [[p_idx]], dtype=torch.long, device=DEVICE
-                        )
-
-                    outputs = self.solver.solve(
-                        obs_dict,
-                        init_action=init_guess,
-                    )
-
-                best_plan = outputs["actions"].cpu().numpy()
-                if best_plan.ndim == 4:
-                    best_plan = best_plan[0, 0]  # (B, S, T, D) -> (T, D)
-                elif best_plan.ndim == 3:
-                    best_plan = best_plan[0]  # (S, T, D) -> (T, D)
-
-                # Freeze left + head; keep protocol [-1, 1] on active joints
-                best_plan[:, 0:16] = self.initial_pose[0:16]
-                best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
-
-                diagnostics = {"plan_time_ms": 0}
+                obs_dict = {
+                    "pixels": pixels_stacked,
+                    "action": actions_stacked,
+                }
                 if self.use_task_workspace:
-                    plan_final_ee = self.task_workspace.final_plan_step_ee(
-                        raw_sim_state, best_plan
-                    )
-                    tw_viol = self.task_workspace.plan_violation(
-                        raw_sim_state, best_plan, check_all_steps=False
-                    )
-                    tw_feasible = self.task_workspace.is_feasible(
-                        raw_sim_state, best_plan, check_all_steps=False
-                    )
-                    print(
-                        f"   🌐 Task workspace violation (final step): {tw_viol:.4f}, "
-                        f"feasible={tw_feasible}, "
-                        f"plan_final_ee=({plan_final_ee[0]:.3f}, {plan_final_ee[1]:.3f}, "
-                        f"{plan_final_ee[2]:.3f})"
-                    )
-                    diagnostics["task_workspace_violation"] = float(tw_viol)
-                    diagnostics["task_workspace_feasible"] = bool(tw_feasible)
-                    diagnostics["plan_final_ee_xyz"] = [
-                        float(plan_final_ee[0]),
-                        float(plan_final_ee[1]),
-                        float(plan_final_ee[2]),
+                    self.task_workspace.set_baseline_from_wire32(raw_sim_state)
+                    tw_H, tw_d = self.task_workspace.get_halfspaces()
+                    obs_dict["task_workspace_H"] = tw_H.astype(np.float32)[
+                        np.newaxis, ...
                     ]
-
-                plan_time = time.time() - start_time
-                diagnostics["plan_time_ms"] = int(plan_time * 1000)
-
-                # Diagnostic Logging: Action Stats
-                print(
-                    f"🧠 Planning Stats -> Solve Time: {plan_time:.2f}s, "
-                    f"Max Action: {np.abs(best_plan).max():.4f}, "
-                    f"Mean Action: {np.abs(best_plan).mean():.4f}"
-                )
-
-                # --- 📡 Rerun Telemetry & Audit ---
-                # For now, log the center view for diagnostics
-                self.log_diagnostics(
-                    raw_image=(
-                        pixels_stacked[0, 0, -1, 0, :3].cpu().numpy().transpose(1, 2, 0)
-                    ),
-                    best_plan=best_plan,
-                    plan_time=plan_time,
-                    instruction=req.get("instruction", "Unknown"),
-                )
-
-                # Update history with the first action of the plan (which is normalized)
-                self.history["actions"].append(best_plan[0])
-                if len(self.history["actions"]) > 3:
-                    self.history["actions"].pop(0)
-
-                socket.send(
-                    msgpack.packb(
-                        {"action": best_plan.tolist(), "diagnostics": diagnostics},
-                        use_bin_type=True,
+                    obs_dict["task_workspace_d"] = tw_d.astype(np.float32)[
+                        np.newaxis, ...
+                    ]
+                    obs_dict["task_workspace_wire32"] = raw_sim_state.astype(
+                        np.float32
+                    )[np.newaxis, ...]
+                    obs_dict["task_workspace_check_final_only"] = np.array(
+                        [[True]], dtype=np.bool_
                     )
+                if "phase_idx" in req:
+                    p_idx = int(req.get("phase_idx"))
+                    obs_dict["phase_idx"] = torch.tensor(
+                        [[p_idx]], dtype=torch.long, device=DEVICE
+                    )
+
+                outputs = self.solver.solve(
+                    obs_dict,
+                    init_action=init_guess,
                 )
 
-            except Exception as e:
-                print(f"❌ Server Error: {e}")
-                traceback.print_exc()
-                socket.send(msgpack.packb({"error": str(e)}, use_bin_type=True))
+            best_plan = outputs["actions"].cpu().numpy()
+            if best_plan.ndim == 4:
+                best_plan = best_plan[0, 0]  # (B, S, T, D) -> (T, D)
+            elif best_plan.ndim == 3:
+                best_plan = best_plan[0]  # (S, T, D) -> (T, D)
+
+            # Freeze left + head; keep protocol [-1, 1] on active joints
+            best_plan[:, 0:16] = self.initial_pose[0:16]
+            best_plan[:, 16:] = np.clip(best_plan[:, 16:], -1.0, 1.0)
+
+            diagnostics = {"plan_time_ms": 0}
+            if self.use_task_workspace:
+                plan_final_ee = self.task_workspace.final_plan_step_ee(
+                    raw_sim_state, best_plan
+                )
+                tw_viol = self.task_workspace.plan_violation(
+                    raw_sim_state, best_plan, check_all_steps=False
+                )
+                tw_feasible = self.task_workspace.is_feasible(
+                    raw_sim_state, best_plan, check_all_steps=False
+                )
+                print(
+                    f"   🌐 Task workspace violation (final step): {tw_viol:.4f}, "
+                    f"feasible={tw_feasible}, "
+                    f"plan_final_ee=({plan_final_ee[0]:.3f}, {plan_final_ee[1]:.3f}, "
+                    f"{plan_final_ee[2]:.3f})"
+                )
+                diagnostics["task_workspace_violation"] = float(tw_viol)
+                diagnostics["task_workspace_feasible"] = bool(tw_feasible)
+                diagnostics["plan_final_ee_xyz"] = [
+                    float(plan_final_ee[0]),
+                    float(plan_final_ee[1]),
+                    float(plan_final_ee[2]),
+                ]
+
+            plan_time = time.time() - start_time
+            diagnostics["plan_time_ms"] = int(plan_time * 1000)
+
+            # Diagnostic Logging: Action Stats
+            print(
+                f"🧠 Planning Stats -> Solve Time: {plan_time:.2f}s, "
+                f"Max Action: {np.abs(best_plan).max():.4f}, "
+                f"Mean Action: {np.abs(best_plan).mean():.4f}"
+            )
+
+            # --- 📡 Rerun Telemetry & Audit ---
+            # For now, log the center view for diagnostics
+            self.log_diagnostics(
+                raw_image=(
+                    pixels_stacked[0, 0, -1, 0, :3].cpu().numpy().transpose(1, 2, 0)
+                ),
+                best_plan=best_plan,
+                plan_time=plan_time,
+                instruction=req.get("instruction", "Unknown"),
+            )
+
+            # Update history with the first action of the plan (which is normalized)
+            self.history["actions"].append(best_plan[0])
+            if len(self.history["actions"]) > 3:
+                self.history["actions"].pop(0)
+
+            return {"action": best_plan.tolist(), "diagnostics": diagnostics}
+
+        except Exception as e:
+            print(f"❌ Server Error: {e}")
+            traceback.print_exc()
+            return {"error": str(e)}
+
+    def run(self, host="0.0.0.0", port: int | None = None):
+        serve_http(self.process_request, host=host, port=port or PORT)
 
     def log_diagnostics(self, raw_image, best_plan, plan_time, instruction):
         """Pure JSONL logging for 'Wild Movement' debugging."""
@@ -540,6 +518,8 @@ class LEWMInferenceServer:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--port", "-p", type=int, default=PORT, help="HTTP listen port")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="HTTP bind address")
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--gallery", type=str, default="goal_gallery.pth")
     parser.add_argument("--multi_view", action="store_true", default=False)
@@ -559,4 +539,4 @@ if __name__ == "__main__":
         use_dino=args.use_dino,
         use_task_workspace=args.task_workspace,
     )
-    server.run()
+    server.run(host=args.host, port=args.port)
