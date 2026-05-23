@@ -32,6 +32,7 @@ def harvest_manifold(
     use_multi_view=True,
     fusion_type="linear",
     use_skeleton=False,
+    use_dino=False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     output_path = Path(output_file).resolve()
@@ -54,6 +55,7 @@ def harvest_manifold(
         use_multi_view=use_multi_view,
         num_views=5 if use_multi_view else 1,
         use_skeleton=use_skeleton,
+        use_dino=use_dino,
     )
     model = mapper.model.to(device).eval()
 
@@ -238,6 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--fusion", type=str, default="linear")
     parser.add_argument("--use_skeleton", action="store_true", default=False)
+    parser.add_argument("--use_dino", action="store_true", default=False)
     args = parser.parse_args()
 
     harvest_manifold(
@@ -248,4 +251,5 @@ if __name__ == "__main__":
         use_multi_view=args.multi_view,
         fusion_type=args.fusion,
         use_skeleton=args.use_skeleton,
+        use_dino=args.use_dino,
     )

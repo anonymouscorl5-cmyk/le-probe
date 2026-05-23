@@ -2,6 +2,9 @@
 ZERO-RAM FULL-STACK HARVESTER (Production Edition)
 Role: Captures all 18 layers and streams directly to disk.
 Output: .bin (raw data) and .json (metadata) for each layer.
+
+Experiment flags (parity with lewm_server.py / harvest_manifold.py):
+  --multi_view --use_skeleton --use_dino
 """
 
 import sys
@@ -13,23 +16,24 @@ from tqdm import tqdm
 import numpy as np
 from torch.utils.data import DataLoader
 
-# --- Path Stabilization (Robust Absolute Resolution) ---
-# We use Path(__file__).resolve() to make the script immune to launch directory
 CURRENT_FILE = Path(__file__).resolve()
-ROOT_DIR = CURRENT_FILE.parents[2]  # le-probe/
+ROOT_DIR = CURRENT_FILE.parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-LEWM_DIR = ROOT_DIR / "lewm"
-if str(LEWM_DIR) not in sys.path:
-    sys.path.append(str(LEWM_DIR))
-
-LE_WM_DIR = LEWM_DIR / "le_wm"
-if str(LE_WM_DIR) not in sys.path:
-    sys.path.append(str(LE_WM_DIR))
-
-from lewm.goal_mapper import GoalMapper
-from lewm.lewm_data_plugin import LEWMDataPlugin
+from interpretability.lewm_experiment import (
+    ExperimentConfig,
+    add_experiment_args,
+    build_data_plugin,
+    build_goal_mapper,
+    config_from_args,
+    discover_layer_ids,
+    flatten_activation,
+    forward_harvest,
+    ghost_trace_batch,
+    prepare_pixels_6d,
+    resolve_dataset_root,
+)
 
 
 class TraceHook:
@@ -39,60 +43,53 @@ class TraceHook:
         self.output = None
 
     def __call__(self, module, input, output):
-        # Handle ViT output tuples (hidden_states, ...)
         val = output[0] if isinstance(output, tuple) else output
         self.output = val.detach().cpu().numpy()
 
 
 def harvest_activations(
-    model_path, dataset_repo, output_dir, num_episodes, shuffle=False, num_workers=2
+    model_path,
+    dataset_repo,
+    output_dir,
+    num_episodes,
+    cfg: ExperimentConfig,
+    shuffle=False,
+    num_workers=2,
 ):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     output_path = Path(output_dir).resolve()
     output_path.mkdir(parents=True, exist_ok=True)
 
     print(f"🚀 Initializing Production Harvest | Device: {device}")
     print(f"📁 Output Directory: {output_path}")
+    print(
+        f"🧪 Experiment: multi_view={cfg.multi_view}, skeleton={cfg.use_skeleton}, "
+        f"dino={cfg.use_dino}, views={cfg.num_views}, cls_only={cfg.cls_only}"
+    )
 
-    # 1. Load Model
-    mapper = GoalMapper(model_path=model_path, dataset_root=".")
+    dataset_root = resolve_dataset_root(dataset_repo)
+    mapper = build_goal_mapper(model_path, dataset_root, cfg)
     model = mapper.model.to(device).eval()
 
-    # 2. Unified Discovery & Hooking (String-based resolution)
+    layer_paths = discover_layer_ids(model)
     hooks = {}
     handles = []
 
     print("🔍 Discovering model layers...")
-    for name, module in model.named_modules():
-        parts = name.split(".")
-        # Pattern: encoder.encoder.layer.N or predictor.transformer.layers.N
-        if (
-            len(parts) > 1
-            and (parts[-2] == "layer" or parts[-2] == "layers")
-            and parts[-1].isdigit()
-        ):
-            layer_idx = parts[-1]
-            component = "encoder" if "encoder" in name else "predictor"
-            layer_id = f"{component}_L{layer_idx}"
-
-            hook = TraceHook()
-            handle = module.register_forward_hook(hook)
-            hooks[layer_id] = hook
-            handles.append(handle)
-            print(f"  ⚓ Hooked: {layer_id} ({name})")
+    for layer_id, module_path in sorted(layer_paths.items()):
+        module = dict(model.named_modules())[module_path]
+        hook = TraceHook()
+        handle = module.register_forward_hook(hook)
+        hooks[layer_id] = hook
+        handles.append(handle)
+        print(f"  ⚓ Hooked: {layer_id} ({module_path})")
 
     if not hooks:
         raise RuntimeError(
             "🚨 Discovery Failure: No layers were identified for hooking!"
         )
 
-    # 3. Initialize Data Plugin
-    data_plugin = LEWMDataPlugin(
-        repo_id=dataset_repo, keys_to_load=["pixels", "action"], num_steps=3
-    )
-
-    # 🧊 CACHE RESET: Prevent 'Invalid data' decoder contention across workers
-    data_plugin.clear_cache()
+    data_plugin = build_data_plugin(dataset_repo, cfg, num_steps=cfg.history_size)
 
     dataloader = DataLoader(
         data_plugin,
@@ -104,17 +101,12 @@ def harvest_activations(
 
     actual_total = num_episodes if num_episodes > 0 else len(dataloader)
 
-    # Pre-flight Diagnostic: Full Causal Ghost Trace
     print("👻 Running System-Wide Ghost Trace (FP16 enabled)...")
     with torch.no_grad():
-        with torch.amp.autocast("cuda"):  # Mixed Precision
-            dummy_pixels = torch.randn(1, 3, 3, 224, 224).to(device)
-            dummy_actions = torch.zeros(1, 3, 32).to(device)
-
-            # Trigger Encoder hooks
-            info = model.encode({"pixels": dummy_pixels, "action": dummy_actions})
-            # Trigger Predictor hooks
-            model.predict(info["emb"], info["act_emb"])
+        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+            g_pixels, g_actions, g_extra = ghost_trace_batch(device, cfg)
+            g_batch = g_extra or {}
+            forward_harvest(model, g_pixels, g_actions, cfg, g_batch)
 
         for layer_id, hook in hooks.items():
             if hook.output is None:
@@ -123,11 +115,8 @@ def harvest_activations(
                 )
     print(f"✅ System Green: All {len(hooks)} layers verified.")
 
-    # 4. Open Streaming Files with large buffers
     file_handles = {
-        layer_id: open(
-            output_path / f"{layer_id}.bin", "wb", buffering=1024 * 1024
-        )  # 1MB buffer
+        layer_id: open(output_path / f"{layer_id}.bin", "wb", buffering=1024 * 1024)
         for layer_id in hooks.keys()
     }
 
@@ -135,7 +124,6 @@ def harvest_activations(
     tokens_per_sample = {}
     last_shape = {}
 
-    # 5. Harvesting Loop
     print(f"📊 Streaming vertical slices from {actual_total} batches...")
 
     try:
@@ -145,63 +133,47 @@ def harvest_activations(
                 if num_episodes > 0 and i >= num_episodes:
                     break
 
-                raw_pixels = batch["pixels"].to(device)
-                actions = batch["action"].to(device)
+                pixels, actions = prepare_pixels_6d(batch, mapper, device, cfg)
 
-                # --- 🎯 OFFICIAL TRANSFORM (ImageNet + Resizing) ---
-                # This ensures the model sees EXACTLY what it saw during v8 training.
-                B, T, C, H, W = raw_pixels.shape
-                # Flatten B and T for the preprocessor
-                raw_pixels_flat = raw_pixels.view(B * T, C, H, W)
-                processed_pixels = mapper.transform({"pixels": raw_pixels_flat})[
-                    "pixels"
-                ]
-                # Unflatten back to (B, T, C, 224, 224)
-                pixels = processed_pixels.view(B, T, C, 224, 224)
-                # ---------------------------------------------------
+                if i == 0:
+                    print(
+                        f"\n🔍 [BATCH 0] pixels={tuple(pixels.shape)} "
+                        f"actions={tuple(actions.shape)}\n"
+                    )
 
-                if torch.isnan(actions).any():
-                    actions = torch.nan_to_num(actions, 0.0)
+                with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+                    forward_harvest(model, pixels, actions, cfg, batch)
 
-                # TRIGGER THE CAUSAL CHAIN in Mixed Precision
-                with torch.amp.autocast("cuda"):
-                    # 1. Perception (Encoder)
-                    info = model.encode({"pixels": pixels, "action": actions})
-                    # 2. Intention (Predictor)
-                    model.predict(info["emb"], info["act_emb"])
-
-                # Stream results to disk in FP16
+                B = pixels.shape[0]
                 for layer_id, hook in hooks.items():
-                    acts = hook.output  # (B, T, D)
+                    acts = hook.output
                     if acts is None:
                         raise RuntimeError(
                             f"🚨 Trace Failure: Layer {layer_id} did not report activations!"
                         )
 
-                    # Explicit cast to float16 to save 50% disk IO/Space
-                    acts_flat = acts.reshape(-1, acts.shape[-1]).astype(np.float16)
+                    acts_flat = flatten_activation(acts, layer_id, cfg)
                     file_handles[layer_id].write(acts_flat.tobytes())
                     total_samples[layer_id] += acts_flat.shape[0]
                     last_shape[layer_id] = acts_flat.shape[1]
-                    tokens_per_sample[layer_id] = acts_flat.shape[0] // pixels.shape[0]
+                    tokens_per_sample[layer_id] = max(1, acts_flat.shape[0] // B)
 
     finally:
-        # 6. Cleanup hooks and Close files
         for h in handles:
             h.remove()
         for f in file_handles.values():
             f.close()
+        data_plugin.clear_cache()
 
-    # 7. Save Metadata Sidecars
     print("💾 Finalizing metadata headers...")
+    exp_meta = cfg.to_metadata()
     for layer_id in hooks.keys():
-        # Calculate tokens per sample (Spatial * Temporal)
-        # We use the last known shape but divided by the logic
         metadata = {
             "shape": [total_samples[layer_id], last_shape[layer_id]],
             "tokens_per_sample": tokens_per_sample[layer_id],
             "dtype": "float16",
             "layer_id": layer_id,
+            "experiment": exp_meta,
         }
         with open(output_path / f"{layer_id}.json", "w") as f:
             json.dump(metadata, f)
@@ -210,20 +182,33 @@ def harvest_activations(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Harvest LeWM activations for transcoder training"
+    )
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
     parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
-    parser.add_argument("--output_dir", type=str, default="harvested_activations")
+    parser.add_argument("--output_dir", type=str, default="activations_granular")
     parser.add_argument("--batches", type=int, default=0)
     parser.add_argument("--shuffle", action="store_true")
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument(
+        "--history_size",
+        type=int,
+        default=3,
+        help="Temporal history length (matches training)",
+    )
+    add_experiment_args(parser, include_cls_only=True)
     args = parser.parse_args()
+
+    cfg = config_from_args(args)
+    cfg.history_size = args.history_size
 
     harvest_activations(
         model_path=args.model,
         dataset_repo=args.dataset,
         output_dir=args.output_dir,
         num_episodes=args.batches,
+        cfg=cfg,
         shuffle=args.shuffle,
         num_workers=args.workers,
     )

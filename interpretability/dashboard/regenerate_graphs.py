@@ -1,10 +1,10 @@
 import os
 import json
+import argparse
 import requests
-import sys
 
 
-def regenerate_via_api(engine_url):
+def regenerate_via_api(engine_url: str, output_subdir: str = ""):
     print(f"🚀 Using Engine API at: {engine_url}")
 
     scenarios = [
@@ -14,11 +14,11 @@ def regenerate_via_api(engine_url):
         {"slug": "pre-grasp-pos", "index": 300, "joint": 7},
     ]
 
-    # Output directory
-    out_dir = (
-        f"{os.getcwd()}/interpretability/neuronpedia/apps"
-        "/webapp/public/graphs/lewm-robot"
+    base = os.path.join(
+        os.getcwd(),
+        "interpretability/neuronpedia/apps/webapp/public/graphs/lewm-robot",
     )
+    out_dir = os.path.join(base, output_subdir) if output_subdir else base
     os.makedirs(out_dir, exist_ok=True)
 
     for scene in scenarios:
@@ -26,11 +26,11 @@ def regenerate_via_api(engine_url):
             f"📊 Fetching attribution for {scene['slug']} (index {scene['index']})..."
         )
 
-        endpoint = f"{engine_url}/api/attribution/generate-graph"
+        endpoint = f"{engine_url.rstrip('/')}/api/attribution/generate-graph"
         payload = {"prompt": f"{scene['index']}:{scene['joint']}"}
 
         try:
-            response = requests.post(endpoint, json=payload, timeout=60)
+            response = requests.post(endpoint, json=payload, timeout=120)
             response.raise_for_status()
 
             graph_data = response.json()
@@ -45,7 +45,18 @@ def regenerate_via_api(engine_url):
 
 
 if __name__ == "__main__":
-    url = "http://localhost:8080"  # Default
-    if len(sys.argv) > 1:
-        url = sys.argv[1]
-    regenerate_via_api(url)
+    parser = argparse.ArgumentParser(description="Pre-generate Neuronpedia graph JSONs")
+    parser.add_argument(
+        "--engine-url",
+        type=str,
+        default="http://localhost:8000",
+        help="LeWM interpretability engine base URL",
+    )
+    parser.add_argument(
+        "--output-subdir",
+        type=str,
+        default="",
+        help="Optional subdirectory under graphs/lewm-robot/",
+    )
+    args = parser.parse_args()
+    regenerate_via_api(args.engine_url, args.output_subdir)

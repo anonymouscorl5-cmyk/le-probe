@@ -14,8 +14,19 @@ import torch.nn as nn
 import traceback
 
 # LeWM / LeRobot Imports
-from lewm.lewm_data_plugin import LEWMDataPlugin
-from lewm.goal_mapper import GoalMapper
+from interpretability.lewm_experiment import (
+    ExperimentConfig,
+    VIEW_NAMES,
+    add_experiment_args,
+    build_data_plugin,
+    build_goal_mapper,
+    config_from_args,
+    decode_token_index,
+    prepare_pixels_6d,
+    resolve_dataset_root,
+    resolve_layer_module,
+    sample_rgb_frame,
+)
 from interpretability.transcoders.universal_transcoder import Transcoder
 
 app = FastAPI(title="LeWM Interpretability Engine")
@@ -35,6 +46,7 @@ STATE = {
     "dataset": None,
     "transcoders": {},
     "meta": None,
+    "cfg": None,
     "min_k": 15,
 }
 
@@ -49,39 +61,39 @@ async def get_frame(idx: int):
     """
     meta = STATE["meta"]
     dataset = STATE["dataset"]
+    cfg: ExperimentConfig = STATE.get("cfg") or ExperimentConfig()
     if not dataset or not meta:
         raise HTTPException(status_code=500, detail="Engine resources not initialized")
 
     try:
-        # 1. Map global token index to sample index and patch
-        tokens_per_sample = meta.get("tokens_per_sample", 771)
+        tokens_per_sample = meta.get(
+            "tokens_per_sample", cfg.encoder_tokens_per_moment()
+        )
         sample_idx = idx // tokens_per_sample
         token_in_sample = idx % tokens_per_sample
 
-        # 2. Determine frame offset and patch index (History Size = 3)
-        frame_offset = token_in_sample // 257
-        patch_token_idx = token_in_sample % 257  # 0 is CLS, 1-256 are patches
+        frame_offset, view_idx, patch_token_idx = decode_token_index(
+            token_in_sample, cfg
+        )
         target_sample_idx = max(0, sample_idx - frame_offset)
 
         if target_sample_idx >= len(dataset):
             raise HTTPException(status_code=404, detail="Sample index out of range")
 
         sample = dataset[target_sample_idx]
-
-        # 3. Extract Modality
-        img_tensor = sample["pixels"][0]
+        img_tensor = sample_rgb_frame(sample, cfg, view_idx=view_idx, time_idx=0)
         img_np = (
             img_tensor.permute(1, 2, 0).cpu().numpy()
             if hasattr(img_tensor, "permute")
             else img_tensor.transpose(1, 2, 0)
         )
-        img_np = img_np.astype("uint8")
+        if img_np.dtype != np.uint8:
+            img_np = np.clip(img_np, 0, 255).astype("uint8")
         img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
         display_size = 480
         img_bgr = cv2.resize(img_bgr, (display_size, display_size))
 
-        # 4. Draw Spatial Highlighting
         if patch_token_idx > 0:
             p = patch_token_idx - 1
             grid_size, patch_px = 16, display_size // 16
@@ -92,10 +104,11 @@ async def get_frame(idx: int):
                 (col + 1) * patch_px,
                 (row + 1) * patch_px,
             )
+            view_name = VIEW_NAMES[view_idx] if cfg.multi_view else "world_center"
             cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0, 255, 0), 1)
             cv2.putText(
                 img_bgr,
-                f"P{p}",
+                f"{view_name} P{p}",
                 (x1 + 2, y1 + 12),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
@@ -120,10 +133,19 @@ class LeWMAttributor:
     Traces influence from Action Logits -> Predictor Features -> Encoder Features -> Visual Tokens.
     """
 
-    def __init__(self, model, transcoders, transform, device="cuda", min_k=15):
+    def __init__(
+        self,
+        model,
+        transcoders,
+        mapper,
+        cfg: ExperimentConfig,
+        device="cuda",
+        min_k=15,
+    ):
         self.model = model
         self.transcoders = transcoders
-        self.transform = transform
+        self.mapper = mapper
+        self.cfg = cfg
         self.device = device
         self.min_k = min_k
         self.hooks = {}
@@ -161,21 +183,34 @@ class LeWMAttributor:
                 self.gradients[lid] = g
 
             # Find the actual module in LeWM (Encoder/Predictor)
-            target_module = self._find_module(layer_id)
+            target_module = resolve_layer_module(self.model, layer_id)
             if target_module:
                 h_f = target_module.register_forward_hook(forward_hook)
                 h_b = target_module.register_full_backward_hook(backward_hook)
                 self.hooks[layer_id] = (h_f, h_b)
 
-    def _find_module(self, layer_id):
-        # Pattern: encoder_L3 or predictor_L1
-        component, idx = layer_id.split("_L")
-        idx = int(idx)
-        if component == "encoder":
-            return self.model.encoder.encoder.layer[idx]
-        elif component == "predictor":
-            return self.model.predictor.transformer.layers[idx]
-        return None
+    def _compute_target(self, pixels, actions, batch_tensors, attribution_target):
+        info = self.model.encode({"pixels": pixels, "action": actions})
+        logits = self.model.predict(info["emb"], info["act_emb"])
+
+        if (
+            attribution_target == "subgoal"
+            and batch_tensors.get("dino_anchor") is not None
+        ):
+            phi = batch_tensors["dino_anchor"]
+            phase = batch_tensors.get("phase_idx")
+            if phase is None:
+                phase = torch.zeros(
+                    phi.shape[0], phi.shape[1], 1, device=phi.device, dtype=phi.dtype
+                )
+            B, T, _ = phi.shape
+            phi_flat = phi.reshape(B * T, -1)
+            z_target = self.model.project_dino(phi_flat).view(B, T, -1)
+            z_pred = self.model.predict_subgoal(info["emb"], phase)
+            return -(z_pred - z_target.detach()).pow(2).mean()
+
+        reward_out = self.model.reward_head(logits[:, -1, :])
+        return reward_out.squeeze()
 
     def attribute(self, sample, target_logit_idx, steps=20):
         """
@@ -186,84 +221,55 @@ class LeWMAttributor:
             self.gradients.clear()
             self._register_hooks()
 
-            # 1. Setup Inputs with Gradient Tracking
-            pixel_key = (
-                "pixels" if "pixels" in sample else "observation.images.world_center"
+            batch_tensors = {
+                k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                for k, v in sample.items()
+            }
+            pixels, actions = prepare_pixels_6d(
+                batch_tensors, self.mapper, self.device, self.cfg
             )
-            raw_pixels = sample[pixel_key]  # [T, C, H, W]
+            pixels = pixels.float().detach().requires_grad_(True)
+            actions = actions.float().detach().requires_grad_(True)
 
-            # Apply official preprocessor
-            processed = self.transform({"pixels": raw_pixels})
-            pixels_base = processed["pixels"].to(self.device).float().detach()
+            batch_extra = {
+                k: batch_tensors[k]
+                for k in ("dino_anchor", "phase_idx", "is_checkpoint")
+                if k in batch_tensors
+            }
 
-            # FORCE 4D: [B*T, C, H, W]
-            # This is the key: we NEVER let the autograd graph see 5D
-            if pixels_base.ndim == 5:
-                pixels = pixels_base.view(-1, *pixels_base.shape[2:])
-            elif pixels_base.ndim == 4:
-                pixels = pixels_base
-            else:  # 3D
-                pixels = pixels_base.unsqueeze(0)
-
-            pixels.requires_grad_(True)
-
-            state_key = "action" if "action" in sample else "observation.state"
-            state_base = sample[state_key].to(self.device).float().detach()
-            # Ensure 2D: [B*T, D] for consistency
-            if state_base.ndim == 3:
-                state = state_base.view(-1, state_base.shape[-1])
-            elif state_base.ndim == 2:
-                state = state_base
-            else:
-                state = state_base.unsqueeze(0)
-            state.requires_grad_(True)
-
-            # 3. Integrated Gradients Pass (Path Integral)
-            print(f"📈 Computing Integrated Gradients ({steps} steps)...")
+            print(
+                f"📈 Computing Integrated Gradients ({steps} steps) "
+                f"[target={self.cfg.attribution_target}]..."
+            )
 
             total_pixel_grad = torch.zeros_like(pixels)
-            total_state_grad = torch.zeros_like(state)
-
-            # Accumulators for transcoder gradients
+            total_action_grad = torch.zeros_like(actions)
             total_trans_grads = {lid: 0 for lid in self.transcoders.keys()}
 
             for step in range(steps):
-                # Linearly interpolate between baseline (zeros) and input
                 alpha = (step + 1) / steps
                 curr_pixels = (pixels.detach() * alpha).requires_grad_(True)
-                curr_state = (state.detach() * alpha).requires_grad_(True)
+                curr_actions = (actions.detach() * alpha).requires_grad_(True)
 
-                # --- Forward Pass ---
-                output = self.model.encoder(curr_pixels, interpolate_pos_encoding=True)
-                pixels_emb = output.last_hidden_state[:, 0]
-                emb_flat = self.model.projector(pixels_emb)
-
-                T_seq = curr_pixels.shape[0]
-                emb = emb_flat.view(1, T_seq, -1)
-                state_3d = curr_state.view(1, T_seq, -1)
-                act_emb = self.model.action_encoder(state_3d)
-
-                logits = self.model.predict(emb, act_emb)
-                # Integrated Gradients Target: The Reward Head (Success Probability)
-                # We attribute the prediction for the FINAL step in the horizon
-                reward_out = self.model.reward_head(logits[:, -1, :])
-                target = reward_out.squeeze()
-
-                # --- Backward Pass ---
                 self.model.zero_grad()
+                target = self._compute_target(
+                    curr_pixels,
+                    curr_actions,
+                    batch_extra,
+                    self.cfg.attribution_target,
+                )
                 target.backward()
 
-                # Accumulate gradients
-                total_pixel_grad += curr_pixels.grad.detach()
-                total_state_grad += curr_state.grad.detach()
-
+                if curr_pixels.grad is not None:
+                    total_pixel_grad += curr_pixels.grad.detach()
+                if curr_actions.grad is not None:
+                    total_action_grad += curr_actions.grad.detach()
                 for lid in self.transcoders.keys():
                     if lid in self.gradients:
                         total_trans_grads[lid] += self.gradients[lid].detach()
 
-            # Final IG: (Input - Baseline) * Average Gradient
             pixel_grad = (total_pixel_grad / steps) * pixels
-            state_grad = (total_state_grad / steps) * state
+            state_grad = (total_action_grad / steps) * actions
 
             # Update self.gradients with the averaged path gradients for features
             for lid in self.transcoders.keys():
@@ -286,8 +292,14 @@ class LeWMAttributor:
             layer_to_nodes = {}
 
             # A. Add Target Node (Grasp Success)
-            logit_id = "logit_success"
-            success_prob = float(torch.sigmoid(target))
+            if self.cfg.attribution_target == "subgoal":
+                logit_id = "logit_subgoal"
+                success_prob = float(torch.sigmoid(-target.detach()))
+                target_label = f"DINO Subgoal (align={success_prob:.3f})"
+            else:
+                logit_id = "logit_success"
+                success_prob = float(torch.sigmoid(target.detach()))
+                target_label = f"Grasp Success (p={success_prob:.3f})"
             logit_node = {
                 "node_id": logit_id,
                 "feature": 0,
@@ -302,9 +314,9 @@ class LeWMAttributor:
                 "reverse_ctx_idx": 0,
                 "jsNodeId": logit_id,
                 "streamIdx": 19,
-                "clerp": f"Grasp Success (p={success_prob:.3f})",
-                "ppClerp": f"Grasp Success (p={success_prob:.3f})",
-                "influence": float(target),
+                "clerp": target_label,
+                "ppClerp": target_label,
+                "influence": float(target.detach()),
             }
             clt_nodes.append(logit_node)
             layer_to_nodes[19] = [logit_node]
@@ -313,10 +325,14 @@ class LeWMAttributor:
             layer_to_nodes[0] = []
             patch_saliency = self._aggregate_spatial_grad(pixel_grad)
             top_patches = torch.topk(patch_saliency.view(-1), k=15)
+            view_idx = 0
             for i, (v, idx) in enumerate(zip(top_patches.values, top_patches.indices)):
                 idx = int(idx)
                 row, col = divmod(idx, 16)
                 node_id = f"patch_{idx}"
+                view_name = (
+                    VIEW_NAMES[view_idx] if self.cfg.multi_view else "world_center"
+                )
                 node = {
                     "node_id": node_id,
                     "feature": idx,
@@ -329,7 +345,7 @@ class LeWMAttributor:
                     "reverse_ctx_idx": 0,
                     "jsNodeId": node_id,
                     "streamIdx": 0,
-                    "clerp": f"Patch[{row},{col}]",
+                    "clerp": f"{view_name} Patch[{row},{col}]",
                     "influence": float(v),
                 }
                 clt_nodes.append(node)
@@ -642,12 +658,17 @@ class LeWMAttributor:
             raise e
         return graph_data
 
-    def _aggregate_spatial_grad(self, pixel_grad):
-        # pixel_grad: [1, 3, 224, 224]
-        # Aggregate across color channels and take absolute value
-        saliency = pixel_grad.abs().sum(dim=1)[0]
-        # Downsample to 16x16 patches using area pooling
-        saliency = saliency.unsqueeze(0).unsqueeze(0)
+    def _aggregate_spatial_grad(self, pixel_grad, view_idx=0):
+        """Aggregate IG pixel gradients to a 16x16 patch grid (world_center by default)."""
+        if pixel_grad.ndim == 6:
+            g = pixel_grad[0, -1, view_idx, :3].abs().sum(dim=0)
+        elif pixel_grad.ndim == 5:
+            g = pixel_grad[0, -1, :3].abs().sum(dim=0)
+        elif pixel_grad.ndim == 4:
+            g = pixel_grad[0, :3].abs().sum(dim=0)
+        else:
+            g = pixel_grad.abs().sum(dim=-3)
+        saliency = g.unsqueeze(0).unsqueeze(0)
         patch_grad = torch.nn.functional.avg_pool2d(saliency, kernel_size=14, stride=14)
         return patch_grad.view(16, 16)
 
@@ -710,8 +731,11 @@ async def generate_graph(request: Dict[str, Any]):
     try:
         model = STATE["model"]
         transcoders = STATE["transcoders"]
-        transform = STATE["transform"]
-        attributor = LeWMAttributor(model, transcoders, transform, min_k=STATE["min_k"])
+        mapper = STATE["mapper"]
+        cfg = STATE["cfg"]
+        attributor = LeWMAttributor(
+            model, transcoders, mapper, cfg, min_k=STATE["min_k"]
+        )
 
         sample = dataset[sample_idx]
 
@@ -786,22 +810,24 @@ async def get_gallery(idx: int, patches: Optional[str] = None):
 # --- 3. MAIN BOOTSTRAP ---
 
 
-def load_engine_resources(model_path, dataset_repo, transcoder_dir, device="cuda"):
+def load_engine_resources(
+    model_path, dataset_repo, transcoder_dir, cfg: ExperimentConfig, device="cuda"
+):
     print(f"🚀 Initializing Engine Resources | Device: {device}")
-
-    # 1. Dataset (High-Performance Direct Bypass)
-    print(f"🚀 Initializing LEWM Data Plugin for {dataset_repo}")
-    STATE["dataset"] = LEWMDataPlugin(
-        repo_id=dataset_repo,
-        keys_to_load=["pixels", "state", "action"],
-        num_steps=1,
+    print(
+        f"🧪 Experiment: multi_view={cfg.multi_view}, skeleton={cfg.use_skeleton}, "
+        f"dino={cfg.use_dino}, attribution={cfg.attribution_target}"
     )
 
-    # 2. Model
+    dataset_root = resolve_dataset_root(dataset_repo)
+    print(f"🚀 Initializing data plugin for {dataset_repo}")
+    STATE["dataset"] = build_data_plugin(dataset_repo, cfg, num_steps=cfg.history_size)
+    STATE["cfg"] = cfg
+
     print(f"🧠 Loading LeWM Model: {model_path}")
-    mapper = GoalMapper(model_path=model_path, dataset_root=".")
+    mapper = build_goal_mapper(model_path, dataset_root, cfg)
     STATE["model"] = mapper.model.to(device).eval()
-    STATE["transform"] = mapper.transform
+    STATE["mapper"] = mapper
 
     # 3. Transcoders (Auto-Discovery)
     tc_path = Path(transcoder_dir)
@@ -870,16 +896,29 @@ def main():
     parser.add_argument(
         "--min-k", type=int, default=15, help="Min-K connections per node"
     )
+    parser.add_argument(
+        "--history_size",
+        type=int,
+        default=3,
+        help="Temporal history for dataset samples",
+    )
+    add_experiment_args(parser, include_cls_only=False, include_attribution_target=True)
     args = parser.parse_args()
 
     STATE["min_k"] = args.min_k
 
-    # 1. Load Metadata
     with open(args.meta, "r") as f:
         STATE["meta"] = json.load(f)
 
-    # 2. Load Compute Resources
-    load_engine_resources(args.model, args.repo, args.transcoders, device=args.device)
+    cfg = config_from_args(args)
+    cfg.history_size = args.history_size
+    if "experiment" in STATE["meta"]:
+        meta_cfg = ExperimentConfig.from_metadata(STATE["meta"])
+        cfg.cls_only = meta_cfg.cls_only
+
+    load_engine_resources(
+        args.model, args.repo, args.transcoders, cfg, device=args.device
+    )
 
     # 3. Start Server
     print(f"📡 Engine starting on port {args.port}...")

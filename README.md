@@ -350,23 +350,31 @@ The activations and weights are available here:
 
 Optionally, the activations can be harvested with the following steps, also covered in [**`LeWM_Interpretability.ipynb`**](./LeWM_Interpretability.ipynb)
 
-1. **Harvest the Activations**: Stores activations for all layers of the LeWM with all the data
+1. **Harvest the Activations** (one experiment per run; same flags as `lewm_server.py`):
 ```bash
+# Single-View (default)
 .venv/bin/python interpretability/transcoders/harvest_activations.py \
-    --model gr1_reward_tuned_v2.ckpt \
-    --output activations_granular \
-    --workers 4
+    --model gr1_reward_tuned_v2.ckpt --output_dir activations_granular_single_view --workers 4
+
+# Multi-View + Skeletal + DINO
+.venv/bin/python interpretability/transcoders/harvest_activations.py \
+    --model gr1_reward_tuned_v1.ckpt \
+    --output_dir activations_granular_multiview_skeleton_dino \
+    --multi_view --use_skeleton --use_dino --workers 4
 ```
 
-2. **Audit the Harvest**: Just to check if the harvest worked
+2. **Audit the Harvest** (pass the same `--multi_view` / `--use_skeleton` / `--use_dino` flags):
 ```bash
 .venv/bin/python interpretability/transcoders/audit_harvest.py \
-    --model gr1_reward_tuned_v2.ckpt \
-    --dir activations_granular
+    --model gr1_reward_tuned_v1.ckpt \
+    --dir activations_granular_multiview_skeleton_dino \
+    --multi_view --use_skeleton --use_dino
 ```
 
-3. **Train the CLT**: The [`batch_train.sh`](interpretability/transcoders/batch_train.sh) script trains the CLT for all layers using the harvested activations.
+3. **Train the CLT** for that experiment only (set dirs, then run [`batch_train.sh`](interpretability/transcoders/batch_train.sh) once):
 ```bash
+ACTIVATIONS_DIR=activations_granular_multiview_skeleton_dino \
+OUTPUT_DIR=transcoder_weights_multiview_skeleton_dino \
 bash interpretability/transcoders/batch_train.sh
 ```
 
@@ -378,13 +386,14 @@ cd interpretability/neuronpedia
 make webapp-localhost-dev
 ```
 
-2. **Start the Engine (Colab)**: The engine runs on colab using a ngrok tunnel
+2. **Start the Engine (Colab)**: Use the same experiment flags as harvest
 ```bash
 .venv/bin/python interpretability/dashboard/engine.py \
     --repo vedpatwardhan/gr1_pickup_grasp \
-    --meta activations_granular/encoder_L0.json \
-    --model gr1_reward_tuned_v2.ckpt \
-    --transcoders transcoder_weights_residual \
+    --meta activations_granular_multiview_skeleton/encoder_L0.json \
+    --model gr1_reward_tuned_v6.ckpt \
+    --transcoders transcoder_weights_multiview_skeleton \
+    --multi_view --use_skeleton \
     --min-k 10
 ```
 

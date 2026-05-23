@@ -92,18 +92,40 @@ The activations and weights are available here:
 Optionally, the activations can be harvested with the following scripts, also covered in [**`LeWM_Interpretability.ipynb`**](./LeWM_Interpretability.ipynb)
 
 ```bash
-# 1. Harvest the activations
+# 1. Harvest activations (pick ONE experiment per run; flags match lewm_server.py)
+# Single-View
 .venv/bin/python interpretability/transcoders/harvest_activations.py \
-    --model gr1_reward_tuned_v2.ckpt
-    --output activations_granular \
+    --model gr1_reward_tuned_v2.ckpt \
+    --output_dir activations_granular_single_view \
     --workers 4
 
-# 2. Audit the harvest
+# Multi-View
+.venv/bin/python interpretability/transcoders/harvest_activations.py \
+    --model gr1_reward_tuned_v2.ckpt \
+    --output_dir activations_granular_multiview \
+    --multi_view --workers 4
+
+# Multi-View + Skeletal Priors
+.venv/bin/python interpretability/transcoders/harvest_activations.py \
+    --model gr1_reward_tuned_v6.ckpt \
+    --output_dir activations_granular_multiview_skeleton \
+    --multi_view --use_skeleton --workers 4
+
+# Multi-View + Skeletal + DINO Waypoints
+.venv/bin/python interpretability/transcoders/harvest_activations.py \
+    --model gr1_reward_tuned_v1.ckpt \
+    --output_dir activations_granular_multiview_skeleton_dino \
+    --multi_view --use_skeleton --use_dino --workers 4
+
+# 2. Audit (use the same flags as harvest)
 .venv/bin/python interpretability/transcoders/audit_harvest.py \
     --model gr1_reward_tuned_v2.ckpt \
-    --dir activations_granular
+    --dir activations_granular_multiview \
+    --multi_view
 
-# 3. Train CLT
+# 3. Train CLT for that experiment only (set dirs, then run once)
+ACTIVATIONS_DIR=activations_granular_multiview \
+OUTPUT_DIR=transcoder_weights_multiview \
 bash interpretability/transcoders/batch_train.sh
 ```
 
@@ -117,13 +139,16 @@ The dashboard requires a local Dockerized Neuronpedia instance and a proxy bridg
 cd interpretability/neuronpedia
 make webapp-localhost-dev
 
-# 2. Start the engine (Colab)
+# 2. Start the engine (Colab) — flags must match the harvested experiment
 .venv/bin/python interpretability/dashboard/engine.py \
     --repo vedpatwardhan/gr1_pickup_grasp \
-    --meta activations_granular/encoder_L0.json \
-    --model gr1_reward_tuned_v2.ckpt \
-    --transcoders transcoder_weights_residual \
+    --meta activations_granular_multiview_skeleton/encoder_L0.json \
+    --model gr1_reward_tuned_v6.ckpt \
+    --transcoders transcoder_weights_multiview_skeleton \
+    --multi_view --use_skeleton \
     --min-k 10
+
+# DINO experiment: add --use_dino and --attribution_target subgoal (optional)
 
 # 3. Start the Dashboard Proxy (Local)
 # This tunnels requests from the dashboard to the GPU engine using the COLAB_URL
