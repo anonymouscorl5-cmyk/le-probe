@@ -117,7 +117,10 @@ class GoalMapper:
                 clean_sd = {}
                 for k, v in sd.items():
                     clean_key = k.replace("model.", "") if k.startswith("model.") else k
-                    if not clean_key.startswith("sigreg."):
+                    if (
+                        not clean_key.startswith("sigreg.") and
+                        clean_key != "encoder.backbone.embeddings.mask_token"
+                    ):
                         clean_sd[clean_key] = v
                 self.model.load_state_dict(clean_sd, strict=True)
             else:
