@@ -213,6 +213,23 @@ def prepare_pixels_6d(
     raw_pixels = batch["pixels"].to(device)
     actions = batch["action"].to(device)
 
+    # Fused PT cache (cache_fused_dataset.py): pixels are already [..., 4, H, W] and
+    # normalized in SkeletonDataPlugin.tiled_transform_wrapper — no skeletons_raw key.
+    if cfg.use_skeleton and raw_pixels.shape[-3] == 4:
+        if raw_pixels.ndim == 5:
+            pixels = raw_pixels.unsqueeze(0)
+        elif raw_pixels.ndim == 6:
+            pixels = raw_pixels
+        else:
+            raise ValueError(
+                f"Unexpected fused skeleton pixels shape: {tuple(raw_pixels.shape)}"
+            )
+        if pixels.dtype != torch.float32:
+            pixels = pixels.float()
+        if torch.isnan(actions).any():
+            actions = torch.nan_to_num(actions, 0.0)
+        return pixels, actions
+
     raw_skel_1ch = None
     if cfg.use_skeleton:
         raw_skel = batch["skeletons_raw"].to(device)
