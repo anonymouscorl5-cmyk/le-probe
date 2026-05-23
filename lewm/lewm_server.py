@@ -166,7 +166,7 @@ class LEWMInferenceServer:
             )
         else:
             print(
-                f"🌐 Task workspace OFF — right-arm wire gate before LeWM "
+                f"🌐 Task workspace OFF — right-arm norm gate before LeWM "
                 f"({cem_samples} CEM samples). Pass --task-workspace for EE hull."
             )
 

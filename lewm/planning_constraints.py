@@ -1,8 +1,8 @@
 """
 MPC action feasibility checks applied **before** LeWM rollout.
 
-- Default (no --task-workspace): reject CEM samples whose right-arm wire joints
-  (indices 17–20) leave the buffered training envelope (no remap into that box).
+- Default (no --task-workspace): reject CEM samples whose right-arm joints
+  (indices 17–20) leave a buffered envelope in **normalized** [-1, 1] protocol space.
 - With --task-workspace: reject samples whose FK fingertip leaves the fixed hull.
 """
 
@@ -13,14 +13,31 @@ from typing import Optional
 import numpy as np
 import torch
 
-from gr1_protocol import StandardScaler
+from gr1_config import JOINT_LIMITS_MAX, JOINT_LIMITS_MIN
 from lewm.task_workspace import INFEASIBLE_COST, TaskWorkspaceMPCConstraint
 
-# Buffered right-arm wire ranges from pre-polytope LeWM runs (b1b95bf, May 2026).
-# Dataset stats + 20% margin; used for rejection only — never written into actions.
+# Buffered right-arm wire (radian) ranges from pre-polytope LeWM runs (b1b95bf, May 2026).
+# Converted once to protocol [-1, 1] via the same mapping as StandardScaler.unscale_action.
 RIGHT_ARM_WIRE_SLICE = slice(17, 21)
 RIGHT_ARM_WIRE_MIN = np.array([-0.312, -0.098, -0.156, -0.098], dtype=np.float64)
 RIGHT_ARM_WIRE_MAX = np.array([1.172, 0.098, 0.236, 0.098], dtype=np.float64)
+
+
+def _wire_limits_to_norm_bounds(
+    wire_min: np.ndarray, wire_max: np.ndarray, joint_slice: slice
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map radian limits to normalized bounds: wire = (norm + 1) * range/2 + lmin."""
+    lmin = np.asarray(JOINT_LIMITS_MIN[joint_slice], dtype=np.float64)
+    lmax = np.asarray(JOINT_LIMITS_MAX[joint_slice], dtype=np.float64)
+    rng = np.where(lmax - lmin < 1e-6, 1.0, lmax - lmin)
+    norm_lo = 2.0 * (wire_min - lmin) / rng - 1.0
+    norm_hi = 2.0 * (wire_max - lmin) / rng - 1.0
+    return np.minimum(norm_lo, norm_hi), np.maximum(norm_lo, norm_hi)
+
+
+RIGHT_ARM_NORM_MIN, RIGHT_ARM_NORM_MAX = _wire_limits_to_norm_bounds(
+    RIGHT_ARM_WIRE_MIN, RIGHT_ARM_WIRE_MAX, RIGHT_ARM_WIRE_SLICE
+)
 
 # Extra CEM samples when filtering aggressively (no task-workspace gate).
 CEM_NUM_SAMPLES_DEFAULT = 800
@@ -36,32 +53,25 @@ def freeze_and_clamp_actions(
     return torch.clamp(out, -1.0, 1.0)
 
 
-def right_arm_wire_feasible_mask(
-    plan_norm: np.ndarray,
-    scaler: Optional[StandardScaler] = None,
-) -> np.ndarray:
+def right_arm_norm_feasible_mask(plan_norm: np.ndarray) -> np.ndarray:
     """
-    True when every plan step keeps wire joints 17–20 inside RIGHT_ARM_WIRE_*.
+    True when every plan step keeps joints 17–20 inside the buffered norm envelope.
 
-    plan_norm: (N, T, 32) or (N, 32) normalized protocol actions (post clamp).
+    plan_norm: (N, T, 32) or (N, 32) — same normalized protocol space as CEM / LeWM.
+    Bounds per joint are subsets of [-1, 1] derived from RIGHT_ARM_WIRE_* and
+    gr1_config joint limits (see RIGHT_ARM_NORM_MIN / RIGHT_ARM_NORM_MAX).
     """
     plan_norm = np.asarray(plan_norm, dtype=np.float64)
     if plan_norm.ndim == 2:
         plan_norm = plan_norm[:, np.newaxis, :]
 
-    scaler = scaler or StandardScaler()
-    n = plan_norm.shape[0]
-    feasible = np.ones(n, dtype=bool)
+    arm = plan_norm[..., RIGHT_ARM_WIRE_SLICE]  # (N, T, 4)
+    in_range = (arm >= RIGHT_ARM_NORM_MIN) & (arm <= RIGHT_ARM_NORM_MAX)
+    return in_range.all(axis=(1, 2))
 
-    for i in range(n):
-        for t in range(plan_norm.shape[1]):
-            wire = scaler.unscale_action(plan_norm[i, t])
-            arm = wire[RIGHT_ARM_WIRE_SLICE]
-            if np.any(arm < RIGHT_ARM_WIRE_MIN) or np.any(arm > RIGHT_ARM_WIRE_MAX):
-                feasible[i] = False
-                break
 
-    return feasible
+# Back-compat alias
+right_arm_wire_feasible_mask = right_arm_norm_feasible_mask
 
 
 def task_workspace_feasible_mask(

@@ -30,11 +30,10 @@ from lewm.skeleton.encoder import patch_vit_for_skeleton
 from lewm.task_workspace import TaskWorkspaceMPCConstraint, INFEASIBLE_COST
 from lewm.planning_constraints import (
     freeze_and_clamp_actions,
-    right_arm_wire_feasible_mask,
+    right_arm_norm_feasible_mask,
     task_workspace_feasible_mask,
     scatter_infeasible_costs,
 )
-from gr1_protocol import StandardScaler
 from omegaconf import OmegaConf
 import numpy as np
 
@@ -62,7 +61,6 @@ class GoalMapper:
         self.use_skeleton = use_skeleton
         self.use_dino = use_dino
         self.use_task_workspace = use_task_workspace
-        self._action_scaler = StandardScaler()
 
         # 1. Initialize the Model
         if str(model_path).endswith(".pt") or str(model_path).endswith(".ckpt"):
@@ -151,7 +149,7 @@ class GoalMapper:
             dt.transforms.Resize(224, source="pixels", target="pixels"),
         )
 
-        gate = "task_workspace" if use_task_workspace else "right_arm_wire"
+        gate = "task_workspace" if use_task_workspace else "right_arm_norm"
         print(
             f"✅ GoalMapper initialized "
             f"(Skeleton: {use_skeleton}, DINO: {use_dino}, MPC gate: {gate})"
@@ -292,7 +290,7 @@ class GoalMapper:
             actions.view(B * S, -1, actions.size(-1)), self.frozen_pose
         )
 
-        # 5. Feasibility gate (right-arm wire or task workspace) — before any LeWM forward
+        # 5. Feasibility gate (right-arm norm envelope or task workspace) — before LeWM
         feasible_np = self._precheck_plan_feasibility(
             obs_dict, flat_plan_actions
         )  # (B * S,)
@@ -335,6 +333,9 @@ class GoalMapper:
         flat_plan_actions: (B * S, T_horizon, 32) -> returns (B * S,) bool mask.
         """
         plan_np = flat_plan_actions.detach().cpu().numpy()  # (B * S, T_horizon, 32)
+        print(
+            f"plan_np: {plan_np.min()} {plan_np.max()} {plan_np.mean()} {plan_np.std()}"
+        )
 
         if self.use_task_workspace:
             tw_wire32 = obs_dict.get("task_workspace_wire32")
@@ -363,7 +364,7 @@ class GoalMapper:
                 cube_xyz=cube_xyz,
             )
 
-        return right_arm_wire_feasible_mask(plan_np, self._action_scaler)
+        return right_arm_norm_feasible_mask(plan_np)
 
     def _rollout_planning_cost(
         self,
