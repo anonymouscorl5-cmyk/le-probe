@@ -23,6 +23,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from interpretability.lewm_experiment import (
     ExperimentConfig,
+    TraceHook,
     add_experiment_args,
     build_data_plugin,
     build_goal_mapper,
@@ -34,17 +35,7 @@ from interpretability.lewm_experiment import (
     prepare_pixels_6d,
     resolve_dataset_root,
 )
-
-
-class TraceHook:
-    """Native PyTorch hook for surgical activation capture."""
-
-    def __init__(self):
-        self.output = None
-
-    def __call__(self, module, input, output):
-        val = output[0] if isinstance(output, tuple) else output
-        self.output = val.detach().cpu().numpy()
+from interpretability.transcoders.profile_harvest import profile_harvest
 
 
 def harvest_activations(
@@ -197,11 +188,27 @@ if __name__ == "__main__":
         default=3,
         help="Temporal history length (matches training)",
     )
+    parser.add_argument(
+        "--profile_batches",
+        type=int,
+        default=0,
+        help="If >0, run profile_harvest for N batches and exit (no disk harvest)",
+    )
     add_experiment_args(parser, include_cls_only=True)
     args = parser.parse_args()
 
     cfg = config_from_args(args)
     cfg.history_size = args.history_size
+
+    if args.profile_batches > 0:
+        profile_harvest(
+            args.model,
+            args.dataset,
+            cfg,
+            num_batches=args.profile_batches,
+            num_workers=args.workers,
+        )
+        raise SystemExit(0)
 
     harvest_activations(
         model_path=args.model,

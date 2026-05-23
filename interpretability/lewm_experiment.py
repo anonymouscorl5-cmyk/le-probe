@@ -11,8 +11,13 @@ import argparse
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lewm.goal_mapper import GoalMapper
+from lewm.lewm_data_plugin import LEWMDataPlugin
+from lewm.skeleton.data import SkeletonDataPlugin
 
 VIEW_NAMES = [
     "world_center",
@@ -24,6 +29,17 @@ VIEW_NAMES = [
 
 PATCHES_PER_FRAME = 257  # CLS + 16x16
 DEFAULT_HISTORY_SIZE = 3
+
+
+class TraceHook:
+    """Capture activations on GPU; export to CPU after forward (avoids per-layer sync)."""
+
+    def __init__(self):
+        self.output = None
+
+    def __call__(self, module, input, output):
+        val = output[0] if isinstance(output, tuple) else output
+        self.output = val.detach()
 
 
 @dataclass
@@ -133,8 +149,6 @@ def config_from_args(args: argparse.Namespace) -> ExperimentConfig:
 
 def resolve_dataset_root(dataset_repo: str) -> str:
     try:
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
         ds = LeRobotDataset(dataset_repo)
         return str(ds.root)
     except Exception:
@@ -146,8 +160,6 @@ def build_goal_mapper(
     dataset_root: str,
     cfg: ExperimentConfig,
 ):
-    from lewm.goal_mapper import GoalMapper
-
     return GoalMapper(
         model_path=model_path,
         dataset_root=dataset_root,
@@ -170,8 +182,6 @@ def data_keys_to_load(cfg: ExperimentConfig) -> list:
 def build_data_plugin(dataset_repo: str, cfg: ExperimentConfig, num_steps: int):
     keys = data_keys_to_load(cfg)
     if cfg.use_skeleton:
-        from lewm.skeleton.data import SkeletonDataPlugin
-
         plugin = SkeletonDataPlugin(
             repo_id=dataset_repo,
             keys_to_load=keys,
@@ -179,8 +189,6 @@ def build_data_plugin(dataset_repo: str, cfg: ExperimentConfig, num_steps: int):
             use_multi_view=cfg.multi_view,
         )
     else:
-        from lewm.lewm_data_plugin import LEWMDataPlugin
-
         plugin = LEWMDataPlugin(
             repo_id=dataset_repo,
             keys_to_load=keys,
@@ -286,9 +294,15 @@ def flatten_activation(
     acts,
     layer_id: str,
     cfg: ExperimentConfig,
-) -> "np.ndarray":
+) -> np.ndarray:
     """Flatten hook output; optional CLS-only for encoder layers."""
-    import numpy as np
+    if torch.is_tensor(acts):
+        t = acts
+        if t.ndim == 3 and cfg.cls_only and layer_id.startswith("encoder"):
+            t = t[:, 0, :]
+        elif t.ndim != 2:
+            t = t.reshape(-1, t.shape[-1])
+        return t.detach().cpu().numpy().astype(np.float16, copy=False)
 
     if acts.ndim == 2:
         flat = acts
