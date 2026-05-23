@@ -284,9 +284,7 @@ def forward_harvest(
 
     if cfg.use_dino and batch is not None and "dino_anchor" in batch:
         phi = batch["dino_anchor"].to(pixels.device)
-        B, T, _ = phi.shape
-        phi_flat = phi.reshape(B * T, -1)
-        model.project_dino(phi_flat)
+        model.project_dino(phi)
         if "phase_idx" in batch:
             model.predict_subgoal(info["emb"], batch["phase_idx"].to(pixels.device))
 
@@ -302,7 +300,7 @@ def ghost_trace_batch(
     actions = torch.zeros(B, T, 32, device=device)
     extra: Dict[str, torch.Tensor] = {}
     if cfg.use_dino:
-        extra["dino_anchor"] = torch.randn(B, T, 384, device=device)
+        extra["dino_anchor"] = torch.randn(B, T, V, 384, device=device)
         extra["phase_idx"] = torch.zeros(B, T, 1, device=device)
     return pixels, actions, extra if extra else None
 

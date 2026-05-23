@@ -18,6 +18,14 @@ from tqdm import tqdm
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+REPO_DIR = Path(__file__).resolve().parents[2]
+if str(REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_DIR))
+from lewm.skeleton.dino_constants import (  # noqa: E402
+    validate_dino_waypoints,
+    zeros_dino_waypoints,
+)
+
 
 def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
     # Dynamically resolve dataset path using LeRobot's own dataset engine or bust
@@ -130,9 +138,11 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
         # 2. Package DINO Waypoint Anchors if pre-computed
         dino_pt_path = dataset_path / f"cache_dino/chunk-000/file-{ep:03d}_dino.pt"
         if dino_pt_path.exists():
-            dino_waypoints = torch.load(dino_pt_path)
+            dino_waypoints = validate_dino_waypoints(
+                torch.load(dino_pt_path, map_location="cpu")
+            )
         else:
-            dino_waypoints = torch.zeros((4, 384))
+            dino_waypoints = zeros_dino_waypoints()
             print(f"⚠️ DINO prior missing for Ep {ep}. Padded with zeros.")
 
         # Pack into serialized dict
@@ -140,7 +150,7 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
             "pixels": stacked_pixels,  # uint8 [32, 5, 4, 224, 224]
             "state": state_tensor,  # float [32, D_state]
             "action": action_tensor,  # float [32, D_action]
-            "dino_waypoints": dino_waypoints,  # float [4, 384] pre-computed anchors!
+            "dino_waypoints": dino_waypoints,  # float [4, 5, 384] multi-view anchors
         }
 
         # Save to disk

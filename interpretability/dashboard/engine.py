@@ -203,9 +203,7 @@ class LeWMAttributor:
                 phase = torch.zeros(
                     phi.shape[0], phi.shape[1], 1, device=phi.device, dtype=phi.dtype
                 )
-            B, T, _ = phi.shape
-            phi_flat = phi.reshape(B * T, -1)
-            z_target = self.model.project_dino(phi_flat).view(B, T, -1)
+            z_target = self.model.project_dino(phi)
             z_pred = self.model.predict_subgoal(info["emb"], phase)
             return -(z_pred - z_target.detach()).pow(2).mean()
 

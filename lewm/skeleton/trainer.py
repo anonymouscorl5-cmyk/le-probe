@@ -88,18 +88,14 @@ def compute_subgoal_waypoint_loss(self, batch, cfg, emb):
     Decoupled utility to compute visual waypoint guidance (HWM) using pre-cached DINOv3 anchors
     with bidirectional visual alignment to ensure high-fidelity latent representations.
     """
-    phi_dino = batch["dino_anchor"]  # Shape: [B, T, 384]
-    B, T, D_dino = phi_dino.shape
+    phi_dino = batch["dino_anchor"]  # [B, T, V, 384]
+    B, T = phi_dino.shape[:2]
     D = emb.shape[-1]
 
-    # Flatten for projection MLP
-    phi_dino_flat = rearrange(phi_dino, "b t d -> (b t) d")
-
-    # Trainable MLP Projection aligner & High-Level Predictor path
-    # NOTE: z_subgoal_target is projected from frozen DINOv3 features
-    z_subgoal_target = rearrange(
-        self.model.project_dino(phi_dino_flat), "(b t) d -> b t d", b=B, t=T
-    )
+    # Per-view DINO projection, aggregated over cameras (matches fused multi-view emb)
+    z_subgoal_target = self.model.project_dino(phi_dino, aggregate_views=True)
+    if z_subgoal_target.dim() == 2:
+        z_subgoal_target = z_subgoal_target.view(B, T, D)
     z_subgoal_pred = self.model.predict_subgoal(emb, batch["phase_idx"])  # [B, T, D]
 
     # 1. Subgoal Prediction Loss (for HWMPredictor)

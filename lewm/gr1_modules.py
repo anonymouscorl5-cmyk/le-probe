@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from jepa import JEPA
+from lewm.skeleton.dino_constants import DINO_DIM, num_dino_views
 
 
 class MultiViewJEPA(JEPA):
@@ -34,6 +35,7 @@ class MultiViewJEPA(JEPA):
     ):
         super().__init__(encoder, predictor, action_encoder, projector, pred_proj)
         self.use_dino = use_dino
+        self.dino_dim = dino_dim
 
         if use_dino:
             # 1. High-Level Waypoint Latent Predictor (Vector Reward Head)
@@ -87,14 +89,30 @@ class MultiViewJEPA(JEPA):
             return rearrange(subgoal_flat, "(b t) d -> b t d", b=B, t=T)
         return subgoal_flat
 
-    def project_dino(self, phi_dino):
+    def project_dino(self, phi_dino, aggregate_views: bool = True):
         """
-        Projects frozen DINOv3 visual embeddings down into the world model's latent space.
-        phi_dino: (B, T, 384) or (B, 384)
+        Projects frozen DINOv3 embeddings into latent space.
+
+        Input must be (..., V, 384) with V = num_dino_views(); per-view projection
+        then mean over views when aggregate_views=True.
         """
         if not self.use_dino:
             raise RuntimeError("project_dino requires use_dino=True (use --use_dino)")
-        return self.dino_projector(phi_dino)
+
+        n_views = num_dino_views()
+        if phi_dino.shape[-1] != self.dino_dim or phi_dino.shape[-2] != n_views:
+            raise ValueError(
+                f"Expected dino_anchor shape (..., {n_views}, {self.dino_dim}), "
+                f"got {tuple(phi_dino.shape)}"
+            )
+
+        lead = phi_dino.shape[:-2]
+        flat = rearrange(phi_dino, "... v d -> (...) d")
+        proj = self.dino_projector(flat)
+        proj = proj.view(*lead, n_views, -1)
+        if aggregate_views:
+            return proj.mean(dim=-2)
+        return proj
 
     def encode(self, info):
         """

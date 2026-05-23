@@ -14,6 +14,12 @@ from tqdm import tqdm
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+# Repo root for shared DINO layout constants
+REPO_DIR = Path(__file__).resolve().parents[2]
+if str(REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_DIR))
+from lewm.skeleton.dino_constants import dino_waypoints_shape  # noqa: E402
+
 
 def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
     # Dynamically resolve dataset path using LeRobot's own dataset engine or bust
@@ -43,10 +49,12 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
         try:
             tensor = torch.load(dino_path, map_location="cpu")
 
-            # 1. Shape Audit
-            if tensor.shape != (4, 384):
+            expected = dino_waypoints_shape()
+            if tensor.shape != expected:
                 print(
-                    f"❌ Shape mismatch in {dino_path.name}: Expected (4, 384), got {tensor.shape}"
+                    f"❌ Shape mismatch in {dino_path.name}: "
+                    f"Expected {expected}, got {tensor.shape}. "
+                    "Re-run generate_dino_priors.py."
                 )
                 dino_failures += 1
                 continue
@@ -181,10 +189,11 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
                     )
                     fused_failures += 1
 
-            # dino_waypoints shape must be exactly [4, 384]
-            if dino_waypoints.shape != (4, 384):
+            if dino_waypoints.shape != dino_waypoints_shape():
                 print(
-                    f"❌ DINO waypoints shape mismatch in {fused_path.name}: Expected (4, 384), got {dino_waypoints.shape}"
+                    f"❌ DINO waypoints shape mismatch in {fused_path.name}: "
+                    f"Expected {dino_waypoints_shape()}, got {dino_waypoints.shape}. "
+                    "Re-run generate_dino_priors.py and cache_fused_dataset.py."
                 )
                 fused_failures += 1
 

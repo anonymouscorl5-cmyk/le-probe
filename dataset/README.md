@@ -76,6 +76,7 @@ The following datasets have been curated and uploaded to the Hugging Face Hub:
 
 - In order to improve the model's understanding of the global trajectory during the episode beyond the 3-frame default window, we use DINOv3 to generate waypoints.
 - The goal is to have a separate waypoint for the target position of each of the 4 sub-phases during an episode.
+- **Multi-view:** `generate_dino_priors.py` caches frozen DINO embeddings at phase checkpoints (frames 8, 16, 24, 32) for **all five cameras** (`world_center`, `world_left`, `world_right`, `world_top`, `world_wrist`) as a `[4, 5, 384]` tensor per episode. Training projects each view with a shared `DINOProjector` and averages over views to match the fused multi-view JEPA latent.
 - Here's an example for the DINOv3 representation of the full episode, although we only rely on 4 waypoints out of a 32-frame episode.
 
 <div align="center">

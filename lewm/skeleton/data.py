@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from lewm.lewm_data_plugin import LEWMDataPlugin
+from lewm.skeleton.dino_constants import validate_dino_waypoints, zeros_dino_waypoints
 
 
 class SkeletonDataPlugin(LEWMDataPlugin):
@@ -201,11 +202,11 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                 checkpoint_frame_idx = (phase_idx + 1) * 8 - 1
                 is_checkpoint = clamped_steps == checkpoint_frame_idx
 
-                # Fetch pre-computed DINO anchors
-                dino_waypoints = self._last_loaded_data.get(
-                    "dino_waypoints", torch.zeros((4, 384))
+                raw_dino = self._last_loaded_data.get(
+                    "dino_waypoints", zeros_dino_waypoints(len(self.base_views))
                 )
-                phase_anchors = dino_waypoints[phase_idx]
+                dino_waypoints = validate_dino_waypoints(raw_dino)
+                phase_anchors = dino_waypoints[phase_idx]  # [T, V, 384]
 
                 batch = {
                     "observation.state": self._last_loaded_data["state"][clamped_steps],
@@ -218,7 +219,7 @@ class SkeletonDataPlugin(LEWMDataPlugin):
                         -1
                     ),  # Shape [T, 1]
                     "is_checkpoint": is_checkpoint,  # Shape [T]
-                    "dino_anchor": phase_anchors,  # Shape [T, 384]
+                    "dino_anchor": phase_anchors,  # Shape [T, V, 384]
                 }
 
                 if self.has_progress:
@@ -261,10 +262,12 @@ class SkeletonDataPlugin(LEWMDataPlugin):
             self.root / f"cache_dino/chunk-000/file-{episode_idx:03d}_dino.pt"
         )
         if dino_pt_path.exists():
-            dino_waypoints = torch.load(dino_pt_path, map_location="cpu")
+            dino_waypoints = validate_dino_waypoints(
+                torch.load(dino_pt_path, map_location="cpu")
+            )
         else:
-            dino_waypoints = torch.zeros((4, 384))
-        phase_anchors = dino_waypoints[phase_idx]
+            dino_waypoints = zeros_dino_waypoints(len(self.base_views))
+        phase_anchors = dino_waypoints[phase_idx]  # [T, V, 384]
 
         # Attach phase and anchor tracking arrays
         batch["phase_idx"] = phase_idx.unsqueeze(-1)
