@@ -105,6 +105,7 @@ class GoalMapper:
                     pred_proj=GR1MLP(
                         input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048
                     ),
+                    use_dino=use_dino,
                 )
                 self.model.reward_head = RewardPredictor(
                     input_dim=embed_dim, hidden_dim=512
@@ -137,11 +138,10 @@ class GoalMapper:
             dt.transforms.Resize(224, source="pixels", target="pixels"),
         )
 
-        # print(
-        #     "✅ GoalMapper initialized "
-        #     f"(Skeleton: {use_skeleton}, DINO: {self.use_dino})"
-        # )
-        print(f"✅ GoalMapper initialized (Skeleton: {use_skeleton})")
+        print(
+            f"✅ GoalMapper initialized "
+            f"(Skeleton: {use_skeleton}, DINO: {use_dino})"
+        )
 
     def set_goal(self, episode_idx, frame_idx):
         """Encodes a specific frame from the dataset as the target goal."""

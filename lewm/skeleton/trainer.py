@@ -286,6 +286,7 @@ def run(cfg):
         projector=GR1MLP(input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048),
         pred_proj=GR1MLP(input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048),
         embed_dim=embed_dim,
+        use_dino=bool(cfg.get("use_dino", False)),
     )
     world_model.reward_head = RewardPredictor(input_dim=embed_dim, hidden_dim=512)
 

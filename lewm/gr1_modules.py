@@ -30,24 +30,27 @@ class MultiViewJEPA(JEPA):
         pred_proj=None,
         embed_dim=192,
         dino_dim=384,
+        use_dino: bool = True,
     ):
         super().__init__(encoder, predictor, action_encoder, projector, pred_proj)
+        self.use_dino = use_dino
 
-        # 1. High-Level Waypoint Latent Predictor (Vector Reward Head)
-        # Input: current latent z_t (embed_dim) + phase one-hot (4)
-        self.high_level_predictor = HWMPredictor(
-            input_dim=embed_dim + 4,
-            output_dim=embed_dim,
-            hidden_dim=512,
-        )
+        if use_dino:
+            # 1. High-Level Waypoint Latent Predictor (Vector Reward Head)
+            # Input: current latent z_t (embed_dim) + phase one-hot (4)
+            self.high_level_predictor = HWMPredictor(
+                input_dim=embed_dim + 4,
+                output_dim=embed_dim,
+                hidden_dim=512,
+            )
 
-        # 2. Trainable DINO Latent Projection MLP
-        # Input: frozen DINOv3 feature dimension (dino_dim)
-        self.dino_projector = DINOProjector(
-            input_dim=dino_dim,
-            output_dim=embed_dim,
-            hidden_dim=512,
-        )
+            # 2. Trainable DINO Latent Projection MLP
+            # Input: frozen DINOv3 feature dimension (dino_dim)
+            self.dino_projector = DINOProjector(
+                input_dim=dino_dim,
+                output_dim=embed_dim,
+                hidden_dim=512,
+            )
 
     def predict_subgoal(self, z_t, phase_idx):
         """
@@ -55,6 +58,10 @@ class MultiViewJEPA(JEPA):
         z_t: (B, D) or (B, T, D)
         phase_idx: (B, 1) or (B, T, 1)
         """
+        if not self.use_dino:
+            raise RuntimeError(
+                "predict_subgoal requires use_dino=True (use --use_dino)"
+            )
         device = z_t.device
 
         # Keep dims clean if sequence dimension is present
@@ -85,6 +92,8 @@ class MultiViewJEPA(JEPA):
         Projects frozen DINOv3 visual embeddings down into the world model's latent space.
         phi_dino: (B, T, 384) or (B, 384)
         """
+        if not self.use_dino:
+            raise RuntimeError("project_dino requires use_dino=True (use --use_dino)")
         return self.dino_projector(phi_dino)
 
     def encode(self, info):
