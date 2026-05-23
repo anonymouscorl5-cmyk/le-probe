@@ -28,6 +28,13 @@ from lewm.train_lewm import RewardPredictor
 from lewm.multi_view_encoder import get_multi_view_encoder
 from lewm.skeleton.encoder import patch_vit_for_skeleton
 from lewm.task_workspace import TaskWorkspaceMPCConstraint, INFEASIBLE_COST
+from lewm.planning_constraints import (
+    freeze_and_clamp_actions,
+    right_arm_wire_feasible_mask,
+    task_workspace_feasible_mask,
+    scatter_infeasible_costs,
+)
+from gr1_protocol import StandardScaler
 from omegaconf import OmegaConf
 import numpy as np
 
@@ -46,6 +53,7 @@ class GoalMapper:
         num_views=1,
         use_skeleton=False,
         use_dino=False,
+        use_task_workspace=False,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dataset_root = Path(dataset_root) if dataset_root is not None else None
@@ -53,6 +61,8 @@ class GoalMapper:
         self.num_views = num_views
         self.use_skeleton = use_skeleton
         self.use_dino = use_dino
+        self.use_task_workspace = use_task_workspace
+        self._action_scaler = StandardScaler()
 
         # 1. Initialize the Model
         if str(model_path).endswith(".pt") or str(model_path).endswith(".ckpt"):
@@ -132,7 +142,7 @@ class GoalMapper:
         self.goal_latent = None
         self.frozen_pose = None
 
-        self._task_ws = TaskWorkspaceMPCConstraint()
+        self._task_ws = TaskWorkspaceMPCConstraint() if use_task_workspace else None
 
         # 2. Image Transform (Standard LeWM 224x224)
         imagenet_stats = dt.dataset_stats.ImageNet
@@ -141,9 +151,10 @@ class GoalMapper:
             dt.transforms.Resize(224, source="pixels", target="pixels"),
         )
 
+        gate = "task_workspace" if use_task_workspace else "right_arm_wire"
         print(
             f"✅ GoalMapper initialized "
-            f"(Skeleton: {use_skeleton}, DINO: {use_dino})"
+            f"(Skeleton: {use_skeleton}, DINO: {use_dino}, MPC gate: {gate})"
         )
 
     def set_goal(self, episode_idx, frame_idx):
@@ -258,22 +269,16 @@ class GoalMapper:
             # (B, S, 1, T_history, V, C, H, W) -> (B, S, T_history, V, C, H, W)
             pixels_input = pixels_input.squeeze(2)
         if actions.ndim > 4:
-            # (1, B, S, T_history, 32) -> (B, S, T_history, 32)
+            # (1, B, S, T_horizon, 32) -> (B, S, T_horizon, 32)
             actions = actions.squeeze(0)
 
-        # 2. Optimized Encoding
-        # All samples S share the same history. We encode the batch once.
-        info = self.model.encode({"pixels": pixels_input[:, 0]})
-        init_emb = info["emb"]  # (B, T_history, 192)
-        curr_emb = init_emb.repeat_interleave(S, dim=0)  # (B * S, T_history, 192)
-
-        # 3. History Actions Normalization
+        # 3. History actions (CEM expands sample dim S; history is shared per batch row)
         hist_actions = obs_dict.get("action", None)  # (B, S, T_history, 32)
-
+        t_hist = 3
+        if hist_actions is not None and hist_actions.ndim >= 3:
+            t_hist = int(hist_actions.shape[-2])
         if hist_actions is None:
-            hist_actions = torch.zeros(B, S, init_emb.size(1), actions.size(-1)).to(
-                self.device
-            )
+            hist_actions = torch.zeros(B, S, t_hist, actions.size(-1)).to(self.device)
         if hist_actions.ndim > 4:
             # (B, S, 1, T_history, 32) -> (B, S, T_history, 32)
             hist_actions = hist_actions.squeeze(2)
@@ -281,218 +286,204 @@ class GoalMapper:
         # (B, S, T_history, 32) -> (B * S, T_history, 32)
         flat_hist_actions = hist_actions[:, 0].repeat_interleave(S, dim=0)
 
-        # 4. Prepare Plan Actions (B * S, T, D) with MANIFOLD SQUASHING
-        # flat_hist_actions: (B * S, T_history, 32), flat_plan_actions: (B * S, T_horizon, 32)
-        # all_actions: (B * S, T, 32)
-        flat_plan_actions = self.manifold_squash(
-            actions.view(B * S, -1, actions.size(-1))
+        # 4. Plan actions: freeze 0–15, clamp [-1, 1] — no joint remap
+        # actions: (B, S, T_horizon, 32) -> flat_plan_actions: (B * S, T_horizon, 32)
+        flat_plan_actions = freeze_and_clamp_actions(
+            actions.view(B * S, -1, actions.size(-1)), self.frozen_pose
         )
+
+        # 5. Feasibility gate (right-arm wire or task workspace) — before any LeWM forward
+        feasible_np = self._precheck_plan_feasibility(
+            obs_dict, flat_plan_actions
+        )  # (B * S,)
+        if not feasible_np.any():
+            return torch.full(
+                (B, S), INFEASIBLE_COST, device=self.device, dtype=torch.float32
+            )
+
+        f_idx = torch.from_numpy(np.nonzero(feasible_np)[0]).to(
+            device=self.device, dtype=torch.long
+        )  # (K,) indices into flattened B * S
+        dist_feas = self._rollout_planning_cost(
+            obs_dict,
+            pixels_input,
+            flat_hist_actions[f_idx],
+            flat_plan_actions[f_idx],
+            B,
+            S,
+            f_idx,
+        )
+        if feasible_np.all():
+            return dist_feas.view(B, S)  # (K,) == (B * S,) when all feasible
+
+        # Scatter feasible costs back; infeasible slots stay INFEASIBLE_COST
+        dist = scatter_infeasible_costs(
+            B * S,
+            feasible_np,
+            dist_feas,
+            device=self.device,
+            dtype=dist_feas.dtype,
+        )  # (B * S,)
+        return dist.view(B, S)
+
+    def _precheck_plan_feasibility(
+        self, obs_dict, flat_plan_actions: torch.Tensor
+    ) -> np.ndarray:
+        """
+        Reject infeasible CEM samples before any LeWM forward pass.
+
+        flat_plan_actions: (B * S, T_horizon, 32) -> returns (B * S,) bool mask.
+        """
+        plan_np = flat_plan_actions.detach().cpu().numpy()  # (B * S, T_horizon, 32)
+
+        if self.use_task_workspace:
+            tw_wire32 = obs_dict.get("task_workspace_wire32")
+            tw_H = obs_dict.get("task_workspace_H")
+            if tw_wire32 is None or tw_H is None or self._task_ws is None:
+                return np.ones(plan_np.shape[0], dtype=bool)
+
+            wire32 = np.asarray(tw_wire32[0, 0], dtype=np.float64).reshape(-1)
+            final_only = obs_dict.get("task_workspace_check_final_only", True)
+            if isinstance(final_only, torch.Tensor):
+                final_only = bool(final_only.reshape(-1)[0].item())
+            else:
+                final_only = bool(np.asarray(final_only).reshape(-1)[0])
+
+            cube_xyz = None
+            tw_cube = obs_dict.get("task_workspace_cube_xyz")
+            if tw_cube is not None:
+                cube_xyz = np.asarray(tw_cube[0, 0], dtype=np.float64).reshape(3)
+
+            self._task_ws.set_baseline_from_wire32(wire32, cube_xyz=cube_xyz)
+            return task_workspace_feasible_mask(
+                self._task_ws,
+                wire32,
+                plan_np,
+                check_final_only=final_only,
+                cube_xyz=cube_xyz,
+            )
+
+        return right_arm_wire_feasible_mask(plan_np, self._action_scaler)
+
+    def _rollout_planning_cost(
+        self,
+        obs_dict,
+        pixels_input: torch.Tensor,
+        flat_hist_actions: torch.Tensor,
+        flat_plan_actions: torch.Tensor,
+        B: int,
+        S: int,
+        flat_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        LeWM rollout + reward cost for feasible CEM samples only.
+
+        When K < B * S, flat_* tensors are indexed by f_idx; encode uses unique batch rows.
+        """
+        K = flat_plan_actions.shape[0]
+        batch_ids = flat_indices // S  # (K,) env row per feasible sample
+
+        # Encode once per unique batch row (history shared across S for that row)
+        info = self.model.encode({"pixels": pixels_input[batch_ids, 0]})
+        init_emb = info["emb"]  # (K, T_history, 192)
+        curr_emb = init_emb  # grows along time as rollout proceeds
+
+        # flat_hist: (K, T_history, 32), flat_plan: (K, T_horizon, 32)
+        # all_actions: (K, T_history + T_horizon, 32)
         all_actions = torch.cat([flat_hist_actions, flat_plan_actions], dim=1)
 
-        # 5. Sliding Window Rollout (Flattened BS space)
         pred_latents = []
         T_history = flat_hist_actions.size(1)
         T_horizon = flat_plan_actions.size(1)
-        for T in range(T_horizon):
-            emb_window = curr_emb[:, -T_history:, :]  # (B, T_history, 192)
-            act_window = all_actions[:, T : T + T_history, :]  # (B * S, T_history, 32)
-            act_emb = self.model.action_encoder(act_window)  # (B * S, T_history, 192)
-            pred_emb = self.model.predict(
-                emb_window, act_emb
-            )  # (B * S, T_history, 192)
-            last_pred = pred_emb[:, -1:, :]  # (B * S, 1, 192)
+        for _T in range(T_horizon):
+            emb_window = curr_emb[:, -T_history:, :]  # (K, T_history, 192)
+            act_window = all_actions[:, _T : _T + T_history, :]  # (K, T_history, 32)
+            act_emb = self.model.action_encoder(act_window)  # (K, T_history, 192)
+            pred_emb = self.model.predict(emb_window, act_emb)  # (K, T_history, 192)
+            last_pred = pred_emb[:, -1:, :]  # (K, 1, 192)
             curr_emb = torch.cat(
                 [curr_emb, last_pred], dim=1
-            )  # (B * S, curr_emb.size(1) + 1, 192)
+            )  # (K, T_history + step, 192)
             pred_latents.append(last_pred)
 
-        # 6. Optimized Planning Cost Logic
-        all_preds = torch.cat(pred_latents, dim=1)  # (B * S, T_horizon, 192)
+        all_preds = torch.cat(pred_latents, dim=1)  # (K, T_horizon, 192)
 
-        # 7. Smart Cost Calculation
-        # (B * S, T_horizon)
+        # Reward head cost — (K, T_horizon) then reduced
         reward_pred = self.model.reward_head(all_preds).squeeze(-1)
         reward_weight = 50.0
-        dist = (10.0 - reward_pred) * reward_weight  # (B * S, T_horizon)
+        dist = (10.0 - reward_pred) * reward_weight  # (K, T_horizon)
 
         if self.use_dino:
-            # Hierarchical Macro Subgoal Planning Cost
-            # A. Extract current phase index
-            phase_idx = obs_dict.get("phase_idx", None)
+            phase_idx = obs_dict.get("phase_idx")
             if phase_idx is None:
-                # Default to Phase 0
                 phase_idx = torch.zeros((B, 1), device=self.device)
             else:
                 if not isinstance(phase_idx, torch.Tensor):
                     phase_idx = torch.tensor(phase_idx, device=self.device)
-
-                # Flatten first
                 phase_idx = phase_idx.flatten()
-
-                # Bulletproof slice/repeat to exactly match B
                 if phase_idx.numel() == B * S:
-                    # CEM solver repeats observations using repeat_interleave(S, dim=0)
                     phase_idx = phase_idx[::S].view(B, 1).to(self.device)
                 elif phase_idx.numel() >= B:
                     phase_idx = phase_idx[:B].view(B, 1).to(self.device)
                 else:
                     phase_idx = phase_idx[0].repeat(B).view(B, 1).to(self.device)
+            phase_idx = phase_idx[batch_ids].view(K, 1)  # (K, 1)
 
-            # B. Query High-Level Predictor for Macro Subgoal Coordinate
-            curr_state = init_emb[:, -1, :]  # (B, 192)
-            subgoal = self.model.predict_subgoal(curr_state, phase_idx)  # (B, 192)
-            subgoal_target = subgoal.repeat_interleave(S, dim=0)  # (B * S, 192)
-
-            # C. Euclidean distance between rollout states and the subgoal
-            # Final-step distance (Targeting the checkpoint bottleneck at step H)
-            final_dist = torch.norm(
-                all_preds[:, -1, :] - subgoal_target, p=2, dim=-1
-            )  # (B * S,)
-
-            # Step-by-step distance (Ensuring smooth semantic progress)
+            curr_state = init_emb[:, -1, :]  # (K, 192)
+            subgoal = self.model.predict_subgoal(curr_state, phase_idx)  # (K, 192)
+            final_dist = torch.norm(all_preds[:, -1, :] - subgoal, p=2, dim=-1)  # (K,)
             step_dists = torch.norm(
-                all_preds - subgoal_target.unsqueeze(1), p=2, dim=-1
-            )  # (B * S, T_horizon)
-
-            # Combine costs (B * S, T_horizon)
-            # We map final_dist across the sequence dim to match the base dist structure
+                all_preds - subgoal.unsqueeze(1), p=2, dim=-1
+            )  # (K, T_horizon)
             subgoal_cost = final_dist.unsqueeze(-1) + 0.1 * step_dists
-            dist = dist + subgoal_cost * 1.0  # Weight the visual subgoal guidance
-            dist = dist.mean(dim=-1)  # (B * S,)
+            dist = dist + subgoal_cost
+            dist = dist.mean(dim=-1)  # (K,)
         else:
-            # Standard Flat Goal Planning Cost
-            # repeat (current B * S) // (number of unique goals) times.
             num_goals = self.goal_latent.view(-1, self.goal_latent.size(-1)).size(0)
-            goal_target = self.goal_latent.view(num_goals, 1, -1).to(all_preds.dtype)
+            expansion_factor = max(1, (B * S) // num_goals)
+            flat_idx_np = flat_indices.detach().cpu().numpy()
+            goal_ids = np.minimum(flat_idx_np // expansion_factor, num_goals - 1)
+            goal_target = (
+                self.goal_latent.view(num_goals, -1)[goal_ids]
+                .unsqueeze(1)
+                .to(all_preds.dtype)
+            )  # (K, 1, 192)
+            dists_to_latents = torch.cdist(all_preds, goal_target).squeeze(
+                -1
+            )  # (K, T_horizon)
+            min_latent_dist = dists_to_latents.min(dim=-1).values.unsqueeze(
+                -1
+            )  # (K, 1)
+            dist = dist + min_latent_dist * 0.5
+            dist = dist.mean(dim=-1)  # (K,)
 
-            expansion_factor = (B * S) // num_goals
-            if expansion_factor > 1:
-                goal_target = goal_target.repeat_interleave(expansion_factor, dim=0)
-            # (B * S, 1, 192) or (N_goals, 1, 192) if no expansion needed
-
-            # (B * S, T_horizon)
-            dists_to_latents = torch.cdist(all_preds, goal_target).squeeze(-1)
-            # (B * S, 1)
-            min_latent_dist_per_step = dists_to_latents.min(dim=-1).values.unsqueeze(-1)
-
-            # Global Compass Weight: Increase to 0.5 to pull the robot out of pose-saturation.
-            dist = dist + min_latent_dist_per_step * 0.5  # (B * S, T_horizon)
-            dist = dist.mean(dim=-1)  # (B * S,)
-
-        # 8. Smoothness Penalty
-        last_real_action = flat_hist_actions[:, -1, :]  # (B * S, 32)
+        # Smoothness penalty on the actual (un-remapped) plan actions
+        last_real = flat_hist_actions[:, -1, :]  # (K, 32)
         jump_start = torch.mean(
-            (flat_plan_actions[:, 0, :] - last_real_action) ** 2, dim=-1
-        )  # (B * S,)
-
-        # Delta within the Plan Horizon (B * S, T_horizon - 1, D)
+            (flat_plan_actions[:, 0, :] - last_real) ** 2, dim=-1
+        )  # (K,)
         if T_horizon > 1:
             jitters = torch.mean(
                 (flat_plan_actions[:, 1:, :] - flat_plan_actions[:, :-1, :]) ** 2,
                 dim=-1,
-            )  # (B * S, T_horizon - 1)
-            jump_internal = torch.mean(jitters, dim=1)
+            )  # (K, T_horizon - 1)
+            jump_internal = torch.mean(jitters, dim=1)  # (K,)
         else:
             jump_internal = 0.0
-
-        smoothness_weight = 100.0
-        dist = dist + (jump_start + jump_internal) * smoothness_weight  # (B,)
-
-        dist = self._apply_task_workspace_gate(obs_dict, flat_plan_actions, dist)
-
-        return dist.view(B, S)
+        dist = dist + (jump_start + jump_internal) * 100.0  # (K,)
+        return dist
 
     def predict(self, *args, **kwargs):
         """Proxy to the internal World Model's prediction logic."""
         return self.model.predict(*args, **kwargs)
 
-    def _apply_task_workspace_gate(
-        self, obs_dict, flat_plan_actions, dist: torch.Tensor
-    ):
-        """Only samples with final-step EE inside fixed task hull compete on reward."""
-        tw_H = obs_dict.get("task_workspace_H")
-        tw_d = obs_dict.get("task_workspace_d")
-        tw_wire32 = obs_dict.get("task_workspace_wire32")
-        tw_cube = obs_dict.get("task_workspace_cube_xyz")
-        if tw_H is None or tw_d is None or tw_wire32 is None:
-            return dist
-        cube_xyz = None
-        if tw_cube is not None:
-            if isinstance(tw_cube, torch.Tensor):
-                cube_xyz = tw_cube[0, 0].detach().cpu().numpy().reshape(3)
-            else:
-                cube_xyz = np.asarray(tw_cube[0, 0], dtype=np.float64).reshape(3)
-
-        if isinstance(tw_H, torch.Tensor):
-            H = tw_H[0, 0].detach().cpu().numpy()
-            d = tw_d[0, 0].detach().cpu().numpy().reshape(-1)
-            wire32 = tw_wire32[0, 0].detach().cpu().numpy()
-        else:
-            H = np.asarray(tw_H[0, 0], dtype=np.float64)
-            d = np.asarray(tw_d[0, 0], dtype=np.float64).reshape(-1)
-            wire32 = np.asarray(tw_wire32[0, 0], dtype=np.float64)
-
-        plan_np = flat_plan_actions.detach().cpu().numpy()
-        eps = self._task_ws.feasibility_eps
-        final_only = obs_dict.get("task_workspace_check_final_only", True)
-        if isinstance(final_only, torch.Tensor):
-            final_only = bool(final_only.reshape(-1)[0].item())
-        elif isinstance(final_only, np.ndarray):
-            final_only = bool(np.asarray(final_only).reshape(-1)[0])
-        else:
-            final_only = bool(final_only)
-
-        n_total = int(plan_np.shape[0])
-        print(
-            f"[FK_DEBUG/gate] obs shapes H={np.asarray(tw_H).shape} "
-            f"d={np.asarray(tw_d).shape} wire32={np.asarray(tw_wire32).shape} "
-            f"plans={plan_np.shape} final_only={final_only} eps={eps:g}"
-        )
-
-        feasible, violations = self._task_ws.feasible_mask_batch(
-            wire32,
-            plan_np,
-            check_all_steps=not final_only,
-            cube_xyz=cube_xyz,
-        )
-        n_feas = int(feasible.sum())
-
-        if n_feas == 0:
-            relaxed = violations <= eps * 100.0
-            if int(relaxed.sum()) > 0:
-                print(
-                    f"⚠️ Task workspace gate: 0/{n_total} feasible at ε={eps:g}; "
-                    f"using relaxed ε={eps * 100:g} ({int(relaxed.sum())} samples)"
-                )
-                feasible = relaxed
-            else:
-                print(
-                    f"⚠️ Task workspace gate: 0/{n_total} feasible even at relaxed ε; "
-                    "skipping gate for this cost eval"
-                )
-                return dist
-
-        feasible_t = torch.from_numpy(feasible).to(device=dist.device, dtype=torch.bool)
-        infeasible_cost = torch.tensor(
-            INFEASIBLE_COST, device=dist.device, dtype=dist.dtype
-        )
-        return torch.where(feasible_t, dist, infeasible_cost)
-
     def manifold_squash(self, actions):
-        """
-        Freeze left side + head; clamp active joints to [-1, 1].
-        Task workspace is enforced via final-step EE gate in get_cost (no joint remap).
-        """
-        actions = actions.clone()
-
+        """Alias for freeze_and_clamp_actions (no right-arm remap)."""
         if self.frozen_pose is None:
             raise ValueError(
                 "❌ GoalMapper Error: frozen_pose not set before planning!"
             )
-
-        actions[..., 0:16] = self.frozen_pose[..., 0:16]
-        actions = torch.clamp(actions, -1.0, 1.0)
-        return actions
+        return freeze_and_clamp_actions(actions, self.frozen_pose)
 
     def encode(self, pixels):
         """

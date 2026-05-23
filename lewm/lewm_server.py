@@ -43,6 +43,10 @@ from dataset.skeleton.projection_utils import (
     is_allowed_action_chain,
 )
 from lewm.task_workspace import TaskWorkspaceMPCConstraint
+from lewm.planning_constraints import (
+    CEM_NUM_SAMPLES_DEFAULT,
+    CEM_NUM_SAMPLES_HARD_ARM_GATE,
+)
 from inference_http import serve_http, unpack_np, _to_msgpack_safe
 
 # Configuration
@@ -98,6 +102,11 @@ class LEWMInferenceServer:
         print(f"✅ Success: {len(self.gallery['goals'])} goal latents ready.")
 
         # 2. Initialize Brain (Gallery doesn't need data root)
+        cem_samples = (
+            CEM_NUM_SAMPLES_DEFAULT
+            if use_task_workspace
+            else CEM_NUM_SAMPLES_HARD_ARM_GATE
+        )
         self.agent = GoalMapper(
             model_path,
             dataset_root=".",
@@ -105,6 +114,7 @@ class LEWMInferenceServer:
             num_views=5 if use_multi_view else 1,
             use_skeleton=use_skeleton,
             use_dino=use_dino,
+            use_task_workspace=use_task_workspace,
         )
 
         # Initialize MuJoCo for server-side skeletal prior rendering
@@ -132,7 +142,7 @@ class LEWMInferenceServer:
         # 4. CEM Solver Hyperparameters (Graceful Multi-View)
         self.solver = CEMSolver(
             model=self.agent,
-            num_samples=800,
+            num_samples=cem_samples,
             var_scale=0.3,
             n_steps=5,
             topk=100,
@@ -156,9 +166,8 @@ class LEWMInferenceServer:
             )
         else:
             print(
-                "🌐 Task workspace gate OFF (default). "
-                "CEM uses reward only; freeze + clamp only. "
-                "Pass --task-workspace to enable."
+                f"🌐 Task workspace OFF — right-arm wire gate before LeWM "
+                f"({cem_samples} CEM samples). Pass --task-workspace for EE hull."
             )
 
         # 5. State Buffering
@@ -295,7 +304,8 @@ class LEWMInferenceServer:
                 f"Actions Stacked: {actions_stacked.shape} ({actions_stacked.dtype})"
             )
             print(
-                f"🧠 Step: Planning (800 parallel samples, Shape: {pixels_stacked.shape})..."
+                f"🧠 Step: Planning ({self.solver.num_samples} parallel samples, "
+                f"Shape: {pixels_stacked.shape})..."
             )
             start_time = time.time()
             with torch.inference_mode():
