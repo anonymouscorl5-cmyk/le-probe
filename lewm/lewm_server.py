@@ -180,6 +180,8 @@ class LEWMInferenceServer:
 
         # 5. State Buffering
         self.history = {"pixels": [], "actions": []}
+        # Isolated from MPC history — used only by POST /reward
+        self.reward_history = {"pixels": []}
 
         # 6. Input Audit Configuration
         self.audit_dir = os.path.join(ROOT_DIR, "temp_images", "inputs_audit")
@@ -197,6 +199,116 @@ class LEWMInferenceServer:
             return None
         return np.asarray(pos[:3], dtype=np.float64)
 
+    def _prepare_current_pixels(
+        self,
+        req: dict,
+        raw_sim_state: np.ndarray,
+        *,
+        save_skeleton_audit: bool = False,
+    ) -> torch.Tensor:
+        """Transform client images (+ optional skeleton) to (V, C, H, W) on DEVICE."""
+        raw_cube_pos = None
+        if self.use_skeleton and "cube_pos" in req:
+            raw_cube_pos = unpack_np(req.get("cube_pos"))
+
+        if self.use_multi_view:
+            cam_keys = [
+                "observation.images.world_center",
+                "observation.images.world_left",
+                "observation.images.world_right",
+                "observation.images.world_top",
+                "observation.images.world_wrist",
+            ]
+            views = []
+            for k in cam_keys:
+                raw_img = unpack_np(req.get(k))
+                transformed = self.agent.transform({"pixels": raw_img})
+                if self.use_skeleton:
+                    skel_mask = self.render_skeleton_mask(
+                        view_name=k.split(".")[-1],
+                        raw_sim_state=raw_sim_state,
+                        raw_cube_pos=raw_cube_pos,
+                    )
+                    transformed_rgb = transformed["pixels"].to(DEVICE)
+                    skel_tensor = (
+                        torch.from_numpy(skel_mask).float().unsqueeze(0).to(DEVICE)
+                        / 255.0
+                    )
+                    transformed["pixels"] = torch.cat(
+                        [transformed_rgb, skel_tensor], dim=0
+                    )
+                    if save_skeleton_audit:
+                        view_name = k.split(".")[-1]
+                        skel_3ch = np.stack([skel_mask] * 3, axis=-1)
+                        side_by_side = np.hstack([raw_img, skel_3ch])
+                        audit_path = os.path.join(
+                            self.audit_dir,
+                            f"step_{self.step_counter:03d}_{view_name}.png",
+                        )
+                        Image.fromarray(side_by_side).save(audit_path)
+                views.append(transformed["pixels"])
+            return torch.stack(views, dim=0).to(DEVICE)
+
+        raw_image = unpack_np(req.get("observation.images.world_center"))
+        transformed = self.agent.transform({"pixels": raw_image})
+        return transformed["pixels"].unsqueeze(0).to(DEVICE)
+
+    def _stack_pixels_for_encode(
+        self,
+        current_pixels: torch.Tensor,
+        pixel_queue: list,
+        *,
+        solver_step_dim: bool = False,
+    ) -> torch.Tensor:
+        """Slide 3-frame queue; return (1, T, V, C, H, W) or (1, 1, T, …) for CEM."""
+        try:
+            pixel_queue.pop(0)
+        except IndexError:
+            pass
+        while len(pixel_queue) < 3:
+            pixel_queue.append(current_pixels.clone())
+        stacked = torch.stack(pixel_queue).unsqueeze(0).to(DEVICE)
+        if solver_step_dim:
+            stacked = stacked.unsqueeze(1)
+        return stacked
+
+    def process_reward_request(self, req: dict) -> dict:
+        """Encode current observation and return reward-head output (no MPC).
+
+        Uses ``reward_history`` only — does not read or write ``self.history`` used by /plan.
+        """
+        try:
+            raw_sim_state = unpack_np(req.get("state"))
+            if raw_sim_state is None:
+                return {"error": "missing state (wire32 radians)"}
+
+            current_pixels = self._prepare_current_pixels(req, raw_sim_state)
+            rh = self.reward_history["pixels"]
+            pixels_stacked = self._stack_pixels_for_encode(current_pixels, rh)
+
+            with torch.inference_mode():
+                info = self.agent.model.encode({"pixels": pixels_stacked})
+                emb = info["emb"]
+                reward_pred_all = self.agent.model.reward_head(emb).squeeze(-1)
+                reward_pred_last = float(reward_pred_all[0, -1].item())
+                mpc_cost = float((10.0 - reward_pred_last) * 50.0)
+
+            return {
+                "reward_pred": reward_pred_last,
+                "reward_pred_history": [
+                    float(x) for x in reward_pred_all[0].detach().cpu().tolist()
+                ],
+                "mpc_reward_cost": mpc_cost,
+                "cost_formula": "(10.0 - reward_pred) * 50.0  [last history frame]",
+                "pixel_history_len": len(rh),
+                "use_multi_view": self.use_multi_view,
+                "use_skeleton": self.use_skeleton,
+            }
+        except Exception as e:
+            print(f"❌ Reward probe error: {e}")
+            traceback.print_exc()
+            return {"error": str(e)}
+
     def process_request(self, req: dict) -> dict:
         """Handle one planning request; returns action + diagnostics or error."""
         try:
@@ -206,63 +318,9 @@ class LEWMInferenceServer:
             raw_sim_state = unpack_np(req.get("state"))
             cube_xyz = self._cube_xyz_from_request(req)
 
-            # 1. Perception Unpacking
-            if self.use_multi_view:
-                cam_keys = [
-                    "observation.images.world_center",
-                    "observation.images.world_left",
-                    "observation.images.world_right",
-                    "observation.images.world_top",
-                    "observation.images.world_wrist",
-                ]
-                views = []
-                for k in cam_keys:
-                    raw_img = unpack_np(req.get(k))
-                    # Transform to (C, H, W)
-                    transformed = self.agent.transform({"pixels": raw_img})
-                    if self.use_skeleton:
-                        # Get state of cube
-                        raw_cube_pos = None
-                        if "cube_pos" in req:
-                            raw_cube_pos = unpack_np(req.get("cube_pos"))
-
-                        # Render skeleton for this view on-the-fly!
-                        skel_mask = self.render_skeleton_mask(
-                            view_name=k.split(".")[-1],
-                            raw_sim_state=raw_sim_state,
-                            raw_cube_pos=raw_cube_pos,
-                        )
-
-                        # Concatenate normalized RGB with float skeleton mask
-                        transformed_rgb = transformed["pixels"].to(DEVICE)
-                        skel_tensor = (
-                            torch.from_numpy(skel_mask).float().unsqueeze(0).to(DEVICE)
-                            / 255.0
-                        )
-                        transformed["pixels"] = torch.cat(
-                            [transformed_rgb, skel_tensor], dim=0
-                        )
-
-                        # Inputs Visual Audit Saving Hook
-                        view_name = k.split(".")[-1]
-                        rgb_vis = raw_img
-                        skel_vis = skel_mask
-                        skel_3ch = np.stack([skel_vis] * 3, axis=-1)
-                        side_by_side = np.hstack([rgb_vis, skel_3ch])
-                        audit_path = os.path.join(
-                            self.audit_dir,
-                            f"step_{self.step_counter:03d}_{view_name}.png",
-                        )
-                        Image.fromarray(side_by_side).save(audit_path)
-                    views.append(transformed["pixels"])
-
-                # Current frame is (V, C, H, W)
-                current_pixels = torch.stack(views, dim=0).to(DEVICE)
-            else:
-                raw_image = unpack_np(req.get("observation.images.world_center"))
-                transformed = self.agent.transform({"pixels": raw_image})
-                # Current frame is (1, C, H, W) for single-view consistency
-                current_pixels = transformed["pixels"].unsqueeze(0).to(DEVICE)
+            current_pixels = self._prepare_current_pixels(
+                req, raw_sim_state, save_skeleton_audit=True
+            )
 
             print(
                 f"📷 Received {5 if self.use_multi_view else 1}-View Frame. "
@@ -281,23 +339,16 @@ class LEWMInferenceServer:
                 ).float()
                 print("🧊 Initial Pose Anchored.")
 
-            # Pixels History (V, C, H, W)
-            try:
-                self.history["pixels"].pop(0)
-            except IndexError:
-                pass
-            while len(self.history["pixels"]) < 3:
-                self.history["pixels"].append(current_pixels.clone())
+            pixels_stacked = self._stack_pixels_for_encode(
+                current_pixels,
+                self.history["pixels"],
+                solver_step_dim=True,
+            )
 
             # Action History: Pad to size 3 on step 0, then slide naturally at the end of the loop
             if not self.history["actions"]:
                 while len(self.history["actions"]) < 3:
                     self.history["actions"].append(norm_state.copy())
-
-            # pixels_stacked: (B=1, T_history=3, V, C, H, W)
-            pixels_stacked = torch.stack(self.history["pixels"]).unsqueeze(0).to(DEVICE)
-            # (B=1, S=1, T_history=3, V, C, H, W)
-            pixels_stacked = pixels_stacked.unsqueeze(1)
 
             actions_stacked = (
                 torch.tensor(np.stack(self.history["actions"]), dtype=torch.float32)
@@ -460,7 +511,12 @@ class LEWMInferenceServer:
             return {"error": str(e)}
 
     def run(self, host="0.0.0.0", port: int | None = None):
-        serve_http(self.process_request, host=host, port=port or PORT)
+        serve_http(
+            self.process_request,
+            host=host,
+            port=port or PORT,
+            reward_handler=self.process_reward_request,
+        )
 
     def log_diagnostics(
         self, raw_image, best_plan, plan_time, instruction, diagnostics

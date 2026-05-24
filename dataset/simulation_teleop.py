@@ -18,7 +18,7 @@ from simulation_base import GR1MuJoCoBase
 from gr1_config import SCENE_PATH
 from gr1_protocol import StandardScaler
 from gr1_config import COMPACT_WIRE_JOINTS
-from inference_http import serve_http, TELEOP_PATH
+from inference_http import InferenceHTTPClient, pack_np, serve_http, TELEOP_PATH
 from dataset.polytope_utils import draw_polytope_on_rgb, log_polytope_rerun
 from lewm.task_workspace import get_task_workspace_draw_polytope
 
@@ -36,6 +36,9 @@ class GR1TeleopServer(GR1MuJoCoBase):
         lock_posture=False,
         show_task_workspace=False,
         task_workspace_fill_alpha=0.15,
+        query_lewm_reward=False,
+        lewm_base_url="http://127.0.0.1:5555",
+        lewm_multi_view=False,
     ):
         super().__init__(scene_path or SCENE_PATH, restrict_ik=True)
         self.port = port
@@ -43,6 +46,15 @@ class GR1TeleopServer(GR1MuJoCoBase):
         self.is_running = True
         self.show_task_workspace = show_task_workspace
         self.task_workspace_fill_alpha = task_workspace_fill_alpha
+        self.query_lewm_reward = query_lewm_reward
+        self.lewm_multi_view = lewm_multi_view
+        self._lewm_client = None
+        if self.query_lewm_reward:
+            self._lewm_client = InferenceHTTPClient(lewm_base_url)
+            print(
+                f"🎯 LeWM reward probe ON → {lewm_base_url} "
+                f"(multi_view={lewm_multi_view}; match lewm_server flags)"
+            )
         self._tw_poly = None
 
         if self.show_task_workspace:
@@ -78,6 +90,49 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 rgb[:] = drawn
         super()._post_render_hook(name, rgb, depth=depth)
 
+    def _build_lewm_reward_payload(self) -> dict:
+        """Observation packet for ``POST /reward`` (same layout as simulation_lewm)."""
+        state = self.get_state_32()
+        payload = {"state": pack_np(state)}
+        try:
+            cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "cube")
+            if cube_id != -1:
+                payload["cube_pos"] = pack_np(self.data.xpos[cube_id].copy())
+        except Exception:
+            pass
+
+        cam_names = (
+            ["world_center", "world_left", "world_right", "world_top", "world_wrist"]
+            if self.lewm_multi_view
+            else ["world_center"]
+        )
+        for cam in cam_names:
+            self.renderer.update_scene(self.data, camera=cam)
+            img = self.renderer.render()
+            img_resized = np.array(
+                Image.fromarray(img).resize((224, 224), Image.Resampling.LANCZOS)
+            )
+            payload[f"observation.images.{cam}"] = pack_np(img_resized)
+        return payload
+
+    def _maybe_attach_lewm_reward(self, payload: dict) -> dict:
+        if not self.query_lewm_reward or self._lewm_client is None:
+            return payload
+        try:
+            reward_resp = self._lewm_client.reward(self._build_lewm_reward_payload())
+            if "error" in reward_resp:
+                payload["lewm_reward_error"] = reward_resp["error"]
+            else:
+                physics = payload.get("physics") or self.get_physics_state()
+                teleop_progress = (1.0 - physics["target_dist"]) * 10.0
+                payload["lewm_reward"] = {
+                    **reward_resp,
+                    "teleop_progress_proxy": float(teleop_progress),
+                }
+        except Exception as e:
+            payload["lewm_reward_error"] = str(e)
+        return payload
+
     def _enrich_response(self, payload: dict) -> dict:
         payload.update(
             {
@@ -87,7 +142,7 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 "physics": self.get_physics_state(),
             }
         )
-        return payload
+        return self._maybe_attach_lewm_reward(payload)
 
     def process_request(self, data: dict) -> dict:
         cmd = data.get("command")
@@ -372,6 +427,22 @@ if __name__ == "__main__":
         default=0.15,
         help="Semi-transparent fill on camera overlay (0 = wireframe only)",
     )
+    parser.add_argument(
+        "--query-lewm-reward",
+        action="store_true",
+        help="On poll_status, query LeWM POST /reward (reward head only, no MPC)",
+    )
+    parser.add_argument(
+        "--lewm-base-url",
+        type=str,
+        default="http://127.0.0.1:5555",
+        help="LeWM server base URL when --query-lewm-reward is set",
+    )
+    parser.add_argument(
+        "--lewm-multi-view",
+        action="store_true",
+        help="Send 5 camera views to LeWM (must match lewm_server --multi_view)",
+    )
     args = parser.parse_args()
 
     GR1TeleopServer(
@@ -379,4 +450,7 @@ if __name__ == "__main__":
         lock_posture=args.lock_posture,
         show_task_workspace=args.task_workspace,
         task_workspace_fill_alpha=args.task_workspace_fill_alpha,
+        query_lewm_reward=args.query_lewm_reward,
+        lewm_base_url=args.lewm_base_url,
+        lewm_multi_view=args.lewm_multi_view,
     ).run(host=args.host)

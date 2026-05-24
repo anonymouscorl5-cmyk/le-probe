@@ -2,6 +2,7 @@
 HTTP transport for remote inference and teleop (msgpack bodies). Works with ``ngrok http <port>``.
 
 - MPC / VLA: ``POST /plan``
+- LeWM reward probe (no planning): ``POST /reward``
 - Teleop dashboard: ``POST /teleop``
 """
 
@@ -21,6 +22,7 @@ from starlette.routing import Route
 DEFAULT_TIMEOUT_S = 120.0
 TELEOP_TIMEOUT_S = 300.0
 PLAN_PATH = "/plan"
+REWARD_PATH = "/reward"
 TELEOP_PATH = "/teleop"
 HEALTH_PATH = "/health"
 
@@ -112,20 +114,33 @@ class InferenceHTTPClient:
         """MPC / VLA planning request."""
         return self.post(payload)
 
+    def reward(self, payload: dict) -> dict:
+        """LeWM reward-head probe (current state only, no MPC)."""
+        prev = self.endpoint
+        self.endpoint = REWARD_PATH
+        try:
+            return self.post(payload)
+        finally:
+            self.endpoint = prev
+
     def command(self, payload: dict) -> dict:
         """Teleop command (reset, IK, joint targets, recording, etc.)."""
         return self.post(payload)
 
 
 def create_app(
-    handler, rpc_path: str = PLAN_PATH, title: str = "Cortex Inference Server"
+    handler,
+    rpc_path: str = PLAN_PATH,
+    title: str = "Cortex Inference Server",
+    reward_handler=None,
 ):
     """Build a Starlette ASGI app: ``handler(req_dict) -> resp_dict``."""
 
     async def health(_request: Request):
-        return JSONResponse(
-            {"status": "ok", "transport": "http+msgpack", "rpc_path": rpc_path}
-        )
+        body = {"status": "ok", "transport": "http+msgpack", "rpc_path": rpc_path}
+        if reward_handler is not None:
+            body["reward_path"] = REWARD_PATH
+        return JSONResponse(body)
 
     async def rpc(request: Request):
         try:
@@ -145,13 +160,34 @@ def create_app(
                 status_code=500,
             )
 
-    return Starlette(
-        debug=False,
-        routes=[
-            Route(HEALTH_PATH, health, methods=["GET"]),
-            Route(rpc_path, rpc, methods=["POST"]),
-        ],
-    )
+    routes = [
+        Route(HEALTH_PATH, health, methods=["GET"]),
+        Route(rpc_path, rpc, methods=["POST"]),
+    ]
+
+    if reward_handler is not None:
+
+        async def reward_rpc(request: Request):
+            try:
+                req = decode_body(await request.body())
+                resp = reward_handler(req)
+                status = 500 if "error" in resp and "status" not in resp else 200
+                return Response(
+                    content=encode_body(resp),
+                    media_type="application/octet-stream",
+                    status_code=status,
+                )
+            except Exception as e:
+                traceback.print_exc()
+                return Response(
+                    content=encode_body({"error": str(e)}),
+                    media_type="application/octet-stream",
+                    status_code=500,
+                )
+
+        routes.append(Route(REWARD_PATH, reward_rpc, methods=["POST"]))
+
+    return Starlette(debug=False, routes=routes)
 
 
 def serve_http(
@@ -160,11 +196,19 @@ def serve_http(
     port: int = 5555,
     rpc_path: str = PLAN_PATH,
     title: str = "Cortex Inference Server",
+    reward_handler=None,
 ) -> None:
-    app = create_app(handler, rpc_path=rpc_path, title=title)
+    app = create_app(
+        handler,
+        rpc_path=rpc_path,
+        title=title,
+        reward_handler=reward_handler,
+    )
     print(
         f"🌐 HTTP server: http://{host}:{port}  "
         f"(POST {rpc_path}, GET {HEALTH_PATH})"
     )
+    if reward_handler is not None:
+        print(f"   reward probe: POST {REWARD_PATH}")
     print(f"   ngrok: ngrok http {port} --log=stdout")
     uvicorn.run(app, host=host, port=port, log_level="info")

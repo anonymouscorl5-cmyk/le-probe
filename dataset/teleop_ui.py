@@ -54,6 +54,8 @@ if "ik_phase" not in st.session_state:
     st.session_state.ik_phase = None
 if "physics" not in st.session_state:
     st.session_state.physics = {"cube_z": 0.0, "is_grasping": False, "target_dist": 0.0}
+if "lewm_reward" not in st.session_state:
+    st.session_state.lewm_reward = None
 
 # --- Load Default Active Joints ---
 if "active_joints" not in st.session_state:
@@ -80,6 +82,10 @@ def send_command(payload):
         st.session_state.batch_status = data.get("batch_status", 0)
         if "physics" in data:
             st.session_state.physics = data["physics"]
+        if "lewm_reward" in data:
+            st.session_state.lewm_reward = data["lewm_reward"]
+        elif "lewm_reward_error" in data:
+            st.session_state.lewm_reward = {"error": data["lewm_reward_error"]}
         return data
     except Exception as e:
         st.error(f"Teleop HTTP error: {e}")
@@ -266,6 +272,34 @@ with st.sidebar:
 
     # Height Metric
     st.metric("📦 Cube Height (Z)", f"{phys.get('cube_z', 0.0):.3f} m")
+
+    lr = st.session_state.lewm_reward
+    if lr is not None:
+        st.divider()
+        st.header("🧠 LeWM Reward Head")
+        if "error" in lr:
+            st.error(lr["error"])
+        else:
+            st.metric("reward_pred", f"{lr.get('reward_pred', 0.0):.4f}")
+            st.metric(
+                "mpc_reward_cost",
+                f"{lr.get('mpc_reward_cost', 0.0):.2f}",
+                help=lr.get("cost_formula", ""),
+            )
+            proxy = lr.get("teleop_progress_proxy")
+            if proxy is not None:
+                st.metric(
+                    "teleop progress proxy",
+                    f"{proxy:.4f}",
+                    help="(1 - target_dist) * 10 from sim physics",
+                )
+            hist = lr.get("reward_pred_history")
+            if hist:
+                st.caption(f"3-frame history: {[f'{x:.3f}' for x in hist]}")
+        st.caption(
+            "Shown when teleop server is started with "
+            "`--query-lewm-reward` (and LeWM serves POST /reward)."
+        )
 
     st.divider()
     st.header("📊 Dataset Statistics")
