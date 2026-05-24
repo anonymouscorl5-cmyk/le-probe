@@ -150,7 +150,7 @@ class LEWMInferenceServer:
         self.solver = FeasibleEliteCEMSolver(
             model=self.agent,
             num_samples=cem_samples,
-            var_scale=0.6,
+            var_scale=0.3,
             n_steps=5,
             topk=100,
             device=DEVICE,

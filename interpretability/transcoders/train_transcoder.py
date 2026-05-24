@@ -91,6 +91,45 @@ class MultiLayerStreamingDataset(Dataset):
         }
 
 
+def funnel_target_indices(
+    global_idx: np.ndarray,
+    src_tokens: int,
+    tgt_tokens: int,
+) -> np.ndarray:
+    """
+    Map flat source token indices to target-layer indices when tokens_per_sample differs.
+
+    Harvest layout (matches lewm_experiment.ExperimentConfig):
+      - Encoder: history * num_views * patches  (e.g. 3*5*257 = 3855 multi-view)
+      - Predictor: history only                  (e.g. 3)
+
+    Late-fusion (fusion_layer) is not harvested; this only bridges ViT blocks <-> predictor.
+    """
+    if src_tokens == tgt_tokens:
+        return global_idx
+
+    moment_idx = global_idx // src_tokens
+    token_offset = global_idx % src_tokens
+
+    if src_tokens > tgt_tokens:
+        if src_tokens % tgt_tokens != 0:
+            raise ValueError(
+                "Encoder→predictor funnel: src_tokens must be divisible by tgt_tokens "
+                f"(got {src_tokens} vs {tgt_tokens})"
+            )
+        spatial_per_frame = src_tokens // tgt_tokens
+        frame_offset = token_offset // spatial_per_frame
+        return moment_idx * tgt_tokens + frame_offset
+
+    if tgt_tokens % src_tokens != 0:
+        raise ValueError(
+            "Predictor→encoder funnel: tgt_tokens must be divisible by src_tokens "
+            f"(got {tgt_tokens} vs {src_tokens})"
+        )
+    spatial_per_frame = tgt_tokens // src_tokens
+    return moment_idx * tgt_tokens + token_offset * spatial_per_frame
+
+
 def train_transcoder(
     source_dir,
     source_layers_str,
@@ -274,30 +313,14 @@ def train_transcoder(
                             t_batch_norm = (t_batch - mean_t) / std_t
                         else:
                             global_idx = block_indices[batch_local_idx]
-                            src_idx_start = global_idx // src_tokens
-                            token_offset = global_idx % src_tokens
 
                             t_batch_pieces = []
                             for l in tgt_list:
                                 ds_l = master_ds.datasets[master_ds.layer_to_idx[l]]
                                 l_tgt_tokens = ds_l.tokens_per_sample
-
-                                # Calculate per-layer target index (Handling the Funnel Effect)
-                                if src_tokens == l_tgt_tokens:
-                                    l_tgt_idx = global_idx
-                                elif src_tokens == 771 and l_tgt_tokens == 3:
-                                    # Encoder (Spatial) -> Predictor (Global)
-                                    l_tgt_idx = src_idx_start * 3 + (
-                                        token_offset // 257
-                                    )
-                                elif src_tokens == 3 and l_tgt_tokens == 771:
-                                    # Predictor (Global) -> Encoder (Spatial)
-                                    # We map the global latent to the first patch (CLS) of the target
-                                    l_tgt_idx = src_idx_start * 771 + (
-                                        token_offset * 257
-                                    )
-                                else:
-                                    l_tgt_idx = global_idx  # Default fallback
+                                l_tgt_idx = funnel_target_indices(
+                                    global_idx, src_tokens, l_tgt_tokens
+                                )
 
                                 # Pull from memmap
                                 t_raw = torch.from_numpy(ds_l.data[l_tgt_idx])
