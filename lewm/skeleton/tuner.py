@@ -1,3 +1,15 @@
+"""
+Retune only ``reward_head`` on harvested multi-view skeleton frames.
+
+Forward path: 4ch pixels -> encoder -> reward_head (no DINO anchors in the loop).
+The checkpoint must still instantiate the same module tree as training (strict load).
+
+Typical pipeline:
+  1. generate_reward_priors.py --repo_id vedpatwardhan/gr1_reward_pred_v2
+  2. audit_priors.py --repo_id vedpatwardhan/gr1_reward_pred_v2 --frames dataset_skel_frames
+  3. tuner.py --model <gr1_grasp_skeleton_dino_v7>/epoch=99-step=17900.ckpt --frames dataset_skel_frames
+"""
+
 import os
 import sys
 import torch
@@ -5,11 +17,8 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from tqdm import tqdm
-from torchvision import transforms
 import argparse
-import stable_pretraining as spt
 from stable_pretraining import data as dt
-from einops import rearrange
 
 # --- Path Stabilization ---
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,6 +80,37 @@ class SkeletalFrameDataset(Dataset):
         return img_pixels, reward
 
 
+def _detect_ckpt_arch(state_dict: dict) -> tuple[bool, str]:
+    """Infer use_dino / fusion_type from checkpoint keys (for strict load parity)."""
+    keys = list(state_dict.keys())
+    use_dino = any(
+        marker in k
+        for k in keys
+        for marker in ("dino_projector", "dino_fusion_layer", "high_level_predictor")
+    )
+    fusion_type = "linear" if any("dino_fusion_layer" in k for k in keys) else "mean"
+    return use_dino, fusion_type
+
+
+def resolve_arch(
+    state_dict: dict,
+    use_dino: bool | None,
+    fusion_type: str | None,
+) -> tuple[bool, str]:
+    detected_dino, detected_fusion = _detect_ckpt_arch(state_dict)
+    if use_dino is None:
+        use_dino = detected_dino
+    elif use_dino != detected_dino:
+        raise ValueError(
+            f"use_dino={use_dino} but checkpoint "
+            f"{'contains' if detected_dino else 'does not contain'} DINO modules. "
+            "Omit --use_dino / --no_use_dino to auto-detect."
+        )
+    if fusion_type is None:
+        fusion_type = detected_fusion if use_dino else "mean"
+    return use_dino, fusion_type
+
+
 def train_reward_head(
     model_path,
     frames_dir,
@@ -78,19 +118,26 @@ def train_reward_head(
     lr=1e-4,
     batch_size=32,
     use_multi_view=True,
+    use_dino: bool | None = None,
+    fusion_type: str | None = None,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 [SKELETAL TUNER] Device: {device}")
 
-    # 1. Setup Model
-    # Load base JEPA and patch it
+    # 1. Load checkpoint keys first so the module tree matches (strict=True).
+    sd = load_skeletal_state_dict(model_path, device=device)
+    use_dino, fusion_type = resolve_arch(sd, use_dino, fusion_type)
+    num_views = 5 if use_multi_view else 1
+    print(
+        f"📦 Checkpoint arch: use_dino={use_dino}, fusion_type={fusion_type}, "
+        f"num_views={num_views} (reward_head-only training; DINO not used in forward)"
+    )
 
-    # Simple config for initialization
     cfg = OmegaConf.create(
         {
             "use_multi_view": use_multi_view,
-            "fusion_type": "linear",
-            "num_views": 5 if use_multi_view else 1,
+            "fusion_type": fusion_type,
+            "num_views": num_views,
             "img_size": 224,
             "patch_size": 14,
             "encoder_scale": "tiny",
@@ -126,11 +173,12 @@ def train_reward_head(
         pred_proj=GR1MLP(
             input_dim=encoder.config.hidden_size, output_dim=192, hidden_dim=2048
         ),
+        use_dino=use_dino,
+        fusion_type=fusion_type,
+        num_views=num_views,
     )
     world_model.reward_head = RewardPredictor(input_dim=192, hidden_dim=512)
 
-    # Load weights (handles model. prefix)
-    sd = load_skeletal_state_dict(model_path, device=device)
     world_model.load_state_dict(sd, strict=True)
     world_model.to(device)
 
@@ -196,29 +244,61 @@ def train_reward_head(
     target_sd = raw_ckpt.get("state_dict", raw_ckpt)
 
     # Sync keys (handle model. prefix)
+    reward_keys = [k for k in current_sd if "reward_head" in k]
     updated_keys = 0
-    for k, v in current_sd.items():
-        if "reward_head" in k:
-            # Check if we need to add back the 'model.' prefix
-            target_k = k if k in target_sd else f"model.{k}"
-            if target_k in target_sd:
-                target_sd[target_k] = v
-                updated_keys += 1
+    for k in reward_keys:
+        target_k = k if k in target_sd else f"model.{k}"
+        if target_k in target_sd:
+            target_sd[target_k] = current_sd[k]
+            updated_keys += 1
 
     out_name = Path(model_path).stem + "_reward_calibrated.ckpt"
     torch.save(raw_ckpt, out_name)
-    print(f"✨ Calibrated Heavy Model saved: {out_name} (213MB)")
+    print(f"✨ Calibrated checkpoint saved: {out_name}")
     print(
-        f"✅ Injection Audit: Successfully updated {updated_keys}/{len(target_sd)} reward_head keys."
+        f"✅ Injection audit: updated {updated_keys}/{len(reward_keys)} reward_head tensors "
+        "(all other weights, including DINO if present, preserved from input ckpt)."
     )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, required=True)
-    parser.add_argument("--frames", type=str, required=True)
+    parser = argparse.ArgumentParser(
+        description="Retune reward_head on harvested skeleton frames; auto-detects DINO ckpt layout."
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="Lightning ckpt from skeleton trainer (e.g. gr1_grasp_skeleton_dino_v7 epoch=99-step=17900.ckpt)",
+    )
+    parser.add_argument(
+        "--frames",
+        type=str,
+        required=True,
+        help="Directory from generate_reward_priors.py (e.g. dataset_skel_frames)",
+    )
     parser.add_argument("--lr", type=float, default=5e-5)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--batch_size", type=int, default=32)
+    arch = parser.add_mutually_exclusive_group()
+    arch.add_argument(
+        "--use_dino",
+        action="store_true",
+        help="Force DINO module tree (normally auto-detected from ckpt)",
+    )
+    arch.add_argument(
+        "--no_use_dino",
+        action="store_true",
+        help="Force skeleton-only module tree (normally auto-detected)",
+    )
     args = parser.parse_args()
+    use_dino = True if args.use_dino else False if args.no_use_dino else None
 
-    train_reward_head(args.model, args.frames, epochs=args.epochs, lr=args.lr)
+    train_reward_head(
+        args.model,
+        args.frames,
+        epochs=args.epochs,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        use_dino=use_dino,
+    )

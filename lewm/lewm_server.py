@@ -143,7 +143,7 @@ class LEWMInferenceServer:
         self.solver = CEMSolver(
             model=self.agent,
             num_samples=cem_samples,
-            var_scale=0.3,
+            var_scale=0.6,
             n_steps=5,
             topk=100,
             device=DEVICE,
@@ -151,7 +151,7 @@ class LEWMInferenceServer:
         self.solver.configure(
             action_space=Box(low=-1.0, high=1.0, shape=(4, 32)),
             n_envs=1,
-            config=MockConfig(horizon=4, init_var=0.1),
+            config=MockConfig(horizon=4, init_var=0.5),
         )
 
         self.task_workspace = None
