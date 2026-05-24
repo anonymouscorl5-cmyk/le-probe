@@ -28,9 +28,27 @@ CEM_NUM_SAMPLES_HARD_ARM_GATE = 8000
 def freeze_and_clamp_actions(
     actions: torch.Tensor, frozen_pose: torch.Tensor
 ) -> torch.Tensor:
-    """Freeze left arm + head (0–15); clamp active joints to [-1, 1]. No joint remap."""
+    """Freeze left arm + head (0–15); clamp active joints to [-1, 1]. No joint remap.
+
+    ``frozen_pose`` may be ``(32,)`` (broadcast) or ``(N, 32)`` with ``N == actions.shape[0]``
+    (one row per flattened CEM sample).
+    """
     out = actions.clone()
-    out[..., 0:16] = frozen_pose[..., 0:16]
+    if frozen_pose.ndim == 1:
+        out[..., 0:16] = frozen_pose[0:16]
+    elif frozen_pose.ndim == 2:
+        if frozen_pose.shape[0] != actions.shape[0]:
+            raise ValueError(
+                f"frozen_pose rows {frozen_pose.shape[0]} != action rows {actions.shape[0]}"
+            )
+        if actions.ndim == 3:
+            out[:, :, 0:16] = frozen_pose[:, None, 0:16]
+        else:
+            out[..., 0:16] = frozen_pose[..., 0:16]
+    else:
+        raise ValueError(
+            f"frozen_pose must be (32,) or (N, 32), got {tuple(frozen_pose.shape)}"
+        )
     return torch.clamp(out, -1.0, 1.0)
 
 

@@ -16,6 +16,7 @@ import numpy as np
 import torch
 from stable_worldmodel.solver.cem import CEMSolver
 
+from lewm.mpc_logging import MPC_VERBOSE, mpc_log
 from lewm.task_workspace import INFEASIBLE_COST
 
 
@@ -56,13 +57,35 @@ def _expand_obs_batch_for_cem(
     return np.repeat(v_batch[:, None, ...], num_samples, axis=1)
 
 
+def _per_row_feasible_cost_stats(
+    costs: torch.Tensor, *, infeasible_cost: float = INFEASIBLE_COST
+) -> tuple[list[float], list[float], list[float], list[int]]:
+    """Min / mean / max over feasible samples per batch row; feasible counts in topk pool."""
+    batch_size = costs.shape[0]
+    mins, means, maxs, n_feas = [], [], [], []
+    for b in range(batch_size):
+        row = costs[b]
+        feas = row[row < infeasible_cost]
+        n = int(feas.numel())
+        n_feas.append(n)
+        if n == 0:
+            mins.append(float("inf"))
+            means.append(float("inf"))
+            maxs.append(float("inf"))
+        else:
+            mins.append(float(feas.min().item()))
+            means.append(float(feas.mean().item()))
+            maxs.append(float(feas.max().item()))
+    return mins, means, maxs, n_feas
+
+
 def aggregate_feasible_elites(
     costs: torch.Tensor,
     candidates: torch.Tensor,
     topk: int,
     *,
     infeasible_cost: float = INFEASIBLE_COST,
-) -> tuple[torch.Tensor, torch.Tensor, list[float]]:
+) -> tuple[torch.Tensor, torch.Tensor, list[float], list[float], list[int]]:
     """
     Build CEM mean/var from lowest-cost **feasible** samples only.
 
@@ -94,24 +117,41 @@ def aggregate_feasible_elites(
     )
 
     feas_counts = feasible.sum(dim=1).clamp(min=1).to(costs.dtype)
-    logged_cost = (
+    elite_mean_cost = (
         (topk_vals.masked_fill(~feasible, 0.0).sum(dim=1) / feas_counts).cpu().tolist()
     )
+    elite_feasible_in_topk = feasible.sum(dim=1).cpu().tolist()
+    min_feasible_cost, _, _, _ = _per_row_feasible_cost_stats(
+        costs, infeasible_cost=infeasible_cost
+    )
 
-    return batch_mean, batch_var, logged_cost
+    return (
+        batch_mean,
+        batch_var,
+        elite_mean_cost,
+        min_feasible_cost,
+        elite_feasible_in_topk,
+    )
 
 
 class FeasibleEliteCEMSolver(CEMSolver):
     """CEM with feasible-only elite mean/std; fails loudly if none are feasible."""
 
+    def __init__(self, *args, verbose: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.verbose = verbose
+
     @torch.inference_mode()
     def solve(self, info_dict: dict, init_action: torch.Tensor | None = None) -> dict:
         start_time = time.time()
         outputs: dict[str, Any] = {
-            "costs": [],
+            "costs": [],  # elite mean cost (last iter) — legacy field
+            "elite_mean_costs": [],
+            "min_feasible_costs": [],
             "mean": [],
             "var": [],
-            "feasible_elite_counts": [],
+            "feasible_sample_counts": [],
+            "cem_step_logs": [],
         }
 
         mean, var = self.init_action_distrib(init_action)
@@ -132,8 +172,10 @@ class FeasibleEliteCEMSolver(CEMSolver):
                     v_batch, current_bs, self.num_samples
                 )
 
-            final_batch_cost = None
-            last_feasible_counts = None
+            final_elite_mean: list[float] | None = None
+            final_min_feasible: list[float] | None = None
+            last_feasible_counts: list[int] | None = None
+            step_logs: list[dict[str, Any]] = []
 
             for step in range(self.n_steps):
                 candidates = torch.randn(
@@ -158,7 +200,9 @@ class FeasibleEliteCEMSolver(CEMSolver):
                     )
 
                 n_feasible = (costs < INFEASIBLE_COST).sum(dim=1)
-                last_feasible_counts = n_feasible.cpu().tolist()
+                last_feasible_counts = [int(x) for x in n_feasible.cpu().tolist()]
+                min_f, mean_f, max_f, _ = _per_row_feasible_cost_stats(costs)
+
                 empty_rows = (n_feasible == 0).nonzero(as_tuple=True)[0]
                 if empty_rows.numel() > 0:
                     global_rows = (empty_rows + start_idx).tolist()
@@ -169,17 +213,46 @@ class FeasibleEliteCEMSolver(CEMSolver):
                         "(right-arm norm envelope or task workspace)."
                     )
 
-                batch_mean, batch_var, final_batch_cost = aggregate_feasible_elites(
-                    costs,
-                    candidates,
-                    self.topk,
-                )
+                (
+                    batch_mean,
+                    batch_var,
+                    elite_mean,
+                    min_feas,
+                    elite_in_topk,
+                ) = aggregate_feasible_elites(costs, candidates, self.topk)
+                final_elite_mean = elite_mean
+                final_min_feasible = min_feas
+
+                step_log = {
+                    "step": step + 1,
+                    "n_feasible": last_feasible_counts,
+                    "min_feasible_cost": min_f,
+                    "mean_feasible_cost": mean_f,
+                    "max_feasible_cost": max_f,
+                    "elite_mean_cost": elite_mean,
+                    "elite_feasible_in_topk": elite_in_topk,
+                    "batch_mean_abs": batch_mean.abs().mean().item(),
+                    "batch_var_mean": batch_var.mean().item(),
+                }
+                step_logs.append(step_log)
+                if self.verbose or MPC_VERBOSE:
+                    mpc_log(
+                        f"CEM env[{start_idx}:{end_idx}] step {step + 1}/{self.n_steps}: "
+                        f"n_feas={last_feasible_counts} "
+                        f"min_feas_cost={[round(x, 2) for x in min_f]} "
+                        f"elite_mean_cost={[round(x, 2) for x in elite_mean]}"
+                    )
 
             mean[start_idx:end_idx] = batch_mean
             var[start_idx:end_idx] = batch_var
-            outputs["costs"].extend(final_batch_cost)
+            if final_elite_mean is not None:
+                outputs["costs"].extend(final_elite_mean)
+                outputs["elite_mean_costs"].extend(final_elite_mean)
+            if final_min_feasible is not None:
+                outputs["min_feasible_costs"].extend(final_min_feasible)
             if last_feasible_counts is not None:
-                outputs["feasible_elite_counts"].append(last_feasible_counts)
+                outputs["feasible_sample_counts"].append(last_feasible_counts)
+            outputs["cem_step_logs"].append(step_logs)
 
         outputs["actions"] = mean.detach().cpu()
         outputs["mean"] = [mean.detach().cpu()]

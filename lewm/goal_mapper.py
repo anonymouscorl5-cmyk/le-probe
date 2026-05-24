@@ -34,6 +34,7 @@ from lewm.planning_constraints import (
     task_workspace_feasible_mask,
     scatter_infeasible_costs,
 )
+from lewm.mpc_logging import MPC_VERBOSE, mpc_log
 from omegaconf import OmegaConf
 import numpy as np
 
@@ -61,6 +62,7 @@ class GoalMapper:
         self.use_skeleton = use_skeleton
         self.use_dino = use_dino
         self.use_task_workspace = use_task_workspace
+        self.verbose_mpc = False
 
         # 1. Initialize the Model
         if str(model_path).endswith(".pt") or str(model_path).endswith(".ckpt"):
@@ -288,15 +290,45 @@ class GoalMapper:
 
         # 4. Plan actions: freeze 0–15, clamp [-1, 1] — no joint remap
         # actions: (B, S, T_horizon, 32) -> flat_plan_actions: (B * S, T_horizon, 32)
+        frozen_for_clamp = self.frozen_pose
+        per_env = obs_dict.get("frozen_pose_per_env")
+        if per_env is not None:
+            per_env = per_env.to(self.device)
+            if per_env.shape != (B, actions.size(-1)):
+                raise ValueError(
+                    f"frozen_pose_per_env must be ({B}, 32), got {tuple(per_env.shape)}"
+                )
+            frozen_for_clamp = per_env.repeat_interleave(S, dim=0)
+
         flat_plan_actions = freeze_and_clamp_actions(
-            actions.view(B * S, -1, actions.size(-1)), self.frozen_pose
+            actions.view(B * S, -1, actions.size(-1)), frozen_for_clamp
         )
 
         # 5. Feasibility gate (right-arm norm envelope or task workspace) — before LeWM
         feasible_np = self._precheck_plan_feasibility(
             obs_dict, flat_plan_actions
         )  # (B * S,)
+        n_feas = int(feasible_np.sum())
+        n_total = int(feasible_np.size)
+        if self.verbose_mpc or MPC_VERBOSE:
+            gate = "task_workspace" if self.use_task_workspace else "right_arm_norm"
+            mpc_log(
+                f"get_cost B={B} S={S} gate={gate} feasible={n_feas}/{n_total} "
+                f"pixels={tuple(pixels_input.shape)} actions={tuple(actions.shape)} "
+                f"cost_path={'dino_subgoal' if self.use_dino else 'gallery_goal_latent'}"
+            )
+            if n_feas and n_feas < n_total:
+                arm = flat_plan_actions[feasible_np, :, 16:20]
+                mpc_log(
+                    f"  feasible right-arm norm |max|="
+                    f"{arm.abs().max().item():.4f} infeasible_fraction="
+                    f"{(n_total - n_feas) / n_total:.2%}"
+                )
         if not feasible_np.any():
+            if self.verbose_mpc or MPC_VERBOSE:
+                mpc_log(
+                    f"get_cost: ALL {n_total} samples infeasible -> INFEASIBLE_COST"
+                )
             return torch.full(
                 (B, S), INFEASIBLE_COST, device=self.device, dtype=torch.float32
             )
@@ -324,6 +356,12 @@ class GoalMapper:
             device=self.device,
             dtype=dist_feas.dtype,
         )  # (B * S,)
+        if self.verbose_mpc or MPC_VERBOSE:
+            feas_costs = dist_feas.detach().cpu().numpy()
+            mpc_log(
+                f"get_cost feasible rollout costs: min={feas_costs.min():.2f} "
+                f"mean={feas_costs.mean():.2f} max={feas_costs.max():.2f}"
+            )
         return dist.view(B, S)
 
     def _precheck_plan_feasibility(

@@ -14,11 +14,8 @@ if ROOT_DIR not in sys.path:
 # --------------------------
 
 
-import os
-import sys
 import argparse
 import torch
-import time
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
@@ -32,6 +29,7 @@ sys.path.append(str(CORTEX_GR1 / "lewm/le_wm"))
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lewm.goal_mapper import GoalMapper
 from lewm.feasible_cem_solver import CEMNoFeasibleSamplesError, FeasibleEliteCEMSolver
+from lewm.mpc_logging import set_mpc_verbose
 
 
 class MockConfig:
@@ -55,12 +53,23 @@ def run_diagnostic(
     use_skeleton=False,
     use_dino=False,
     dataset_root=".",
+    verbose=False,
+    num_samples=8000,
+    var_scale=0.6,
+    horizon=15,
 ):
+    set_mpc_verbose(verbose)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🔬 Running Full-Spectrum Diagnostic on {device}...")
     print(f"   - Multi-View: {use_multi_view}")
     print(f"   - Skeleton: {use_skeleton}")
     print(f"   - DINO: {use_dino}")
+    print(f"   - CEM: samples={num_samples} var_scale={var_scale} horizon={horizon}")
+    if use_dino:
+        print(
+            "   ⚠️  --use_dino: get_cost uses predict_subgoal (phase=0), "
+            "NOT goal_gallery latents — gallery is only for encode-side goals."
+        )
 
     if not Path(gallery_path).exists():
         print(f"❌ Error: Gallery not found at {gallery_path}")
@@ -69,13 +78,11 @@ def run_diagnostic(
         )
         return
 
-    # 1. Load Gallery
     gallery = torch.load(gallery_path, map_location=device)
     goal_ids = list(gallery["diagnostics"].keys())
     num_episodes = len(goal_ids)
     print(f"📈 Found {num_episodes} episodes. Auditing in batches of {batch_size}...")
 
-    # 2. Setup Vectorized Agent & Solver
     mapper = GoalMapper(
         model_path,
         dataset_root=dataset_root,
@@ -84,27 +91,30 @@ def run_diagnostic(
         use_skeleton=use_skeleton,
         use_dino=use_dino,
     )
-
-    # Initialize frozen_pose for manifold squashing (Offline diagnostic uses zero-pose)
-    mapper.frozen_pose = torch.zeros(32, device=device)
+    mapper.verbose_mpc = verbose
+    mapper.frozen_pose = torch.zeros(
+        32, device=device
+    )  # fallback; batch uses frozen_pose_per_env
 
     solver = FeasibleEliteCEMSolver(
         model=mapper,
-        num_samples=8000,
-        var_scale=0.6,
+        num_samples=num_samples,
+        var_scale=var_scale,
         n_steps=5,
         topk=100,
         device=device,
+        verbose=verbose,
     )
     solver.configure(
         action_space=MockSpace(shape=(1, 32)),
         n_envs=batch_size,
-        config=MockConfig(horizon=15),
+        config=MockConfig(horizon=horizon),
     )
 
-    improvements = []
+    improvements_elite = []
+    improvements_min = []
+    skipped_batches = 0
 
-    # 3. Batch Audit Loop
     for i in tqdm(range(0, num_episodes, batch_size), desc="Audit Batches"):
         batch_ids = goal_ids[i : i + batch_size]
         actual_batch_size = len(batch_ids)
@@ -113,17 +123,17 @@ def run_diagnostic(
             solver.configure(
                 action_space=MockSpace(shape=(1, 32)),
                 n_envs=actual_batch_size,
-                config=MockConfig(horizon=15),
+                config=MockConfig(horizon=horizon),
             )
 
-        # A. Prepare Observation Batch
         pixel_list = []
         latent_list = []
+        frozen_pose_rows = []
+        hist_action_rows = []
         for ep_id in batch_ids:
             diag_entry = gallery["diagnostics"][ep_id]
             pixels = diag_entry["pixels"]  # (T_history, V, C, H, W)
 
-            # 1. Handle Multi-View Geometry
             if use_multi_view and pixels.ndim == 4:
                 pixels = pixels.unsqueeze(1).repeat(1, 5, 1, 1, 1)
             elif pixels.ndim == 4:
@@ -132,60 +142,94 @@ def run_diagnostic(
             pixels = pixels.unsqueeze(0)  # (1, T_history, V, C, H, W)
             pixel_list.append(pixels)
             latent_list.append(gallery["goals"][ep_id])
+            frozen_pose_rows.append(diag_entry["action"][-1].float())
+            hist_action_rows.append(diag_entry["action"].float())
 
-        # Pixels: (B, 1, T_history, V, C, H, W), Actions: (B, 1, T_history, 32)
         info_dict = {
             "pixels": torch.stack(pixel_list).to(device),
-            "action": torch.zeros(actual_batch_size, 1, 3, 32).to(device),
+            "action": torch.stack(hist_action_rows).unsqueeze(1).to(device),
+            "frozen_pose_per_env": torch.stack(frozen_pose_rows).to(device),
         }
-        # Squeeze out the redundant (B, 1, 1, 192) --> (B, 1, 192)
         mapper.goal_latent = torch.stack(latent_list).squeeze(1).to(device)
 
-        # B. Initial Cost (Current observations vs Goal)
+        zero_plan = torch.zeros(actual_batch_size, 1, horizon, 32).to(device)
         with torch.no_grad():
-            initial_cost = mapper.get_cost(
-                info_dict, torch.zeros(actual_batch_size, 1, 15, 32).to(device)
-            )
+            initial_cost = mapper.get_cost(info_dict, zero_plan)
 
-        # C. Vectorized Planning
         try:
             outputs = solver.solve(info_dict, init_action=None)
         except CEMNoFeasibleSamplesError as exc:
+            skipped_batches += 1
             print(f"⚠️ Batch {i // batch_size}: {exc}")
             continue
 
-        # solver.solve returns costs for all samples. We want the BEST per batch.
-        # Shape: (B, S) -> find min over S -> (B,)
-        raw_costs = (
-            torch.tensor(outputs["costs"]).to(device).view(actual_batch_size, -1)
-        )
-        best_final_cost = raw_costs.min(dim=1).values
+        elite_costs = torch.tensor(
+            outputs.get("elite_mean_costs", outputs["costs"]), device=device
+        ).view(actual_batch_size, -1)
+        min_feas = torch.tensor(
+            outputs.get("min_feasible_costs", outputs["costs"]), device=device
+        ).view(actual_batch_size, -1)
 
-        # D. Improvement (B,)
-        # Positive values mean the planner found a better path than staying still.
-        imp = (initial_cost.view(-1) - best_final_cost).cpu().numpy()
-        improvements.extend(imp.tolist())
+        best_elite = elite_costs.min(dim=1).values
+        best_min = min_feas.min(dim=1).values
 
-        if i == 0:
-            # Debug the first robot in the batch
-            # initial_cost and best_final_cost are tensors, we need .item()
+        imp_elite = (initial_cost.view(-1) - best_elite).cpu().numpy()
+        imp_min = (initial_cost.view(-1) - best_min).cpu().numpy()
+        improvements_elite.extend(imp_elite.tolist())
+        improvements_min.extend(imp_min.tolist())
+
+        if verbose or i == 0:
+            batch_idx = i // batch_size
+            print(f"\n📊 Batch {batch_idx} (eps {batch_ids[0]}..{batch_ids[-1]}):")
             print(
-                f"   [DEBUG] Batch 0, Robot 0: Initial {initial_cost[0].item():.2f} -> Best Final {best_final_cost[0].item():.2f}"
+                f"   frozen_pose_per_env right-arm |max|="
+                f"{info_dict['frozen_pose_per_env'][:, 16:20].abs().max().item():.4f}"
             )
-            print(f"   [DEBUG] Improvement: {imp[0].item():.2f}")
+            print(
+                f"   initial_cost (zero plan): "
+                f"{[round(x, 2) for x in initial_cost.view(-1).cpu().tolist()]}"
+            )
+            print(
+                f"   CEM elite_mean_cost: "
+                f"{[round(x, 2) for x in best_elite.cpu().tolist()]}"
+            )
+            print(
+                f"   CEM min_feasible_cost: "
+                f"{[round(x, 2) for x in best_min.cpu().tolist()]}"
+            )
+            print(
+                f"   improvement (elite mean): "
+                f"{[round(x, 2) for x in imp_elite.tolist()]}"
+            )
+            print(
+                f"   improvement (min feasible): "
+                f"{[round(x, 2) for x in imp_min.tolist()]}"
+            )
+            if outputs.get("feasible_sample_counts"):
+                print(
+                    f"   n_feasible last CEM iter: {outputs['feasible_sample_counts'][-1]}"
+                )
 
-    # 4. Final Verdict
-    avg_imp = np.mean(improvements)
+    avg_elite = float(np.mean(improvements_elite)) if improvements_elite else 0.0
+    avg_min = float(np.mean(improvements_min)) if improvements_min else 0.0
     print(f"\n🏁 FULL SWEEP VERDICT:")
-    print(f"   Episodes Audited: {len(improvements)}")
-    print(f"   Avg Latent Improvement: {avg_imp:.4f}")
+    print(f"   Episodes Audited: {len(improvements_elite)}")
+    print(f"   Skipped batches (all infeasible): {skipped_batches}")
+    print(f"   Avg improvement vs zero-plan (elite mean cost): {avg_elite:.4f}")
+    print(f"   Avg improvement vs zero-plan (min feasible cost): {avg_min:.4f}")
 
-    if avg_imp > 50.0:
-        print("🚀 VERDICT: MPC Parameters are robust and ready for simulator!")
-    elif avg_imp > 20.0:
-        print("⚠️ VERDICT: MPC is functional but cost sharpening may be needed.")
+    if avg_min > 50.0:
+        print("🚀 VERDICT: MPC finds clearly better feasible plans vs zero baseline.")
+    elif avg_min > 20.0:
+        print("⚠️ VERDICT: Some improvement; check reward scale and frozen_pose.")
+    elif avg_elite <= 0.0 and avg_min <= 0.0:
+        print(
+            "❌ VERDICT: No improvement. See [MPC] logs (--verbose): "
+            "likely metric mismatch (use_dino vs gallery), zero frozen_pose, "
+            "or CEM stuck at zero-mean init — not necessarily var_scale."
+        )
     else:
-        print("❌ VERDICT: Planning failed to improve over initial state.")
+        print("❌ VERDICT: Mixed / weak improvement — inspect per-batch logs above.")
 
 
 if __name__ == "__main__":
@@ -196,10 +240,16 @@ if __name__ == "__main__":
     parser.add_argument("--multi_view", action="store_true", default=False)
     parser.add_argument("--use_skeleton", action="store_true", default=False)
     parser.add_argument("--use_dino", action="store_true", default=False)
+    parser.add_argument("--verbose", action="store_true", default=False)
+    parser.add_argument("--num_samples", type=int, default=8000)
+    parser.add_argument("--var_scale", type=float, default=0.6)
+    parser.add_argument("--horizon", type=int, default=15)
     parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
     args = parser.parse_args()
+    from lewm.mpc_logging import MPC_VERBOSE
 
-    # Resolve Dataset Root Dynamically
+    mpc_verbose = args.verbose or MPC_VERBOSE
+
     try:
         ds = LeRobotDataset(args.dataset)
         resolved_root = ds.root
@@ -215,4 +265,8 @@ if __name__ == "__main__":
         use_skeleton=args.use_skeleton,
         use_dino=args.use_dino,
         dataset_root=resolved_root,
+        verbose=mpc_verbose,
+        num_samples=args.num_samples,
+        var_scale=args.var_scale,
+        horizon=args.horizon,
     )

@@ -30,6 +30,7 @@ from gymnasium.spaces import Box
 # Local imports
 from lewm.goal_mapper import GoalMapper
 from lewm.feasible_cem_solver import FeasibleEliteCEMSolver
+from lewm.mpc_logging import MPC_VERBOSE, mpc_log, set_mpc_verbose
 from gr1_protocol import StandardScaler
 from lewm.skeleton.skeletal_utils import reconstruct_4ch_frame
 
@@ -78,7 +79,12 @@ class LEWMInferenceServer:
         use_skeleton=False,
         use_dino=False,
         use_task_workspace=False,
+        verbose: bool | None = None,
     ):
+        if verbose is None:
+            verbose = MPC_VERBOSE
+        set_mpc_verbose(verbose)
+        self._mpc_verbose = verbose
         print(
             f"--- Initializing Oracle MPC Server (Gallery Only, Multi-View: {use_multi_view}, "
             f"Skeleton: {use_skeleton}, DINO: {use_dino}, TaskWorkspace: {use_task_workspace}) ---"
@@ -116,6 +122,7 @@ class LEWMInferenceServer:
             use_dino=use_dino,
             use_task_workspace=use_task_workspace,
         )
+        self.agent.verbose_mpc = verbose
 
         # Initialize MuJoCo for server-side skeletal prior rendering
         if self.use_skeleton:
@@ -147,6 +154,7 @@ class LEWMInferenceServer:
             n_steps=5,
             topk=100,
             device=DEVICE,
+            verbose=verbose,
         )
         self.solver.configure(
             action_space=Box(low=-1.0, high=1.0, shape=(4, 32)),
@@ -366,6 +374,14 @@ class LEWMInferenceServer:
                     obs_dict,
                     init_action=init_guess,
                 )
+                if self._mpc_verbose:
+                    elite = outputs.get("elite_mean_costs", outputs.get("costs"))
+                    mn = outputs.get("min_feasible_costs")
+                    mpc_log(
+                        f"plan step {self.step_counter}: elite_mean_cost={elite} "
+                        f"min_feasible_cost={mn} "
+                        f"n_feasible_last={outputs.get('feasible_sample_counts', [None])[-1]}"
+                    )
 
             best_plan = outputs["actions"].cpu().numpy()
             if best_plan.ndim == 4:
@@ -574,7 +590,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable fixed task workspace gate on CEM final-step EE",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print [MPC] CEM / get_cost diagnostics (or set LEWM_MPC_VERBOSE=1)",
+    )
     args = parser.parse_args()
+    mpc_verbose = args.verbose or MPC_VERBOSE
     server = LEWMInferenceServer(
         args.model,
         args.gallery,
@@ -582,5 +604,6 @@ if __name__ == "__main__":
         use_skeleton=args.use_skeleton,
         use_dino=args.use_dino,
         use_task_workspace=args.task_workspace,
+        verbose=mpc_verbose,
     )
     server.run(host=args.host, port=args.port)
