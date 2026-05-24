@@ -335,9 +335,6 @@ class GoalMapper:
         flat_plan_actions: (B * S, T_horizon, 32) -> returns (B * S,) bool mask.
         """
         plan_np = flat_plan_actions.detach().cpu().numpy()  # (B * S, T_horizon, 32)
-        print(
-            f"plan_np: {plan_np.min()} {plan_np.max()} {plan_np.mean()} {plan_np.std()}"
-        )
 
         if self.use_task_workspace:
             tw_wire32 = obs_dict.get("task_workspace_wire32")
