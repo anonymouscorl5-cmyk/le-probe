@@ -13,31 +13,12 @@ from typing import Optional
 import numpy as np
 import torch
 
-from gr1_config import JOINT_LIMITS_MAX, JOINT_LIMITS_MIN
 from lewm.task_workspace import INFEASIBLE_COST, TaskWorkspaceMPCConstraint
 
-# Buffered right-arm wire (radian) ranges from pre-polytope LeWM runs (b1b95bf, May 2026).
-# Converted once to protocol [-1, 1] via the same mapping as StandardScaler.unscale_action.
-RIGHT_ARM_WIRE_SLICE = slice(17, 21)
-RIGHT_ARM_WIRE_MIN = np.array([-0.312, -0.098, -0.156, -0.098], dtype=np.float64)
-RIGHT_ARM_WIRE_MAX = np.array([1.172, 0.098, 0.236, 0.098], dtype=np.float64)
-
-
-def _wire_limits_to_norm_bounds(
-    wire_min: np.ndarray, wire_max: np.ndarray, joint_slice: slice
-) -> tuple[np.ndarray, np.ndarray]:
-    """Map radian limits to normalized bounds: wire = (norm + 1) * range/2 + lmin."""
-    lmin = np.asarray(JOINT_LIMITS_MIN[joint_slice], dtype=np.float64)
-    lmax = np.asarray(JOINT_LIMITS_MAX[joint_slice], dtype=np.float64)
-    rng = np.where(lmax - lmin < 1e-6, 1.0, lmax - lmin)
-    norm_lo = 2.0 * (wire_min - lmin) / rng - 1.0
-    norm_hi = 2.0 * (wire_max - lmin) / rng - 1.0
-    return np.minimum(norm_lo, norm_hi), np.maximum(norm_lo, norm_hi)
-
-
-RIGHT_ARM_NORM_MIN, RIGHT_ARM_NORM_MAX = _wire_limits_to_norm_bounds(
-    RIGHT_ARM_WIRE_MIN, RIGHT_ARM_WIRE_MAX, RIGHT_ARM_WIRE_SLICE
-)
+# Buffered right-arm norm ranges from pre-polytope LeWM runs (b1b95bf, May 2026).
+RIGHT_ARM_NORM_SLICE = slice(16, 20)
+RIGHT_ARM_NORM_MIN = np.array([-1, 0, -0.15, -0.5], dtype=np.float64)
+RIGHT_ARM_NORM_MAX = np.array([0, 1, 0.15, 0], dtype=np.float64)
 
 # Extra CEM samples when filtering aggressively (no task-workspace gate).
 CEM_NUM_SAMPLES_DEFAULT = 800
@@ -65,7 +46,7 @@ def right_arm_norm_feasible_mask(plan_norm: np.ndarray) -> np.ndarray:
     if plan_norm.ndim == 2:
         plan_norm = plan_norm[:, np.newaxis, :]
 
-    arm = plan_norm[..., RIGHT_ARM_WIRE_SLICE]  # (N, T, 4)
+    arm = plan_norm[..., RIGHT_ARM_NORM_SLICE]  # (N, T, 4)
     in_range = (arm >= RIGHT_ARM_NORM_MIN) & (arm <= RIGHT_ARM_NORM_MAX)
     return in_range.all(axis=(1, 2))
 
