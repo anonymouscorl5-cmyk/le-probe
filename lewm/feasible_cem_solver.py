@@ -23,6 +23,34 @@ class CEMNoFeasibleSamplesError(RuntimeError):
     """All CEM candidates were rejected by the planning feasibility gate."""
 
 
+def _expand_obs_batch_for_cem(
+    v_batch: torch.Tensor | np.ndarray,
+    current_bs: int,
+    num_samples: int,
+) -> torch.Tensor | np.ndarray:
+    """
+    Add the CEM sample dimension: (B, ...) -> (B, num_samples, ...).
+
+    Legacy layouts used a placeholder ``S=1`` axis: (B, 1, T, V, C, H, W).
+    That extra dim must be stripped before expanding or ``expand`` rank-mismatches.
+    """
+    if torch.is_tensor(v_batch):
+        if (
+            v_batch.ndim >= 2
+            and v_batch.shape[0] == current_bs
+            and v_batch.shape[1] == 1
+        ):
+            # (B, 1, T, V, ...) or (B, 1, T, D) — drop placeholder sample axis
+            if v_batch.ndim >= 6 or (v_batch.ndim == 4 and v_batch.shape[-1] == 32):
+                v_batch = v_batch.squeeze(1)
+        return v_batch.unsqueeze(1).expand(current_bs, num_samples, *v_batch.shape[1:])
+    v_batch = np.asarray(v_batch)
+    if v_batch.ndim >= 2 and v_batch.shape[0] == current_bs and v_batch.shape[1] == 1:
+        if v_batch.ndim >= 6 or (v_batch.ndim == 4 and v_batch.shape[-1] == 32):
+            v_batch = np.squeeze(v_batch, axis=1)
+    return np.repeat(v_batch[:, None, ...], num_samples, axis=1)
+
+
 def aggregate_feasible_elites(
     costs: torch.Tensor,
     candidates: torch.Tensor,
@@ -95,13 +123,9 @@ class FeasibleEliteCEMSolver(CEMSolver):
             expanded_infos = {}
             for key, val in info_dict.items():
                 v_batch = val[start_idx:end_idx]
-                if torch.is_tensor(v_batch):
-                    v_batch = v_batch.unsqueeze(1).expand(
-                        current_bs, self.num_samples, *v_batch.shape[2:]
-                    )
-                elif isinstance(v_batch, np.ndarray):
-                    v_batch = np.repeat(v_batch[:, None, ...], self.num_samples, axis=1)
-                expanded_infos[key] = v_batch
+                expanded_infos[key] = _expand_obs_batch_for_cem(
+                    v_batch, current_bs, self.num_samples
+                )
 
             final_batch_cost = None
             last_feasible_counts = None

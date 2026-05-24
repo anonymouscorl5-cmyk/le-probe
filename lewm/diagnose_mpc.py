@@ -31,7 +31,7 @@ sys.path.append(str(CORTEX_GR1 / "lewm/le_wm"))
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lewm.goal_mapper import GoalMapper
-from lewm.feasible_cem_solver import FeasibleEliteCEMSolver
+from lewm.feasible_cem_solver import CEMNoFeasibleSamplesError, FeasibleEliteCEMSolver
 
 
 class MockConfig:
@@ -90,8 +90,8 @@ def run_diagnostic(
 
     solver = FeasibleEliteCEMSolver(
         model=mapper,
-        num_samples=800,
-        var_scale=0.3,
+        num_samples=8000,
+        var_scale=0.6,
         n_steps=5,
         topk=100,
         device=device,
@@ -123,20 +123,20 @@ def run_diagnostic(
             diag_entry = gallery["diagnostics"][ep_id]
             pixels = diag_entry["pixels"]  # (T_history, V, C, H, W)
 
-            # 1. Handle Multi-View Geometry
+            # Gallery stores (T_history, V, C, H, W) per episode
             if use_multi_view and pixels.ndim == 4:
+                # Legacy single-view diag: (T, C, H, W) -> (T, V, C, H, W)
                 pixels = pixels.unsqueeze(1).repeat(1, 5, 1, 1, 1)
             elif pixels.ndim == 4:
                 pixels = pixels.unsqueeze(1)
 
-            pixels = pixels.unsqueeze(0)  # (1, T_history, V, C, H, W)
             pixel_list.append(pixels)
             latent_list.append(gallery["goals"][ep_id])
 
-        # Pixels: (B, 1, T_history, V, C, H, W), Actions: (B, 1, T_history, 32), Latents: (B, 1, 1, 192)
+        # CEM expects (n_envs, T_history, V, C, H, W) — sample dim added inside solver
         info_dict = {
             "pixels": torch.stack(pixel_list).to(device),
-            "action": torch.zeros(actual_batch_size, 1, 3, 32).to(device),
+            "action": torch.zeros(actual_batch_size, 3, 32).to(device),
         }
         # Squeeze out the redundant (B, 1, 1, 192) --> (B, 1, 192)
         mapper.goal_latent = torch.stack(latent_list).squeeze(1).to(device)
@@ -148,7 +148,11 @@ def run_diagnostic(
             )
 
         # C. Vectorized Planning
-        outputs = solver.solve(info_dict, init_action=None)
+        try:
+            outputs = solver.solve(info_dict, init_action=None)
+        except CEMNoFeasibleSamplesError as exc:
+            print(f"⚠️ Batch {i // batch_size}: {exc}")
+            continue
 
         # solver.solve returns costs for all samples. We want the BEST per batch.
         # Shape: (B, S) -> find min over S -> (B,)
