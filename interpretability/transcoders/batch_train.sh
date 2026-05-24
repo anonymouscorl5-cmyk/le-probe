@@ -4,6 +4,7 @@
 #
 #   ACTIVATIONS_DIR=activations_granular_multiview \
 #   OUTPUT_DIR=transcoder_weights_multiview \
+#   ENCODER_BATCH_SIZE=16384 \
 #   bash interpretability/transcoders/batch_train.sh
 
 set -euo pipefail
@@ -17,12 +18,15 @@ DICT_SIZE="${DICT_SIZE:-12288}"
 L1_COEFF="${L1_COEFF:-3e-3}"
 EPOCHS="${EPOCHS:-10}"
 WINDOW_SIZE="${WINDOW_SIZE:-1}"
+ENCODER_BATCH_SIZE="${ENCODER_BATCH_SIZE:-4096}"
+PREDICTOR_BATCH_SIZE="${PREDICTOR_BATCH_SIZE:-512}"
 
 mkdir -p "$OUTPUT_DIR"
 
 echo "🔥 Residual Crosscoder Sweep"
 echo "   Activations: $ACTIVATIONS_DIR"
 echo "   Output:      $OUTPUT_DIR"
+echo "   Encoder batch: $ENCODER_BATCH_SIZE | Predictor batch: $PREDICTOR_BATCH_SIZE"
 
 LAYERS=(
     "encoder_L0" "encoder_L1" "encoder_L2" "encoder_L3" "encoder_L4" "encoder_L5"
@@ -54,9 +58,10 @@ for i in $(seq 0 $((NUM_LAYERS - 1))); do
         continue
     fi
 
-    BATCH_SIZE=4096
     if [[ "$SRC" == *"predictor"* ]]; then
-        BATCH_SIZE=512
+        BATCH_SIZE="$PREDICTOR_BATCH_SIZE"
+    else
+        BATCH_SIZE="$ENCODER_BATCH_SIZE"
     fi
 
     python train_transcoder.py \
