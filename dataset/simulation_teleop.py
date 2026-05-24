@@ -94,6 +94,14 @@ class GR1TeleopServer(GR1MuJoCoBase):
         """Observation packet for ``POST /reward`` (same layout as simulation_lewm)."""
         state = self.get_state_32()
         payload = {"state": pack_np(state)}
+        physics = self.get_physics_state()
+        dist = physics["target_dist"]
+        if dist > 0.2:
+            payload["phase_idx"] = 0
+        elif dist > 0.1:
+            payload["phase_idx"] = 1
+        else:
+            payload["phase_idx"] = 2
         try:
             cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "cube")
             if cube_id != -1:
@@ -133,7 +141,9 @@ class GR1TeleopServer(GR1MuJoCoBase):
             payload["lewm_reward_error"] = str(e)
         return payload
 
-    def _enrich_response(self, payload: dict) -> dict:
+    def _enrich_response(
+        self, payload: dict, *, after_robot_move: bool = False
+    ) -> dict:
         payload.update(
             {
                 "upload_queue": self.recorder.pending_uploads,
@@ -142,7 +152,9 @@ class GR1TeleopServer(GR1MuJoCoBase):
                 "physics": self.get_physics_state(),
             }
         )
-        return self._maybe_attach_lewm_reward(payload)
+        if after_robot_move:
+            return self._maybe_attach_lewm_reward(payload)
+        return payload
 
     def process_request(self, data: dict) -> dict:
         cmd = data.get("command")
@@ -151,14 +163,16 @@ class GR1TeleopServer(GR1MuJoCoBase):
             self.reset_env(lock_posture=self.lock_posture)
             norm_state = StandardScaler().scale_state(self.get_state_32())
             return self._enrich_response(
-                {"status": "reset_ok", "joints": norm_state.tolist()}
+                {"status": "reset_ok", "joints": norm_state.tolist()},
+                after_robot_move=True,
             )
 
         if cmd == "wild_randomize":
             self.wild_reset()
             norm_state = StandardScaler().scale_state(self.get_state_32())
             return self._enrich_response(
-                {"status": "wild_randomize_ok", "joints": norm_state.tolist()}
+                {"status": "wild_randomize_ok", "joints": norm_state.tolist()},
+                after_robot_move=True,
             )
 
         if cmd == "sync":
@@ -207,7 +221,7 @@ class GR1TeleopServer(GR1MuJoCoBase):
             action_32 = np.array(data["target"], dtype=np.float32)
             self.process_target_32(action_32)
             self.dispatch_action(action_32, self.last_target_q)
-            return self._enrich_response({"status": "step_ok"})
+            return self._enrich_response({"status": "step_ok"}, after_robot_move=True)
 
         if cmd == "store_snapshot":
             raw_state = self.get_state_32()

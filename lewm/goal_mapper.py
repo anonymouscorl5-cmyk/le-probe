@@ -257,6 +257,63 @@ class GoalMapper:
             return self.goal_latent
 
     @torch.no_grad()
+    def state_goal_distance(
+        self,
+        state_emb: torch.Tensor,
+        *,
+        goal_id: int = 0,
+        phase_idx: int | None = None,
+    ) -> dict:
+        """
+        L2 distance from a state latent to the MPC goal target (no action rollout).
+
+        Gallery mode: distance to ``goal_latent[goal_id]`` plus min over the loaded gallery.
+        DINO mode: distance to ``predict_subgoal(z, phase_idx)``.
+        """
+        if state_emb.dim() == 3:
+            state_emb = state_emb[:, -1, :]
+        if state_emb.dim() != 2:
+            raise ValueError(
+                f"state_emb must be (B, D) or (B, T, D); got {tuple(state_emb.shape)}"
+            )
+        state_emb = state_emb.to(self.device)
+
+        if self.use_dino:
+            p = 0 if phase_idx is None else int(phase_idx)
+            phase_t = torch.tensor([[p]], device=self.device, dtype=torch.long)
+            subgoal = self.model.predict_subgoal(state_emb, phase_t)
+            dist = torch.norm(state_emb - subgoal, p=2, dim=-1)
+            d = float(dist[0].item())
+            return {
+                "goal_distance": d,
+                "goal_distance_mode": "dino_subgoal",
+                "phase_idx": p,
+                "mpc_goal_cost_term": d,
+            }
+
+        if self.goal_latent is None:
+            raise ValueError("goal_latent not loaded (gallery required)")
+
+        goals = self.goal_latent.reshape(-1, state_emb.size(-1)).to(
+            device=self.device, dtype=state_emb.dtype
+        )
+        num_goals = goals.size(0)
+        gid = int(np.clip(int(goal_id), 0, num_goals - 1))
+        dist_assigned = torch.norm(state_emb - goals[gid : gid + 1], p=2, dim=-1)
+        dists_all = torch.cdist(state_emb, goals)
+        min_dist, best_idx = dists_all.min(dim=-1)
+        d = float(dist_assigned[0].item())
+        return {
+            "goal_distance": d,
+            "goal_distance_mode": "gallery_latent",
+            "goal_id": gid,
+            "min_gallery_goal_distance": float(min_dist[0].item()),
+            "best_gallery_goal_id": int(best_idx[0].item()),
+            "num_gallery_goals": num_goals,
+            "mpc_goal_cost_term": d * 0.5,
+        }
+
+    @torch.no_grad()
     def get_cost(self, obs_dict, actions):
         """
         Cost for CEM candidates.

@@ -286,14 +286,22 @@ class LEWMInferenceServer:
             rh = self.reward_history["pixels"]
             pixels_stacked = self._stack_pixels_for_encode(current_pixels, rh)
 
+            goal_id = int(req.get("goal_id", 0))
+            phase_idx = int(req["phase_idx"]) if "phase_idx" in req else None
+
             with torch.inference_mode():
                 info = self.agent.model.encode({"pixels": pixels_stacked})
                 emb = info["emb"]
                 reward_pred_all = self.agent.model.reward_head(emb).squeeze(-1)
                 reward_pred_last = float(reward_pred_all[0, -1].item())
                 mpc_cost = float((10.0 - reward_pred_last) * 50.0)
+                goal_info = self.agent.state_goal_distance(
+                    emb,
+                    goal_id=goal_id,
+                    phase_idx=phase_idx,
+                )
 
-            return {
+            out = {
                 "reward_pred": reward_pred_last,
                 "reward_pred_history": [
                     float(x) for x in reward_pred_all[0].detach().cpu().tolist()
@@ -303,7 +311,19 @@ class LEWMInferenceServer:
                 "pixel_history_len": len(rh),
                 "use_multi_view": self.use_multi_view,
                 "use_skeleton": self.use_skeleton,
+                "use_dino": self.use_dino,
+                **goal_info,
             }
+            if goal_info["goal_distance_mode"] == "gallery_latent":
+                out["goal_distance_formula"] = (
+                    "L2(state_emb, goal_latent[goal_id]); "
+                    "mpc_goal_cost_term = goal_distance * 0.5"
+                )
+            else:
+                out["goal_distance_formula"] = (
+                    "L2(state_emb, predict_subgoal(state_emb, phase_idx))"
+                )
+            return out
         except Exception as e:
             print(f"❌ Reward probe error: {e}")
             traceback.print_exc()

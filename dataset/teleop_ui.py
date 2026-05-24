@@ -74,7 +74,7 @@ if "active_joints" not in st.session_state:
                 st.session_state.staging_buffer[idx] = 0.0
 
 
-def send_command(payload):
+def send_command(payload, *, update_lewm_reward: bool = True):
     try:
         data = client.command(payload)
         st.session_state.upload_queue = data.get("upload_queue", 0)
@@ -82,10 +82,11 @@ def send_command(payload):
         st.session_state.batch_status = data.get("batch_status", 0)
         if "physics" in data:
             st.session_state.physics = data["physics"]
-        if "lewm_reward" in data:
-            st.session_state.lewm_reward = data["lewm_reward"]
-        elif "lewm_reward_error" in data:
-            st.session_state.lewm_reward = {"error": data["lewm_reward_error"]}
+        if update_lewm_reward:
+            if "lewm_reward" in data:
+                st.session_state.lewm_reward = data["lewm_reward"]
+            elif "lewm_reward_error" in data:
+                st.session_state.lewm_reward = {"error": data["lewm_reward_error"]}
         return data
     except Exception as e:
         st.error(f"Teleop HTTP error: {e}")
@@ -94,7 +95,7 @@ def send_command(payload):
 
 # Automated status refresh on EVERY rerun to ensure parity with server
 try:
-    data = send_command({"command": "poll_status"})
+    data = send_command({"command": "poll_status"}, update_lewm_reward=False)
     if data:
         st.session_state.total_episodes = data.get(
             "total_episodes", st.session_state.total_episodes
@@ -136,6 +137,15 @@ def handle_wild_reset():
     if resp and "joints" in resp:
         sync_ui_to_joints(resp["joints"])
         st.session_state.last_msg = ("WILD RANDOMIZED! Manifold expanded.", "🌀")
+
+
+def handle_submit():
+    """Send target after sliders; must use on_click so reward metrics refresh same run."""
+    final_packet = [float("nan")] * 32
+    for idx in st.session_state.active_joints:
+        final_packet[idx] = float(st.session_state.staging_buffer[idx])
+    send_command({"target": final_packet})
+    st.session_state.last_msg = ("Sent Action!", "🚀")
 
 
 def handle_ik_pickup(offset_cm):
@@ -286,6 +296,27 @@ with st.sidebar:
                 f"{lr.get('mpc_reward_cost', 0.0):.2f}",
                 help=lr.get("cost_formula", ""),
             )
+            if lr.get("goal_distance") is not None:
+                gd_help = lr.get("goal_distance_formula", "")
+                if lr.get("goal_distance_mode") == "gallery_latent":
+                    gd_help += (
+                        f" (goal_id={lr.get('goal_id', 0)}, "
+                        f"min over gallery={lr.get('min_gallery_goal_distance', 0):.4f} "
+                        f"@ id {lr.get('best_gallery_goal_id', 0)})"
+                    )
+                elif lr.get("phase_idx") is not None:
+                    gd_help += f" (phase_idx={lr['phase_idx']})"
+                st.metric(
+                    "goal_distance",
+                    f"{lr.get('goal_distance', 0.0):.4f}",
+                    help=gd_help,
+                )
+                if lr.get("mpc_goal_cost_term") is not None:
+                    st.metric(
+                        "mpc_goal_cost_term",
+                        f"{lr.get('mpc_goal_cost_term', 0.0):.4f}",
+                        help="Semantic term scale used inside MPC get_cost",
+                    )
             proxy = lr.get("teleop_progress_proxy")
             if proxy is not None:
                 st.metric(
@@ -322,7 +353,7 @@ with st.sidebar:
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("Refresh", icon="🔄", use_container_width=True):
-            send_command({"command": "poll_status"})
+            send_command({"command": "poll_status"}, update_lewm_reward=False)
             st.rerun()
     with col_btn2:
         if st.button(
@@ -429,18 +460,12 @@ col_sub, col_reach, col_reset, col_wild, col_snap, col_export, col_clr_all, col_
     st.columns(8)
 )
 with col_sub:
-    if st.button(
+    st.button(
         "Submit Request",
         type="primary",
         use_container_width=True,
-    ):
-        # Explicitly construct a clean 32-DOF packet to prevent cross-wiring
-        final_packet = [float("nan")] * 32
-        for idx in st.session_state.active_joints:
-            final_packet[idx] = float(st.session_state.staging_buffer[idx])
-
-        send_command({"target": final_packet})
-        st.toast("Sent Action!", icon="🚀")
+        on_click=handle_submit,
+    )
 
 with col_reach:
     st.button(
