@@ -291,7 +291,9 @@ class GoalMapper:
             # (B, S, 1, T_history, V, C, H, W) -> (B, S, T_history, V, C, H, W)
             pixels_input = pixels_input.squeeze(2)
         elif pixels_input.ndim < target_ndim:
-            mpc_shape_log("GoalMapper.get_cost REJECT pixels rank", pixels_raw=pixels_input)
+            mpc_shape_log(
+                "GoalMapper.get_cost REJECT pixels rank", pixels_raw=pixels_input
+            )
             raise ValueError(
                 f"pixels must be (B, S, T, V, C, H, W) with S=1 before CEM or "
                 f"S=num_samples after CEM expand; got {tuple(pixels_input.shape)}. "

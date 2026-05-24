@@ -145,13 +145,12 @@ def run_diagnostic(
             elif pixels.ndim == 4:
                 pixels = pixels.unsqueeze(1)
 
-            pixels = pixels.unsqueeze(0)  # (1, T_history, V, C, H, W)
             if ep_idx == 0:
                 mpc_shape_log(
                     f"diagnose batch {i // batch_size} after per-ep unsqueeze(0)",
                     pixels_ep=pixels,
                 )
-            pixel_list.append(pixels)
+            pixel_list.append(pixels)  # (T_history, V, C, H, W) per episode
             latent_list.append(gallery["goals"][ep_id])
             frozen_pose_rows.append(diag_entry["action"][-1].float())
             hist_action_rows.append(diag_entry["action"].float())

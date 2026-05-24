@@ -44,23 +44,36 @@ def _expand_obs_batch_for_cem(
     num_samples: int,
 ) -> torch.Tensor | np.ndarray:
     """
-    Broadcast env observations to CEM sample count (da0b849 contract).
+    Broadcast env observations to CEM sample count.
 
-    Pre-CEM layouts from diagnose / server::
-        pixels: (B, 1, T, V, C, H, W)
-        action: (B, 1, T_hist, 32)
+    Pre-CEM layouts from diagnose / server (S=1 placeholder at dim 1)::
+        pixels: (B, 1, T, V, C, H, W)  -> (B, num_samples, T, V, C, H, W)
+        action: (B, 1, T_hist, 32)      -> (B, num_samples, T_hist, 32)
 
-    This does ``unsqueeze(1).expand(B, num_samples, *rest)``, which may insert a
-    transient dim (e.g. pixels -> (B, S, 1, T, V, C, H, W)). ``GoalMapper.get_cost``
-    squeezes that dim when ``ndim > 7``.
-
-    Do not use ``.expand`` on dim 1 alone — that skips the squeeze path in get_cost.
+    Legacy (B, T, V, C, H, W) without S: ``unsqueeze(1)`` then expand.
     """
     if torch.is_tensor(v_batch):
+        if v_batch.ndim in (4, 7) and v_batch.shape[1] == 1:
+            expand_sizes = (current_bs, num_samples, *v_batch.shape[2:])
+            mpc_shape_log(
+                "_expand_obs_batch_for_cem (replace S=1)",
+                tensor_in=v_batch,
+                expand_sizes=expand_sizes,
+            )
+            try:
+                return v_batch.expand(expand_sizes)
+            except RuntimeError as exc:
+                mpc_shape_log(
+                    "_expand_obs_batch_for_cem FAILED",
+                    error=str(exc),
+                    tensor_in=v_batch,
+                    expand_sizes=expand_sizes,
+                )
+                raise
         unsqueezed = v_batch.unsqueeze(1)
-        expand_sizes = (current_bs, num_samples, *v_batch.shape[2:])
+        expand_sizes = (current_bs, num_samples, *v_batch.shape[1:])
         mpc_shape_log(
-            "_expand_obs_batch_for_cem",
+            "_expand_obs_batch_for_cem (insert S)",
             tensor_in=v_batch,
             after_unsqueeze=unsqueezed,
             expand_sizes=expand_sizes,
@@ -77,6 +90,10 @@ def _expand_obs_batch_for_cem(
             )
             raise
     v_batch = np.asarray(v_batch)
+    if v_batch.ndim in (4, 7) and v_batch.shape[1] == 1:
+        reps = [1] * v_batch.ndim
+        reps[1] = num_samples
+        return np.tile(v_batch, reps)
     return np.repeat(v_batch[:, None, ...], num_samples, axis=1)
 
 
@@ -208,7 +225,9 @@ class FeasibleEliteCEMSolver(CEMSolver):
                     expanded_infos[key] = _expand_obs_batch_for_cem(
                         v_batch, current_bs, self.num_samples
                     )
-                    mpc_shape_log(f"CEM expanded key={key!r}", after=expanded_infos[key])
+                    mpc_shape_log(
+                        f"CEM expanded key={key!r}", after=expanded_infos[key]
+                    )
 
             final_elite_mean: list[float] | None = None
             final_min_feasible: list[float] | None = None
