@@ -92,7 +92,7 @@ def compute_subgoal_waypoint_loss(self, batch, cfg, emb):
     B, T = phi_dino.shape[:2]
     D = emb.shape[-1]
 
-    # Per-view DINO projection, aggregated over cameras (matches fused multi-view emb)
+    # Per-view DINO projection, fused with same fusion_type as multi-view emb
     z_subgoal_target = self.model.project_dino(phi_dino, aggregate_views=True)
     if z_subgoal_target.dim() == 2:
         z_subgoal_target = z_subgoal_target.view(B, T, D)
@@ -269,6 +269,9 @@ def run(cfg):
     embed_dim = cfg.wm.get("embed_dim", hidden_dim)
     effective_act_dim = cfg.data.dataset.frameskip * cfg.wm.action_dim
 
+    fusion_type = cfg.get("fusion_type", "mean")
+    num_views = cfg.get("num_views", 5)
+
     world_model = MultiViewJEPA(
         encoder=encoder,
         predictor=ARPredictor(
@@ -283,6 +286,8 @@ def run(cfg):
         pred_proj=GR1MLP(input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048),
         embed_dim=embed_dim,
         use_dino=bool(cfg.get("use_dino", False)),
+        fusion_type=fusion_type,
+        num_views=num_views,
     )
     world_model.reward_head = RewardPredictor(input_dim=embed_dim, hidden_dim=512)
 

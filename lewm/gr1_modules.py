@@ -32,12 +32,16 @@ class MultiViewJEPA(JEPA):
         embed_dim=192,
         dino_dim=384,
         use_dino: bool = True,
+        fusion_type: str = "mean",
+        num_views: int | None = None,
     ):
         super().__init__(encoder, predictor, action_encoder, projector, pred_proj)
         self.use_dino = use_dino
         self.dino_dim = dino_dim
+        self.fusion_type = fusion_type
 
         if use_dino:
+            n_views = num_views if num_views is not None else num_dino_views()
             # 1. High-Level Waypoint Latent Predictor (Vector Reward Head)
             # Input: current latent z_t (embed_dim) + phase one-hot (4)
             self.high_level_predictor = HWMPredictor(
@@ -53,6 +57,15 @@ class MultiViewJEPA(JEPA):
                 output_dim=embed_dim,
                 hidden_dim=512,
             )
+
+            # Separate view fusion for DINO subgoals (not shared with encoder weights)
+            if fusion_type == "linear":
+                self.dino_fusion_layer = nn.Linear(embed_dim * n_views, embed_dim)
+            elif fusion_type == "attention":
+                self.dino_fusion_query = nn.Parameter(torch.randn(1, 1, embed_dim))
+                self.dino_fusion_attn = nn.MultiheadAttention(
+                    embed_dim, num_heads=3, batch_first=True
+                )
 
     def predict_subgoal(self, z_t, phase_idx):
         """
@@ -94,7 +107,7 @@ class MultiViewJEPA(JEPA):
         Projects frozen DINOv3 embeddings into latent space.
 
         Input must be (..., V, 384) with V = num_dino_views(); per-view projection
-        then mean over views when aggregate_views=True.
+        then fusion_type (mean/linear/attention) when aggregate_views=True.
         """
         if not self.use_dino:
             raise RuntimeError("project_dino requires use_dino=True (use --use_dino)")
@@ -111,8 +124,30 @@ class MultiViewJEPA(JEPA):
         proj = self.dino_projector(flat)
         proj = proj.view(*lead, n_views, -1)
         if aggregate_views:
-            return proj.mean(dim=-2)
+            return self._fuse_dino_views(proj)
         return proj
+
+    def _fuse_dino_views(self, proj: torch.Tensor) -> torch.Tensor:
+        """Fuse per-view projected DINO latents (..., V, D) -> (..., D)."""
+        if self.fusion_type == "mean":
+            return proj.mean(dim=-2)
+
+        lead = proj.shape[:-2]
+        v, d = proj.shape[-2], proj.shape[-1]
+
+        if self.fusion_type == "linear":
+            flat = rearrange(proj, "... v d -> (...) (v d)")
+            fused = self.dino_fusion_layer(flat)
+            return fused.view(*lead, d)
+
+        if self.fusion_type == "attention":
+            flat = rearrange(proj, "... v d -> (...) v d")
+            n = flat.shape[0]
+            query = self.dino_fusion_query.expand(n, 1, -1)
+            fused, _ = self.dino_fusion_attn(query, flat, flat)
+            return fused.squeeze(1).view(*lead, d)
+
+        raise ValueError(f"Unknown fusion type: {self.fusion_type}")
 
     def encode(self, info):
         """

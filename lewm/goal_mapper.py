@@ -114,6 +114,8 @@ class GoalMapper:
                         input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048
                     ),
                     use_dino=use_dino,
+                    fusion_type=cfg.get("fusion_type", "linear"),
+                    num_views=num_views,
                 )
                 self.model.reward_head = RewardPredictor(
                     input_dim=embed_dim, hidden_dim=512
