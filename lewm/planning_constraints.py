@@ -22,7 +22,7 @@ RIGHT_ARM_NORM_MAX = np.array([0, 1, 0.15, 0], dtype=np.float64)
 
 # Extra CEM samples when filtering aggressively (no task-workspace gate).
 CEM_NUM_SAMPLES_DEFAULT = 800
-CEM_NUM_SAMPLES_HARD_ARM_GATE = 1600
+CEM_NUM_SAMPLES_HARD_ARM_GATE = 8000
 
 
 def freeze_and_clamp_actions(

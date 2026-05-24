@@ -31,7 +31,7 @@ sys.path.append(str(CORTEX_GR1 / "lewm/le_wm"))
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lewm.goal_mapper import GoalMapper
-from stable_worldmodel.solver import CEMSolver
+from lewm.feasible_cem_solver import FeasibleEliteCEMSolver
 
 
 class MockConfig:
@@ -88,7 +88,7 @@ def run_diagnostic(
     # Initialize frozen_pose for manifold squashing (Offline diagnostic uses zero-pose)
     mapper.frozen_pose = torch.zeros(32, device=device)
 
-    solver = CEMSolver(
+    solver = FeasibleEliteCEMSolver(
         model=mapper,
         num_samples=800,
         var_scale=0.3,

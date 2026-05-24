@@ -29,7 +29,7 @@ from gymnasium.spaces import Box
 
 # Local imports
 from lewm.goal_mapper import GoalMapper
-from stable_worldmodel.solver.cem import CEMSolver
+from lewm.feasible_cem_solver import FeasibleEliteCEMSolver
 from gr1_protocol import StandardScaler
 from lewm.skeleton.skeletal_utils import reconstruct_4ch_frame
 
@@ -140,7 +140,7 @@ class LEWMInferenceServer:
         print(f"🚀 Brain Prime: Loaded all {len(goal_list)} goals for Omni-MPC.")
 
         # 4. CEM Solver Hyperparameters (Graceful Multi-View)
-        self.solver = CEMSolver(
+        self.solver = FeasibleEliteCEMSolver(
             model=self.agent,
             num_samples=cem_samples,
             var_scale=0.6,
