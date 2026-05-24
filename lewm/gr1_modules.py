@@ -120,7 +120,7 @@ class MultiViewJEPA(JEPA):
             )
 
         lead = phi_dino.shape[:-2]
-        flat = rearrange(phi_dino, "... v d -> (...) d")
+        flat = phi_dino.reshape(-1, self.dino_dim)
         proj = self.dino_projector(flat)
         proj = proj.view(*lead, n_views, -1)
         if aggregate_views:
@@ -136,12 +136,12 @@ class MultiViewJEPA(JEPA):
         v, d = proj.shape[-2], proj.shape[-1]
 
         if self.fusion_type == "linear":
-            flat = rearrange(proj, "... v d -> (...) (v d)")
+            flat = proj.reshape(-1, v * d)
             fused = self.dino_fusion_layer(flat)
             return fused.view(*lead, d)
 
         if self.fusion_type == "attention":
-            flat = rearrange(proj, "... v d -> (...) v d")
+            flat = proj.reshape(-1, v, d)
             n = flat.shape[0]
             query = self.dino_fusion_query.expand(n, 1, -1)
             fused, _ = self.dino_fusion_attn(query, flat, flat)
