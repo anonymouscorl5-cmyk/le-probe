@@ -24,36 +24,41 @@ class CEMNoFeasibleSamplesError(RuntimeError):
     """All CEM candidates were rejected by the planning feasibility gate."""
 
 
+# Per-env metadata — not broadcast along CEM sample axis
+_CEM_PASS_THROUGH_KEYS = frozenset(
+    {
+        "frozen_pose_per_env",
+        "phase_idx",
+        "task_workspace_wire32",
+        "task_workspace_H",
+        "task_workspace_d",
+        "task_workspace_check_final_only",
+        "task_workspace_cube_xyz",
+    }
+)
+
+
 def _expand_obs_batch_for_cem(
     v_batch: torch.Tensor | np.ndarray,
     current_bs: int,
     num_samples: int,
 ) -> torch.Tensor | np.ndarray:
     """
-    Broadcast env observations to CEM sample count.
+    Broadcast env observations to CEM sample count (da0b849 contract).
 
-    - Server / diagnose (pre-solve): ``(B, 1, T, V, C, H, W)`` or ``(B, 1, T, 32)``
-      uses placeholder ``S=1`` for direct ``get_cost``; expand replaces it with
-      ``num_samples`` via ``.expand(B, num_samples, *rest)`` (no extra unsqueeze).
+    Pre-CEM layouts from diagnose / server::
+        pixels: (B, 1, T, V, C, H, W)
+        action: (B, 1, T_hist, 32)
 
-    - Default CEM layout ``(B, T, V, C, H, W)``: ``unsqueeze(1)`` then expand, same
-      as upstream ``CEMSolver``.
+    This does ``unsqueeze(1).expand(B, num_samples, *rest)``, which may insert a
+    transient dim (e.g. pixels -> (B, S, 1, T, V, C, H, W)). ``GoalMapper.get_cost``
+    squeezes that dim when ``ndim > 7``.
+
+    Do not use ``.expand`` on dim 1 alone — that skips the squeeze path in get_cost.
     """
     if torch.is_tensor(v_batch):
-        if v_batch.ndim == 7 and v_batch.shape[1] == 1:
-            return v_batch.expand(current_bs, num_samples, *v_batch.shape[2:])
-        if v_batch.ndim == 4 and v_batch.shape[1] == 1:
-            return v_batch.expand(current_bs, num_samples, *v_batch.shape[2:])
         return v_batch.unsqueeze(1).expand(current_bs, num_samples, *v_batch.shape[2:])
     v_batch = np.asarray(v_batch)
-    if v_batch.ndim == 7 and v_batch.shape[1] == 1:
-        reps = [1] * v_batch.ndim
-        reps[1] = num_samples
-        return np.tile(v_batch, reps)
-    if v_batch.ndim == 4 and v_batch.shape[1] == 1:
-        reps = [1] * v_batch.ndim
-        reps[1] = num_samples
-        return np.tile(v_batch, reps)
     return np.repeat(v_batch[:, None, ...], num_samples, axis=1)
 
 
@@ -168,9 +173,12 @@ class FeasibleEliteCEMSolver(CEMSolver):
             expanded_infos = {}
             for key, val in info_dict.items():
                 v_batch = val[start_idx:end_idx]
-                expanded_infos[key] = _expand_obs_batch_for_cem(
-                    v_batch, current_bs, self.num_samples
-                )
+                if key in _CEM_PASS_THROUGH_KEYS:
+                    expanded_infos[key] = v_batch
+                else:
+                    expanded_infos[key] = _expand_obs_batch_for_cem(
+                        v_batch, current_bs, self.num_samples
+                    )
 
             final_elite_mean: list[float] | None = None
             final_min_feasible: list[float] | None = None

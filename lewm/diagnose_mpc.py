@@ -145,8 +145,9 @@ def run_diagnostic(
             frozen_pose_rows.append(diag_entry["action"][-1].float())
             hist_action_rows.append(diag_entry["action"].float())
 
+        # (B, 1, T, V, C, H, W) / (B, 1, T_hist, 32) — same layout as lewm_server pre-CEM
         info_dict = {
-            "pixels": torch.stack(pixel_list).to(device),
+            "pixels": torch.stack(pixel_list).unsqueeze(1).to(device),
             "action": torch.stack(hist_action_rows).unsqueeze(1).to(device),
             "frozen_pose_per_env": torch.stack(frozen_pose_rows).to(device),
         }

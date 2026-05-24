@@ -259,10 +259,21 @@ class GoalMapper:
     @torch.no_grad()
     def get_cost(self, obs_dict, actions):
         """
-        EVIDENCE-BASED COST CALCULATION (Transparent Adapter)
-        Flattens (B, S) into a single dimension to satisfy the 6D Library requirement.
+        Cost for CEM candidates.
+
+        Tensor contract (see da0b849)::
+
+            diagnose / server (before CEM):  pixels (B, 1, T, V, C, H, W)
+                                             action (B, 1, T_hist, 32)
+                                             plan   (B, 1, T_horizon, 32)  -> S=1
+
+            after CEM expand + squeeze:      pixels (B, S, T, V, C, H, W)
+                                             action (B, S, T_hist, 32)
+                                             plan   (B, S, T_horizon, 32)  -> S=num_samples
+
+        CEM adds S via ``unsqueeze(1).expand``; an extra dim may appear briefly as
+        (B, S, 1, T, ...) and is removed below when ``ndim > 7``.
         """
-        # 1. Extract and Force 7D Observation (B, S, T_history, V, C, H, W)
         B, S = actions.size(0), actions.size(1)
         pixels_input = obs_dict["pixels"].to(self.device)
         target_ndim = 7
@@ -270,6 +281,12 @@ class GoalMapper:
         if pixels_input.ndim > target_ndim:
             # (B, S, 1, T_history, V, C, H, W) -> (B, S, T_history, V, C, H, W)
             pixels_input = pixels_input.squeeze(2)
+        elif pixels_input.ndim < target_ndim:
+            raise ValueError(
+                f"pixels must be (B, S, T, V, C, H, W) with S=1 before CEM or "
+                f"S=num_samples after CEM expand; got {tuple(pixels_input.shape)}. "
+                "Stack diagnose batch as (B, 1, T, V, C, H, W) — see diagnose_mpc."
+            )
         if actions.ndim > 4:
             # (1, B, S, T_horizon, 32) -> (B, S, T_horizon, 32)
             actions = actions.squeeze(0)
@@ -421,9 +438,11 @@ class GoalMapper:
         K = flat_plan_actions.shape[0]
         batch_ids = flat_indices // S  # (K,) env row per feasible sample
 
-        # Encode once per unique batch row (history shared across S for that row)
-        info = self.model.encode({"pixels": pixels_input[batch_ids, 0]})
-        init_emb = info["emb"]  # (K, T_history, 192)
+        # History pixels are shared across S for each batch row (always index S=0)
+        unique_batch_ids, batch_row_idx = torch.unique(batch_ids, return_inverse=True)
+        enc_pixels = pixels_input[unique_batch_ids, 0]  # (U, T, V, C, H, W)
+        info = self.model.encode({"pixels": enc_pixels})
+        init_emb = info["emb"][batch_row_idx]  # (K, T_history, 192)
         curr_emb = init_emb  # grows along time as rollout proceeds
 
         # flat_hist: (K, T_history, 32), flat_plan: (K, T_horizon, 32)
