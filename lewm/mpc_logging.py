@@ -14,6 +14,11 @@ JSON export (no model; gate + CEM sampling only)::
   Grid search (var_scale x horizon, compact JSON)::
     python mpc_logging.py --gallery goal_gallery.pth --grid_search \\
         --batch_indices 0 --output_dir logs/mpc_debug
+
+  Right-arm sample histograms (feasible vs rejected, no model)::
+    python mpc_logging.py --gallery goal_gallery.pth --plot_samples \\
+        --horizon 4 --var_scale 0.1 --num_samples 8000 \\
+        --batch_indices 0 1 2 --output_dir logs/mpc_debug
 """
 
 from __future__ import annotations
@@ -43,8 +48,10 @@ from lewm.planning_constraints import (
     RIGHT_ARM_NORM_MAX,
     RIGHT_ARM_NORM_MIN,
     RIGHT_ARM_NORM_SLICE,
+    constrain_right_arm_cem_mean,
     freeze_and_clamp_actions,
     right_arm_norm_feasible_mask,
+    sample_cem_plan_candidates,
 )
 
 MPC_VERBOSE = os.environ.get("LEWM_MPC_VERBOSE", "").lower() in ("1", "true", "yes")
@@ -119,6 +126,77 @@ def _arm_summary(arm: np.ndarray) -> dict:
     }
 
 
+def generate_cem_plans_for_env(
+    *,
+    frozen_pose: torch.Tensor,
+    num_samples: int,
+    horizon: int,
+    var_scale: float,
+    device: str,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    CEM-style Gaussian samples + freeze/clamp; same path as FeasibleEliteCEMSolver.
+
+    Returns:
+        plan_np: (num_samples, horizon, 32) normalized actions
+        feasible: (num_samples,) bool — full-trajectory right-arm gate
+    """
+    gen = torch.Generator(device=device)
+    gen.manual_seed(seed)
+
+    mean = torch.zeros(1, horizon, 32, device=device)
+    var = var_scale * torch.ones(1, horizon, 32, device=device)
+    mean = constrain_right_arm_cem_mean(mean)
+
+    candidates = sample_cem_plan_candidates(
+        mean,
+        var,
+        num_samples=num_samples,
+        generator=gen,
+        constrain_right_arm=True,
+    )
+
+    flat = candidates.view(num_samples, horizon, 32)
+    frozen_rows = frozen_pose.unsqueeze(0).expand(num_samples, -1)
+    plan_np = freeze_and_clamp_actions(flat, frozen_rows).detach().cpu().numpy()
+    feasible = right_arm_norm_feasible_mask(plan_np)
+    return plan_np, feasible
+
+
+def _right_arm_values_from_plans(
+    plan_np: np.ndarray,
+    feasible: np.ndarray,
+    *,
+    timestep: str = "all",
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Pool right-arm joint values into feasible / rejected 1D arrays per joint.
+
+    timestep:
+        ``all`` — every (candidate, t) for candidates tagged feasible/rejected
+        ``first`` — t=0 only (first MPC step)
+    """
+    arm = plan_np[..., RIGHT_ARM_NORM_SLICE]  # (N, T, 4)
+    if timestep == "first":
+        arm = arm[:, :1, :]
+    elif timestep != "all":
+        raise ValueError(f"timestep must be 'all' or 'first', got {timestep!r}")
+
+    feas_mask = feasible
+    feas_arm = arm[feas_mask]  # (N_feas, T', 4)
+    rej_arm = arm[~feas_mask]
+    if feas_arm.size:
+        feas_flat = feas_arm.reshape(-1, 4)
+    else:
+        feas_flat = np.empty((0, 4))
+    if rej_arm.size:
+        rej_flat = rej_arm.reshape(-1, 4)
+    else:
+        rej_flat = np.empty((0, 4))
+    return feas_flat, rej_flat
+
+
 def analyze_cem_feasibility_for_env(
     *,
     ep_id,
@@ -131,21 +209,14 @@ def analyze_cem_feasibility_for_env(
     detail: bool = True,
 ) -> dict:
     """One env row: CEM-style samples + right-arm gate (matches FeasibleEliteCEMSolver)."""
-    gen = torch.Generator(device=device)
-    gen.manual_seed(seed)
-
-    mean = torch.zeros(1, horizon, 32, device=device)
-    var = var_scale * torch.ones(1, horizon, 32, device=device)
-
-    candidates = torch.randn(1, num_samples, horizon, 32, generator=gen, device=device)
-    candidates = candidates * var.unsqueeze(1) + mean.unsqueeze(1)
-    candidates[:, 0] = mean
-
-    flat = candidates.view(num_samples, horizon, 32)
-    frozen_rows = frozen_pose.unsqueeze(0).expand(num_samples, -1)
-    plan_np = freeze_and_clamp_actions(flat, frozen_rows).detach().cpu().numpy()
-
-    feasible = right_arm_norm_feasible_mask(plan_np)
+    plan_np, feasible = generate_cem_plans_for_env(
+        frozen_pose=frozen_pose,
+        num_samples=num_samples,
+        horizon=horizon,
+        var_scale=var_scale,
+        device=device,
+        seed=seed,
+    )
     n_feas = int(feasible.sum())
     arm = plan_np[..., RIGHT_ARM_NORM_SLICE]
     feas_idx = np.nonzero(feasible)[0]
@@ -212,6 +283,225 @@ def _summarize_episode_reports(episodes: list[dict]) -> dict:
             sum(1 for e in episodes if e["only_candidate_0_feasible"])
         ),
     }
+
+
+def plot_right_arm_sample_distributions(
+    *,
+    feasible_by_joint: list[np.ndarray],
+    rejected_by_joint: list[np.ndarray],
+    out_path: Path,
+    title: str,
+    bins: int = 80,
+) -> None:
+    """Four-panel histogram: green=feasible, red=rejected; shaded band = envelope."""
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=False)
+    axes = axes.ravel()
+    n_feas = sum(len(v) for v in feasible_by_joint)
+    n_rej = sum(len(v) for v in rejected_by_joint)
+
+    for j, (ax, label) in enumerate(zip(axes, RIGHT_ARM_JOINT_LABELS)):
+        lo, hi = float(RIGHT_ARM_NORM_MIN[j]), float(RIGHT_ARM_NORM_MAX[j])
+        feas = feasible_by_joint[j]
+        rej = rejected_by_joint[j]
+
+        ax.axvspan(
+            lo, hi, color="#4a90d9", alpha=0.18, label=f"envelope [{lo:g}, {hi:g}]"
+        )
+        if rej.size:
+            ax.hist(
+                rej,
+                bins=bins,
+                range=(-1.05, 1.05),
+                density=True,
+                alpha=0.55,
+                color="#c44e52",
+                label=f"rejected ({rej.size:,})",
+            )
+        if feas.size:
+            ax.hist(
+                feas,
+                bins=bins,
+                range=(-1.05, 1.05),
+                density=True,
+                alpha=0.55,
+                color="#55a868",
+                label=f"feasible ({feas.size:,})",
+            )
+        ax.axvline(lo, color="#2166ac", ls="--", lw=1)
+        ax.axvline(hi, color="#2166ac", ls="--", lw=1)
+        ax.set_xlim(-1.05, 1.05)
+        ax.set_title(f"idx {16 + j}: {label}")
+        ax.set_xlabel("normalized value")
+        ax.set_ylabel("density")
+        ax.legend(loc="upper right", fontsize=7)
+
+    fig.suptitle(title, fontsize=11)
+    fig.text(
+        0.5,
+        0.01,
+        f"pooled values: feasible {n_feas:,} | rejected {n_rej:,}",
+        ha="center",
+        fontsize=9,
+        color="#444",
+    )
+    fig.tight_layout(rect=[0, 0.03, 1, 0.96])
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Wrote {out_path}")
+
+
+def export_sample_distribution_plots(
+    gallery_path: str | Path,
+    *,
+    batch_indices: list[int],
+    batch_size: int = 10,
+    num_samples: int = 8000,
+    var_scale: float = 0.6,
+    horizon: int = 15,
+    output_dir: str | Path = "logs/mpc_debug",
+    seed: int = 0,
+    max_episodes: int | None = None,
+    timestep: str = "all",
+    plot_per_episode: bool = False,
+    bins: int = 80,
+) -> Path:
+    """
+    Pool CEM right-arm samples across episodes; write aggregate PNG + metadata JSON.
+
+    Uses the same sampling + gate as diagnose / FeasibleEliteCEMSolver (no LeWM load).
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    gallery_path = Path(gallery_path)
+    if not gallery_path.exists():
+        raise FileNotFoundError(gallery_path)
+
+    gallery = torch.load(gallery_path, map_location="cpu")
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    episode_rows = _collect_episodes_for_batches(
+        gallery,
+        batch_indices=batch_indices,
+        batch_size=batch_size,
+        device=device,
+    )
+    if max_episodes is not None:
+        episode_rows = episode_rows[:max_episodes]
+    if not episode_rows:
+        raise ValueError("No episodes found for the requested batch_indices")
+
+    pooled_feas = [[] for _ in range(4)]
+    pooled_rej = [[] for _ in range(4)]
+    episode_summaries = []
+
+    for i, (batch_idx, ep_id, frozen) in enumerate(episode_rows):
+        plan_np, feasible = generate_cem_plans_for_env(
+            frozen_pose=frozen,
+            num_samples=num_samples,
+            horizon=horizon,
+            var_scale=var_scale,
+            device=device,
+            seed=seed + horizon * 10_000 + int(var_scale * 1000) + i,
+        )
+        feas_flat, rej_flat = _right_arm_values_from_plans(
+            plan_np, feasible, timestep=timestep
+        )
+        for j in range(4):
+            if feas_flat.size:
+                pooled_feas[j].append(feas_flat[:, j])
+            if rej_flat.size:
+                pooled_rej[j].append(rej_flat[:, j])
+
+        episode_summaries.append(
+            {
+                "episode_id": ep_id,
+                "batch_index": batch_idx,
+                "feasible_fraction": float(feasible.mean()),
+                "feasible_count": int(feasible.sum()),
+                "only_candidate_0_feasible": bool(
+                    feasible.sum() == 1 and feasible[0] and not feasible[1:].any()
+                ),
+            }
+        )
+
+        if plot_per_episode:
+            ep_feas = [
+                feas_flat[:, j] if feas_flat.size else np.array([]) for j in range(4)
+            ]
+            ep_rej = [
+                rej_flat[:, j] if rej_flat.size else np.array([]) for j in range(4)
+            ]
+            ep_path = out_dir / f"right_arm_dist_ep{ep_id}_h{horizon}_s{var_scale}.png"
+            plot_right_arm_sample_distributions(
+                feasible_by_joint=ep_feas,
+                rejected_by_joint=ep_rej,
+                out_path=ep_path,
+                title=(
+                    f"ep {ep_id} | h={horizon} σ={var_scale} | "
+                    f"{num_samples} CEM samples | timestep={timestep}"
+                ),
+                bins=bins,
+            )
+
+    feas_arrays = [
+        np.concatenate(chunks) if chunks else np.array([]) for chunks in pooled_feas
+    ]
+    rej_arrays = [
+        np.concatenate(chunks) if chunks else np.array([]) for chunks in pooled_rej
+    ]
+
+    ts_tag = "t0" if timestep == "first" else "all_t"
+    png_path = out_dir / f"right_arm_dist_h{horizon}_sigma{var_scale}_{ts_tag}.png"
+    plot_right_arm_sample_distributions(
+        feasible_by_joint=feas_arrays,
+        rejected_by_joint=rej_arrays,
+        out_path=png_path,
+        title=(
+            f"pooled {len(episode_rows)} episodes | h={horizon} σ={var_scale} | "
+            f"{num_samples} samples/ep | timestep={timestep}"
+        ),
+        bins=bins,
+    )
+
+    meta = {
+        "plot_path": str(png_path),
+        "per_episode_plots": plot_per_episode,
+        "envelope_right_arm_norm": {
+            "indices": list(range(16, 20)),
+            "labels": RIGHT_ARM_JOINT_LABELS,
+            "min": RIGHT_ARM_NORM_MIN.tolist(),
+            "max": RIGHT_ARM_NORM_MAX.tolist(),
+        },
+        "cem_sampling": {
+            "num_samples": num_samples,
+            "var_scale": var_scale,
+            "horizon": horizon,
+            "timestep_pooling": timestep,
+        },
+        "episode_count": len(episode_rows),
+        "value_counts_per_joint": {
+            RIGHT_ARM_JOINT_LABELS[j]: {
+                "feasible": int(feas_arrays[j].size),
+                "rejected": int(rej_arrays[j].size),
+            }
+            for j in range(4)
+        },
+        "mean_feasible_fraction": float(
+            np.mean([e["feasible_fraction"] for e in episode_summaries])
+        ),
+        "episodes_only_candidate_0_feasible": int(
+            sum(1 for e in episode_summaries if e["only_candidate_0_feasible"])
+        ),
+        "episodes": episode_summaries,
+    }
+    meta_path = out_dir / f"right_arm_dist_h{horizon}_sigma{var_scale}_{ts_tag}.json"
+    meta_path.write_text(json.dumps(meta, indent=2))
+    print(f"Wrote {meta_path}")
+    return png_path
 
 
 def _collect_episodes_for_batches(
@@ -510,7 +800,52 @@ def _cli() -> None:
         action="store_true",
         help="Include per-episode rows in each grid cell (larger JSON)",
     )
+    parser.add_argument(
+        "--plot_samples",
+        action="store_true",
+        help="Histogram right-arm joint values (feasible vs rejected); no model",
+    )
+    parser.add_argument(
+        "--max_episodes",
+        type=int,
+        default=None,
+        help="Cap episodes for --plot_samples (default: all in selected batches)",
+    )
+    parser.add_argument(
+        "--plot_per_episode",
+        action="store_true",
+        help="Also write one PNG per episode under output_dir",
+    )
+    parser.add_argument(
+        "--plot_timestep",
+        choices=("all", "first"),
+        default="all",
+        help="Pool all horizon steps or t=0 only (default: all)",
+    )
+    parser.add_argument(
+        "--plot_bins",
+        type=int,
+        default=80,
+        help="Histogram bins for --plot_samples",
+    )
     args = parser.parse_args()
+
+    if args.plot_samples:
+        export_sample_distribution_plots(
+            args.gallery,
+            batch_indices=args.batch_indices,
+            batch_size=args.batch_size,
+            num_samples=args.num_samples,
+            var_scale=args.var_scale,
+            horizon=args.horizon,
+            output_dir=args.output_dir,
+            seed=args.seed,
+            max_episodes=args.max_episodes,
+            timestep=args.plot_timestep,
+            plot_per_episode=args.plot_per_episode,
+            bins=args.plot_bins,
+        )
+        return
 
     if args.grid_search:
         export_feasibility_grid_search(

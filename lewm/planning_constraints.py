@@ -1,9 +1,9 @@
 """
 MPC action feasibility checks applied **before** LeWM rollout.
 
-- Default (no --task-workspace): reject CEM samples whose right-arm joints
-  (indices 17–20) leave a buffered envelope in **normalized** [-1, 1] protocol space.
-- With --task-workspace: reject samples whose FK fingertip leaves the fixed hull.
+- Default (no --task-workspace): CEM draws joints 16–19 inside the buffered norm
+  envelope; ``right_arm_norm_feasible_mask`` remains a safety check before LeWM.
+- With --task-workspace: unconstrained Gaussian on all dims; FK hull rejects infeasible.
 """
 
 from __future__ import annotations
@@ -23,6 +23,63 @@ RIGHT_ARM_NORM_MAX = np.array([0, 1, 0.15, 0], dtype=np.float64)
 # Extra CEM samples when filtering aggressively (no task-workspace gate).
 CEM_NUM_SAMPLES_DEFAULT = 800
 CEM_NUM_SAMPLES_HARD_ARM_GATE = 8000
+
+
+def _right_arm_bounds(
+    device: torch.device, dtype: torch.dtype
+) -> tuple[torch.Tensor, torch.Tensor]:
+    lo = torch.as_tensor(RIGHT_ARM_NORM_MIN, device=device, dtype=dtype)
+    hi = torch.as_tensor(RIGHT_ARM_NORM_MAX, device=device, dtype=dtype)
+    return lo, hi
+
+
+def constrain_right_arm_norm_actions(actions: torch.Tensor) -> torch.Tensor:
+    """Clamp joints 16–19 into ``RIGHT_ARM_NORM_MIN`` / ``RIGHT_ARM_NORM_MAX``."""
+    lo, hi = _right_arm_bounds(actions.device, actions.dtype)
+    out = actions.clone()
+    out[..., RIGHT_ARM_NORM_SLICE] = out[..., RIGHT_ARM_NORM_SLICE].clamp(
+        min=lo, max=hi
+    )
+    return out
+
+
+def constrain_right_arm_cem_mean(mean: torch.Tensor) -> torch.Tensor:
+    """Keep CEM mean inside the right-arm envelope (after elite aggregation)."""
+    return constrain_right_arm_norm_actions(mean)
+
+
+def sample_cem_plan_candidates(
+    batch_mean: torch.Tensor,
+    batch_var: torch.Tensor,
+    *,
+    num_samples: int,
+    generator: torch.Generator,
+    constrain_right_arm: bool = True,
+) -> torch.Tensor:
+    """
+    Gaussian CEM candidates: ``N(mean, var)`` with candidate 0 pinned to ``mean``.
+
+    When ``constrain_right_arm`` (default, no task-workspace path), joints 16–19 are
+    clamped into the norm envelope after each draw so the gate should not reject on
+    right-arm bounds alone.
+    """
+    device = batch_mean.device
+    dtype = batch_mean.dtype
+    b, horizon, action_dim = batch_mean.shape
+    candidates = torch.randn(
+        b,
+        num_samples,
+        horizon,
+        action_dim,
+        generator=generator,
+        device=device,
+        dtype=dtype,
+    )
+    candidates = candidates * batch_var.unsqueeze(1) + batch_mean.unsqueeze(1)
+    candidates[:, 0] = batch_mean
+    if constrain_right_arm:
+        candidates = constrain_right_arm_norm_actions(candidates)
+    return candidates
 
 
 def freeze_and_clamp_actions(

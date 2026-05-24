@@ -17,6 +17,10 @@ import torch
 from stable_worldmodel.solver.cem import CEMSolver
 
 from lewm.mpc_logging import MPC_VERBOSE, mpc_log, mpc_shape_log
+from lewm.planning_constraints import (
+    constrain_right_arm_cem_mean,
+    sample_cem_plan_candidates,
+)
 from lewm.task_workspace import INFEASIBLE_COST
 
 
@@ -197,6 +201,9 @@ class FeasibleEliteCEMSolver(CEMSolver):
         mean, var = self.init_action_distrib(init_action)
         mean = mean.to(self.device)
         var = var.to(self.device)
+        constrain_right_arm = not getattr(self.model, "use_task_workspace", False)
+        if constrain_right_arm:
+            mean = constrain_right_arm_cem_mean(mean)
 
         for start_idx in range(0, self.n_envs, self.batch_size):
             end_idx = min(start_idx + self.batch_size, self.n_envs)
@@ -235,18 +242,13 @@ class FeasibleEliteCEMSolver(CEMSolver):
             step_logs: list[dict[str, Any]] = []
 
             for step in range(self.n_steps):
-                candidates = torch.randn(
-                    current_bs,
-                    self.num_samples,
-                    self.horizon,
-                    self.action_dim,
+                candidates = sample_cem_plan_candidates(
+                    batch_mean,
+                    batch_var,
+                    num_samples=self.num_samples,
                     generator=self.torch_gen,
-                    device=self.device,
+                    constrain_right_arm=constrain_right_arm,
                 )
-                candidates = candidates * batch_var.unsqueeze(1) + batch_mean.unsqueeze(
-                    1
-                )
-                candidates[:, 0] = batch_mean
 
                 costs = self.model.get_cost(expanded_infos, candidates)
                 if not isinstance(costs, torch.Tensor):
@@ -277,6 +279,8 @@ class FeasibleEliteCEMSolver(CEMSolver):
                     min_feas,
                     elite_in_topk,
                 ) = aggregate_feasible_elites(costs, candidates, self.topk)
+                if constrain_right_arm:
+                    batch_mean = constrain_right_arm_cem_mean(batch_mean)
                 final_elite_mean = elite_mean
                 final_min_feasible = min_feas
 
