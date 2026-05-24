@@ -259,8 +259,8 @@ def run_mission(
                     sim.dispatch_action(
                         curr_action_norm,
                         sim.last_target_q,
-                        n_steps=50,
-                        render_freq=10,
+                        n_steps=200,
+                        render_freq=16,
                     )
                     step_idx += 1
             else:
