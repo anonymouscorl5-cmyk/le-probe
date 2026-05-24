@@ -21,3 +21,18 @@ def set_mpc_verbose(enabled: bool) -> None:
 def mpc_log(msg: str) -> None:
     if MPC_VERBOSE:
         print(f"[MPC] {msg}")
+
+
+def mpc_shape_log(where: str, **named_tensors) -> None:
+    """Always print tensor shapes (not gated on --verbose)."""
+    lines = [f"[MPC:shape] {where}"]
+    for name, val in named_tensors.items():
+        if val is None:
+            lines.append(f"  {name}: None")
+        elif hasattr(val, "shape"):
+            lines.append(f"  {name}: shape={tuple(val.shape)} ndim={val.ndim} dtype={getattr(val, 'dtype', '?')}")
+        elif isinstance(val, (tuple, list)):
+            lines.append(f"  {name}: {val}")
+        else:
+            lines.append(f"  {name}: {val!r}")
+    print("\n".join(lines))

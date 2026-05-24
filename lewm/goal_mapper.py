@@ -34,7 +34,7 @@ from lewm.planning_constraints import (
     task_workspace_feasible_mask,
     scatter_infeasible_costs,
 )
-from lewm.mpc_logging import MPC_VERBOSE, mpc_log
+from lewm.mpc_logging import MPC_VERBOSE, mpc_log, mpc_shape_log
 from omegaconf import OmegaConf
 import numpy as np
 
@@ -277,11 +277,21 @@ class GoalMapper:
         B, S = actions.size(0), actions.size(1)
         pixels_input = obs_dict["pixels"].to(self.device)
         target_ndim = 7
+        mpc_shape_log(
+            "GoalMapper.get_cost IN",
+            pixels_raw=pixels_input,
+            actions=actions,
+            action_hist=obs_dict.get("action"),
+            frozen_pose_per_env=obs_dict.get("frozen_pose_per_env"),
+            B=B,
+            S=S,
+        )
 
         if pixels_input.ndim > target_ndim:
             # (B, S, 1, T_history, V, C, H, W) -> (B, S, T_history, V, C, H, W)
             pixels_input = pixels_input.squeeze(2)
         elif pixels_input.ndim < target_ndim:
+            mpc_shape_log("GoalMapper.get_cost REJECT pixels rank", pixels_raw=pixels_input)
             raise ValueError(
                 f"pixels must be (B, S, T, V, C, H, W) with S=1 before CEM or "
                 f"S=num_samples after CEM expand; got {tuple(pixels_input.shape)}. "
@@ -301,6 +311,13 @@ class GoalMapper:
         if hist_actions.ndim > 4:
             # (B, S, 1, T_history, 32) -> (B, S, T_history, 32)
             hist_actions = hist_actions.squeeze(2)
+
+        mpc_shape_log(
+            "GoalMapper.get_cost normalized",
+            pixels=pixels_input,
+            actions=actions,
+            hist_actions=hist_actions,
+        )
 
         # (B, S, T_history, 32) -> (B * S, T_history, 32)
         flat_hist_actions = hist_actions[:, 0].repeat_interleave(S, dim=0)
@@ -441,6 +458,14 @@ class GoalMapper:
         # History pixels are shared across S for each batch row (always index S=0)
         unique_batch_ids, batch_row_idx = torch.unique(batch_ids, return_inverse=True)
         enc_pixels = pixels_input[unique_batch_ids, 0]  # (U, T, V, C, H, W)
+        mpc_shape_log(
+            "GoalMapper._rollout_planning_cost encode",
+            pixels_input=pixels_input,
+            unique_batch_ids=unique_batch_ids,
+            enc_pixels=enc_pixels,
+            K=K,
+            S=S,
+        )
         info = self.model.encode({"pixels": enc_pixels})
         init_emb = info["emb"][batch_row_idx]  # (K, T_history, 192)
         curr_emb = init_emb  # grows along time as rollout proceeds

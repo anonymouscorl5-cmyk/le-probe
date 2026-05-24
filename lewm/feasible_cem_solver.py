@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from stable_worldmodel.solver.cem import CEMSolver
 
-from lewm.mpc_logging import MPC_VERBOSE, mpc_log
+from lewm.mpc_logging import MPC_VERBOSE, mpc_log, mpc_shape_log
 from lewm.task_workspace import INFEASIBLE_COST
 
 
@@ -57,7 +57,25 @@ def _expand_obs_batch_for_cem(
     Do not use ``.expand`` on dim 1 alone — that skips the squeeze path in get_cost.
     """
     if torch.is_tensor(v_batch):
-        return v_batch.unsqueeze(1).expand(current_bs, num_samples, *v_batch.shape[2:])
+        unsqueezed = v_batch.unsqueeze(1)
+        expand_sizes = (current_bs, num_samples, *v_batch.shape[2:])
+        mpc_shape_log(
+            "_expand_obs_batch_for_cem",
+            tensor_in=v_batch,
+            after_unsqueeze=unsqueezed,
+            expand_sizes=expand_sizes,
+        )
+        try:
+            return unsqueezed.expand(expand_sizes)
+        except RuntimeError as exc:
+            mpc_shape_log(
+                "_expand_obs_batch_for_cem FAILED",
+                error=str(exc),
+                tensor_in=v_batch,
+                after_unsqueeze=unsqueezed,
+                expand_sizes=expand_sizes,
+            )
+            raise
     v_batch = np.asarray(v_batch)
     return np.repeat(v_batch[:, None, ...], num_samples, axis=1)
 
@@ -170,15 +188,27 @@ class FeasibleEliteCEMSolver(CEMSolver):
             batch_mean = mean[start_idx:end_idx]
             batch_var = var[start_idx:end_idx]
 
+            mpc_shape_log(
+                f"FeasibleEliteCEMSolver.solve batch env[{start_idx}:{end_idx}]",
+                num_samples=self.num_samples,
+                **{
+                    k: info_dict[k][start_idx:end_idx]
+                    for k in info_dict
+                    if hasattr(info_dict[k], "shape")
+                },
+            )
             expanded_infos = {}
             for key, val in info_dict.items():
                 v_batch = val[start_idx:end_idx]
                 if key in _CEM_PASS_THROUGH_KEYS:
                     expanded_infos[key] = v_batch
+                    mpc_shape_log(f"CEM pass-through key={key!r}", tensor=v_batch)
                 else:
+                    mpc_shape_log(f"CEM expanding key={key!r}", before=v_batch)
                     expanded_infos[key] = _expand_obs_batch_for_cem(
                         v_batch, current_bs, self.num_samples
                     )
+                    mpc_shape_log(f"CEM expanded key={key!r}", after=expanded_infos[key])
 
             final_elite_mean: list[float] | None = None
             final_min_feasible: list[float] | None = None

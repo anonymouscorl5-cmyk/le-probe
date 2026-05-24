@@ -29,7 +29,7 @@ sys.path.append(str(CORTEX_GR1 / "lewm/le_wm"))
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lewm.goal_mapper import GoalMapper
 from lewm.feasible_cem_solver import CEMNoFeasibleSamplesError, FeasibleEliteCEMSolver
-from lewm.mpc_logging import set_mpc_verbose
+from lewm.mpc_logging import mpc_shape_log, set_mpc_verbose
 
 
 class MockConfig:
@@ -130,9 +130,15 @@ def run_diagnostic(
         latent_list = []
         frozen_pose_rows = []
         hist_action_rows = []
-        for ep_id in batch_ids:
+        for ep_idx, ep_id in enumerate(batch_ids):
             diag_entry = gallery["diagnostics"][ep_id]
             pixels = diag_entry["pixels"]  # (T_history, V, C, H, W)
+            if ep_idx == 0:
+                mpc_shape_log(
+                    f"diagnose batch {i // batch_size} gallery raw ep_id={ep_id}",
+                    gallery_pixels=pixels,
+                    gallery_action=diag_entry["action"],
+                )
 
             if use_multi_view and pixels.ndim == 4:
                 pixels = pixels.unsqueeze(1).repeat(1, 5, 1, 1, 1)
@@ -140,20 +146,43 @@ def run_diagnostic(
                 pixels = pixels.unsqueeze(1)
 
             pixels = pixels.unsqueeze(0)  # (1, T_history, V, C, H, W)
+            if ep_idx == 0:
+                mpc_shape_log(
+                    f"diagnose batch {i // batch_size} after per-ep unsqueeze(0)",
+                    pixels_ep=pixels,
+                )
             pixel_list.append(pixels)
             latent_list.append(gallery["goals"][ep_id])
             frozen_pose_rows.append(diag_entry["action"][-1].float())
             hist_action_rows.append(diag_entry["action"].float())
 
+        stacked_pixels = torch.stack(pixel_list)
+        stacked_action = torch.stack(hist_action_rows)
+        mpc_shape_log(
+            f"diagnose batch {i // batch_size} after stack (before .unsqueeze(1))",
+            stacked_pixels=stacked_pixels,
+            stacked_action=stacked_action,
+        )
         # (B, 1, T, V, C, H, W) / (B, 1, T_hist, 32) — same layout as lewm_server pre-CEM
         info_dict = {
-            "pixels": torch.stack(pixel_list).unsqueeze(1).to(device),
-            "action": torch.stack(hist_action_rows).unsqueeze(1).to(device),
+            "pixels": stacked_pixels.unsqueeze(1).to(device),
+            "action": stacked_action.unsqueeze(1).to(device),
             "frozen_pose_per_env": torch.stack(frozen_pose_rows).to(device),
         }
         mapper.goal_latent = torch.stack(latent_list).squeeze(1).to(device)
+        mpc_shape_log(
+            f"diagnose batch {i // batch_size} info_dict (pre-CEM, expect B,1,T,...)",
+            pixels=info_dict["pixels"],
+            action=info_dict["action"],
+            frozen_pose_per_env=info_dict["frozen_pose_per_env"],
+            goal_latent=mapper.goal_latent,
+        )
 
         zero_plan = torch.zeros(actual_batch_size, 1, horizon, 32).to(device)
+        mpc_shape_log(
+            f"diagnose batch {i // batch_size} zero_plan",
+            zero_plan=zero_plan,
+        )
         with torch.no_grad():
             initial_cost = mapper.get_cost(info_dict, zero_plan)
 
