@@ -29,25 +29,30 @@ def _expand_obs_batch_for_cem(
     num_samples: int,
 ) -> torch.Tensor | np.ndarray:
     """
-    Add the CEM sample dimension: (B, ...) -> (B, num_samples, ...).
+    Broadcast env observations to CEM sample count.
 
-    Legacy layouts used a placeholder ``S=1`` axis: (B, 1, T, V, C, H, W).
-    That extra dim must be stripped before expanding or ``expand`` rank-mismatches.
+    - Server / diagnose (pre-solve): ``(B, 1, T, V, C, H, W)`` or ``(B, 1, T, 32)``
+      uses placeholder ``S=1`` for direct ``get_cost``; expand replaces it with
+      ``num_samples`` via ``.expand(B, num_samples, *rest)`` (no extra unsqueeze).
+
+    - Default CEM layout ``(B, T, V, C, H, W)``: ``unsqueeze(1)`` then expand, same
+      as upstream ``CEMSolver``.
     """
     if torch.is_tensor(v_batch):
-        if (
-            v_batch.ndim >= 2
-            and v_batch.shape[0] == current_bs
-            and v_batch.shape[1] == 1
-        ):
-            # (B, 1, T, V, ...) or (B, 1, T, D) — drop placeholder sample axis
-            if v_batch.ndim >= 6 or (v_batch.ndim == 4 and v_batch.shape[-1] == 32):
-                v_batch = v_batch.squeeze(1)
-        return v_batch.unsqueeze(1).expand(current_bs, num_samples, *v_batch.shape[1:])
+        if v_batch.ndim == 7 and v_batch.shape[1] == 1:
+            return v_batch.expand(current_bs, num_samples, *v_batch.shape[2:])
+        if v_batch.ndim == 4 and v_batch.shape[1] == 1:
+            return v_batch.expand(current_bs, num_samples, *v_batch.shape[2:])
+        return v_batch.unsqueeze(1).expand(current_bs, num_samples, *v_batch.shape[2:])
     v_batch = np.asarray(v_batch)
-    if v_batch.ndim >= 2 and v_batch.shape[0] == current_bs and v_batch.shape[1] == 1:
-        if v_batch.ndim >= 6 or (v_batch.ndim == 4 and v_batch.shape[-1] == 32):
-            v_batch = np.squeeze(v_batch, axis=1)
+    if v_batch.ndim == 7 and v_batch.shape[1] == 1:
+        reps = [1] * v_batch.ndim
+        reps[1] = num_samples
+        return np.tile(v_batch, reps)
+    if v_batch.ndim == 4 and v_batch.shape[1] == 1:
+        reps = [1] * v_batch.ndim
+        reps[1] = num_samples
+        return np.tile(v_batch, reps)
     return np.repeat(v_batch[:, None, ...], num_samples, axis=1)
 
 

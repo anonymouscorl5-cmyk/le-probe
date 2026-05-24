@@ -286,11 +286,14 @@ class LEWMInferenceServer:
                 while len(self.history["actions"]) < 3:
                     self.history["actions"].append(norm_state.copy())
 
-            # (B=1, T_history=3, V, C, H, W) — CEM adds the sample dimension internally
+            # pixels_stacked: (B=1, T_history=3, V, C, H, W)
             pixels_stacked = torch.stack(self.history["pixels"]).unsqueeze(0).to(DEVICE)
+            # (B=1, S=1, T_history=3, V, C, H, W)
+            pixels_stacked = pixels_stacked.unsqueeze(1)
 
             actions_stacked = (
                 torch.tensor(np.stack(self.history["actions"]), dtype=torch.float32)
+                .unsqueeze(0)
                 .unsqueeze(0)
                 .to(DEVICE)
             )
@@ -307,12 +310,13 @@ class LEWMInferenceServer:
             start_time = time.time()
             with torch.inference_mode():
                 # 🚀 WARM-START CEM: Pass previous action as initial guess
-                last_executed_action = actions_stacked[:, -1:, :]  # (1, 1, 32)
+                last_executed_action = actions_stacked[:, :, -1:, :]  # (1, 1, 1, 32)
 
-                # (1, 1, 32) -> (1, 32) -> (4, 32) -> (1, 4, 32)
+                # (1, 1, 1, 32) -> (1, 32) -> (4, 32) -> (1, 4, 32)
                 # Use .repeat() instead of .expand() to avoid memory aliasing errors in CEM
                 init_guess = (
                     last_executed_action.squeeze(0)
+                    .squeeze(0)
                     .repeat(4, 1)  # Updated to match horizon 4
                     .to(DEVICE)
                     .float()
