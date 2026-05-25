@@ -25,7 +25,11 @@ from lewm.le_wm.module import ARPredictor
 from lewm.skeleton.skeletal_utils import reconstruct_4ch_frame
 from lewm.gr1_modules import MultiViewJEPA, GR1Embedder, GR1MLP
 from lewm.train_lewm import RewardPredictor
-from lewm.multi_view_encoder import get_multi_view_encoder
+from lewm.multi_view_encoder import (
+    build_legacy_single_view_encoder,
+    get_multi_view_encoder,
+    infer_checkpoint_encoder_style,
+)
 from lewm.skeleton.encoder import patch_vit_for_skeleton
 from lewm.task_workspace import TaskWorkspaceMPCConstraint, INFEASIBLE_COST
 from lewm.planning_constraints import (
@@ -41,6 +45,23 @@ import numpy as np
 # TEMP ablation: keep --use_dino for checkpoint arch, but use gallery cdist in MPC
 # (subgoal/HWM loss is training-only). Set False to restore predict_subgoal compass.
 DINO_MPC_USE_GALLERY_COMPASS = True
+
+_SKIP_CKPT_PREFIXES = ("sigreg.",)
+_SKIP_CKPT_SUBSTRINGS = ("mask_token",)
+
+
+def _clean_checkpoint_state_dict(raw_sd: dict) -> dict:
+    """Strip training-only keys and ``model.`` prefix for ``load_state_dict``."""
+    sd = raw_sd.get("state_dict", raw_sd) if isinstance(raw_sd, dict) else raw_sd
+    clean_sd = {}
+    for k, v in sd.items():
+        clean_key = k.replace("model.", "") if k.startswith("model.") else k
+        if any(clean_key.startswith(p) for p in _SKIP_CKPT_PREFIXES):
+            continue
+        if any(s in clean_key for s in _SKIP_CKPT_SUBSTRINGS):
+            continue
+        clean_sd[clean_key] = v
+    return clean_sd
 
 
 class GoalMapper:
@@ -75,16 +96,29 @@ class GoalMapper:
 
             # If it's a dict, we need to instantiate the architecture
             if isinstance(raw_data, dict):
-                print(
-                    "🧬 Checkpoint detected as Dict. Instantiating MultiViewJEPA backbone..."
-                )
+                clean_sd = _clean_checkpoint_state_dict(raw_data)
+                enc_style = infer_checkpoint_encoder_style(clean_sd)
+
+                if enc_style == "legacy_vit" and use_multi_view:
+                    raise ValueError(
+                        "Checkpoint is legacy single-view JEPA (encoder.* keys). "
+                        "Omit --multi_view and use single_view/gr1_reward_tuned_v2.ckpt."
+                    )
+                if enc_style == "late_fusion" and not use_multi_view:
+                    print(
+                        "⚠️  Late-fusion checkpoint with use_multi_view=False — "
+                        "use --multi_view for May-12+ multi-view v2/v6/v1 artifacts."
+                    )
+
                 cfg = OmegaConf.create(
                     {
                         "backbone": "vit_tiny_patch14_224",
                         "use_multi_view": use_multi_view,
                         "num_views": num_views,
                         "img_size": 224,
-                        "fusion_type": "linear",
+                        "fusion_type": (
+                            "mean" if enc_style == "legacy_vit" else "linear"
+                        ),
                         "encoder_scale": "tiny",
                         "patch_size": 14,
                         "wm": {"history_size": 3, "action_dim": 32},
@@ -96,9 +130,21 @@ class GoalMapper:
                         },
                     }
                 )
-                encoder = get_multi_view_encoder(cfg)
-                if use_skeleton:
-                    patch_vit_for_skeleton(encoder.backbone)
+
+                if enc_style == "legacy_vit":
+                    print(
+                        "🧬 Legacy single-view checkpoint — plain ViT encoder "
+                        "(not LateFusion)."
+                    )
+                    encoder = build_legacy_single_view_encoder(cfg)
+                else:
+                    print(
+                        "🧬 Checkpoint detected as Dict. Instantiating "
+                        "MultiViewJEPA + LateFusion encoder..."
+                    )
+                    encoder = get_multi_view_encoder(cfg)
+                    if use_skeleton:
+                        patch_vit_for_skeleton(encoder.backbone)
 
                 hidden_dim = encoder.config.hidden_size
                 embed_dim = 192  # Standard LeWM embedding dim
@@ -127,17 +173,6 @@ class GoalMapper:
                     input_dim=embed_dim, hidden_dim=512
                 )
 
-                # Load weights (handles model. prefix)
-                sd = raw_data.get("state_dict", raw_data)
-                # Strip model. prefix and filter out training-only sigreg keys
-                clean_sd = {}
-                for k, v in sd.items():
-                    clean_key = k.replace("model.", "") if k.startswith("model.") else k
-                    if (
-                        not clean_key.startswith("sigreg.")
-                        and clean_key != "encoder.backbone.embeddings.mask_token"
-                    ):
-                        clean_sd[clean_key] = v
                 self.model.load_state_dict(clean_sd, strict=True)
             else:
                 self.model = raw_data

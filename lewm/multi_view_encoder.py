@@ -4,6 +4,63 @@ from einops import rearrange
 import stable_pretraining as spt
 
 
+class _EncoderOutput:
+    def __init__(self, last_hidden_state: torch.Tensor):
+        self.last_hidden_state = last_hidden_state
+
+
+class LegacySingleViewEncoder(nn.Module):
+    """
+    Plain HF ViT for May-2026 single-view JEPA checkpoints (``encoder.*`` keys).
+
+    Accepts ``(B, T, V, C, H, W)`` with ``V=1`` — same contract as ``LateFusionEncoder``.
+    """
+
+    def __init__(self, backbone):
+        super().__init__()
+        self.backbone = backbone
+        self.config = backbone.config
+
+    def forward(self, x, interpolate_pos_encoding=True):
+        b, t, v, c, h, w = x.shape
+        if v != 1:
+            raise ValueError(
+                f"LegacySingleViewEncoder expects V=1, got V={v} "
+                "(use LateFusion for multi-view checkpoints)"
+            )
+        flat = rearrange(x, "b t v c h w -> (b t v) c h w")
+        output = self.backbone(flat, interpolate_pos_encoding=interpolate_pos_encoding)
+        cls = output.last_hidden_state[:, 0]
+        return _EncoderOutput(rearrange(cls, "(b t) d -> b t d", b=b, t=t))
+
+
+def infer_checkpoint_encoder_style(state_dict: dict) -> str:
+    """``legacy_vit`` (encoder.embeddings.*) vs ``late_fusion`` (encoder.backbone.*)."""
+    keys = []
+    for k in state_dict:
+        keys.append(k.replace("model.", "", 1) if k.startswith("model.") else k)
+    if any(k.startswith("encoder.backbone.") for k in keys):
+        return "late_fusion"
+    if any(k.startswith("encoder.embeddings.") for k in keys) and not any(
+        k.startswith("encoder.fusion_layer.") for k in keys
+    ):
+        return "legacy_vit"
+    return "late_fusion"
+
+
+def build_legacy_single_view_encoder(cfg):
+    """ViT backbone only — matches pre–late-fusion single-view ``gr1_reward_tuned_v2``."""
+    print("📷 INITIALIZING LEGACY SINGLE-VIEW ViT (plain encoder.* checkpoint)...")
+    backbone = spt.backbone.utils.vit_hf(
+        cfg.encoder_scale,
+        patch_size=cfg.patch_size,
+        image_size=cfg.img_size,
+        pretrained=False,
+        use_mask_token=False,
+    )
+    return LegacySingleViewEncoder(backbone)
+
+
 class LateFusionEncoder(nn.Module):
     """
     Shared Encoder + Late Fusion for Multi-View Robotic Manipulation.
@@ -65,12 +122,7 @@ class LateFusionEncoder(nn.Module):
         else:
             raise ValueError(f"Unknown fusion type: {self.fusion}")
 
-        # Wrap in Output class for JEPA compatibility
-        class Output:
-            def __init__(self, last_hidden_state):
-                self.last_hidden_state = last_hidden_state
-
-        return Output(fused)
+        return _EncoderOutput(fused)
 
 
 def get_multi_view_encoder(cfg):
