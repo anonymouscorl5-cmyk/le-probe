@@ -17,14 +17,16 @@ from lewm.task_workspace import INFEASIBLE_COST, TaskWorkspaceMPCConstraint
 
 # Hardcoded right arm and waist ranges
 # Skeletal Priors: [-0.6, 0, -0.5, -0.5, -0.4, -0.3, -0.4], [0.2, 1, 0.5, 0.5, 0.4, 0.7, 0.4]
-# DINO Waypoints: [-0.8, 0.4, -0.3, -0.4, -0.4, -0.2, -0.4], [-0.2, 1, 0.3, 0.4, 0.4, 0.5, 0.4]
+# DINO Waypoints: [-0.7, 0.5, -0.5, -0.5, -0.4, -0.3, -0.4], [0.1, 1, 0.5, 0.5, 0.4, 0.7, 0.4]
 RIGHT_ARM_NORM_SLICE = list(range(16, 20)) + list(range(29, 32))
-RIGHT_ARM_NORM_MIN = np.array([-0.8, 0.4, -0.3, -0.4, -0.4, -0.2, -0.4], dtype=np.float64)
-RIGHT_ARM_NORM_MAX = np.array([-0.2, 1, 0.3, 0.4, 0.4, 0.5, 0.4], dtype=np.float64)
+RIGHT_ARM_NORM_MIN = np.array(
+    [-0.7, 0.5, -0.5, -0.5, -0.4, -0.3, -0.4], dtype=np.float64
+)
+RIGHT_ARM_NORM_MAX = np.array([0.1, 1, 0.5, 0.5, 0.4, 0.7, 0.4], dtype=np.float64)
 
 # Extra CEM samples when filtering aggressively (no task-workspace gate).
 CEM_NUM_SAMPLES_DEFAULT = 800
-CEM_NUM_SAMPLES_HARD_ARM_GATE = 8000
+CEM_NUM_SAMPLES_HARD_ARM_GATE = 64000
 
 
 def _right_arm_bounds(

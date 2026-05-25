@@ -38,6 +38,10 @@ from lewm.mpc_logging import MPC_VERBOSE, mpc_log, mpc_shape_log
 from omegaconf import OmegaConf
 import numpy as np
 
+# TEMP ablation: keep --use_dino for checkpoint arch, but use gallery cdist in MPC
+# (subgoal/HWM loss is training-only). Set False to restore predict_subgoal compass.
+DINO_MPC_USE_GALLERY_COMPASS = True
+
 
 class GoalMapper:
     """
@@ -158,6 +162,22 @@ class GoalMapper:
             f"✅ GoalMapper initialized "
             f"(Skeleton: {use_skeleton}, DINO: {use_dino}, MPC gate: {gate})"
         )
+        if use_dino and DINO_MPC_USE_GALLERY_COMPASS:
+            print(
+                "🧪 TEMP: DINO_MPC_USE_GALLERY_COMPASS — MPC uses goal_gallery cdist, "
+                "not predict_subgoal (still load DINO weights with --use_dino)."
+            )
+
+    def _planner_uses_subgoal_compass(self) -> bool:
+        """True when MPC semantic cost is predict_subgoal L2 (not gallery)."""
+        return self.use_dino and not DINO_MPC_USE_GALLERY_COMPASS
+
+    def _mpc_semantic_cost_path(self) -> str:
+        return (
+            "dino_subgoal"
+            if self._planner_uses_subgoal_compass()
+            else "gallery_goal_latent"
+        )
 
     def set_goal(self, episode_idx, frame_idx):
         """Encodes a specific frame from the dataset as the target goal."""
@@ -268,7 +288,8 @@ class GoalMapper:
         L2 distance from a state latent to the MPC goal target (no action rollout).
 
         Gallery mode: distance to ``goal_latent[goal_id]`` plus min over the loaded gallery.
-        DINO mode: distance to ``predict_subgoal(z, phase_idx)``.
+        DINO mode: distance to ``predict_subgoal(z, phase_idx)`` unless
+        ``DINO_MPC_USE_GALLERY_COMPASS`` (then same as gallery mode).
         """
         if state_emb.dim() == 3:
             state_emb = state_emb[:, -1, :]
@@ -278,7 +299,7 @@ class GoalMapper:
             )
         state_emb = state_emb.to(self.device)
 
-        if self.use_dino:
+        if self._planner_uses_subgoal_compass():
             p = 0 if phase_idx is None else int(phase_idx)
             phase_t = torch.tensor([[p]], device=self.device, dtype=torch.long)
             subgoal = self.model.predict_subgoal(state_emb, phase_t)
@@ -408,7 +429,7 @@ class GoalMapper:
             mpc_log(
                 f"get_cost B={B} S={S} gate={gate} feasible={n_feas}/{n_total} "
                 f"pixels={tuple(pixels_input.shape)} actions={tuple(actions.shape)} "
-                f"cost_path={'dino_subgoal' if self.use_dino else 'gallery_goal_latent'}"
+                f"cost_path={self._mpc_semantic_cost_path()}"
             )
             if n_feas and n_feas < n_total:
                 arm = flat_plan_actions[feasible_np, :, 16:20]
@@ -554,7 +575,7 @@ class GoalMapper:
         reward_weight = 50.0
         dist = (10.0 - reward_pred) * reward_weight  # (K, T_horizon)
 
-        if self.use_dino:
+        if self._planner_uses_subgoal_compass():
             phase_idx = obs_dict.get("phase_idx")
             if phase_idx is None:
                 phase_idx = torch.zeros((B, 1), device=self.device)
