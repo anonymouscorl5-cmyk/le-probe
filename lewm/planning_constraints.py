@@ -17,8 +17,8 @@ from lewm.task_workspace import INFEASIBLE_COST, TaskWorkspaceMPCConstraint
 
 # Buffered right-arm norm ranges from pre-polytope LeWM runs (b1b95bf, May 2026).
 RIGHT_ARM_NORM_SLICE = list(range(16, 20)) + list(range(29, 32))
-RIGHT_ARM_NORM_MIN = np.array([-0.5, 0, -0.15, -0.5, 0, -0.1, -0.3], dtype=np.float64)
-RIGHT_ARM_NORM_MAX = np.array([0, 1, 0.15, 0, 0.6, 0.5, 0.3], dtype=np.float64)
+RIGHT_ARM_NORM_MIN = np.array([-0.5, 0, -0.3, -0.4, -0.3, 0, -0.3], dtype=np.float64)
+RIGHT_ARM_NORM_MAX = np.array([0.3, 1, 0.3, 0, 0.3, 1, 0.3], dtype=np.float64)
 
 # Extra CEM samples when filtering aggressively (no task-workspace gate).
 CEM_NUM_SAMPLES_DEFAULT = 800
