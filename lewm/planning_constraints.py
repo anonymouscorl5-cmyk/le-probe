@@ -16,13 +16,14 @@ import torch
 from lewm.task_workspace import INFEASIBLE_COST, TaskWorkspaceMPCConstraint
 
 # Hardcoded right arm and waist ranges
+# Multi-View: [-0.8, 0, -0.5, -0.5, -0.4, -0.3, -0.4], [0, 1, 0.5, 0.5, 0.4, 0.7, 0.4]
 # Skeletal Priors: [-0.6, 0, -0.5, -0.5, -0.4, -0.3, -0.4], [0.2, 1, 0.5, 0.5, 0.4, 0.7, 0.4]
 # DINO Waypoints: [-0.75, 0.5, -0.5, -0.5, -0.4, -0.3, -0.4], [0.05, 1, 0.5, 0.5, 0.4, 0.7, 0.4]
 RIGHT_ARM_NORM_SLICE = list(range(16, 20)) + list(range(29, 32))
 RIGHT_ARM_NORM_MIN = np.array(
-    [-0.75, 0.5, -0.5, -0.5, -0.4, -0.3, -0.4], dtype=np.float64
+    [-0.8, 0, -0.5, -0.5, -0.4, -0.3, -0.4], dtype=np.float64
 )
-RIGHT_ARM_NORM_MAX = np.array([0.05, 1, 0.5, 0.5, 0.4, 0.7, 0.4], dtype=np.float64)
+RIGHT_ARM_NORM_MAX = np.array([0, 1, 0.5, 0.5, 0.4, 0.7, 0.4], dtype=np.float64)
 
 # Extra CEM samples when filtering aggressively (no task-workspace gate).
 CEM_NUM_SAMPLES_DEFAULT = 800
