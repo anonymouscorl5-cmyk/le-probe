@@ -64,6 +64,25 @@ def _clean_checkpoint_state_dict(raw_sd: dict) -> dict:
     return clean_sd
 
 
+def _remap_legacy_encoder_keys_for_load(clean_sd: dict) -> dict:
+    """
+    Legacy JEPA checkpoints store ViT weights at ``encoder.*``.
+
+    ``LegacySingleViewEncoder`` holds the same ViT at ``encoder.backbone.*``.
+    """
+    out = {}
+    n_remapped = 0
+    for k, v in clean_sd.items():
+        if k.startswith("encoder.") and not k.startswith("encoder.backbone."):
+            out[f"encoder.backbone.{k[len('encoder.'):]}"] = v
+            n_remapped += 1
+        else:
+            out[k] = v
+    if n_remapped:
+        print(f"🔁 Remapped {n_remapped} legacy encoder.* keys → encoder.backbone.*")
+    return out
+
+
 class GoalMapper:
     """
     GoalMapper: The Brain Wrapper for LeWM.
@@ -173,7 +192,12 @@ class GoalMapper:
                     input_dim=embed_dim, hidden_dim=512
                 )
 
-                self.model.load_state_dict(clean_sd, strict=True)
+                load_sd = (
+                    _remap_legacy_encoder_keys_for_load(clean_sd)
+                    if enc_style == "legacy_vit"
+                    else clean_sd
+                )
+                self.model.load_state_dict(load_sd, strict=True)
             else:
                 self.model = raw_data
         else:
