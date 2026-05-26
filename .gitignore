@@ -9,7 +9,7 @@ manifold_visualization
 workspace_visualization
 scratch
 *.log
-run_*
+run_*/
 phase_lifecycle.json
 teleop_settings.json
 canonical_reproduction.json

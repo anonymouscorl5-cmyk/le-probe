@@ -11,27 +11,44 @@
 
 ## Quick start
 
-```bash
-cd le-probe
+From **repo root** (`cortex-os/`, `.venv` here):
 
+```bash
 # B1–B3 — sample, bundle (500 probes)
-python dataset/task_workspace_probe/sample_ee_targets.py --n 500
-python dataset/task_workspace_probe/solve_probe_poses.py
-python dataset/task_workspace_probe/record_probe_snapshots.py --with_skeleton
+uv run le-probe/dataset/task_workspace_probe/sample_ee_targets.py --n 500
+uv run le-probe/dataset/task_workspace_probe/solve_probe_poses.py
+uv run le-probe/dataset/task_workspace_probe/record_probe_snapshots.py --with_skeleton
 
 # B4 — world-frame review
-python dataset/task_workspace_probe/visualize_probe_ee_scatter.py
+uv run le-probe/dataset/task_workspace_probe/visualize_probe_ee_scatter.py \
+  --html le-probe/workspace_visualization/distance_to_cube/workspace_probe_ee_scatter.html \
+  --out le-probe/workspace_visualization/distance_to_cube/workspace_probe_ee_scatter.png
 
 # B5 — encode (4 checkpoints → workspace_probe_latents_*.pt)
 # … harvest_workspace_probes.py per variant …
 
 # B6 — latent viz (500 points only, all variants × umap/tsne/pca)
-python interpretability/manifold/run_all_probe_latent_viz.py
+uv run le-probe/interpretability/manifold/run_all_probe_overlays.py \
+  --out-dir le-probe/workspace_visualization/distance_to_cube
 ```
 
-Outputs → `workspace_visualization/`
+Outputs → `le-probe/workspace_visualization/` (or pass `--out-dir` under repo root).
+
+## Pose clusters (skeleton-only)
+
+```bash
+# Sweep k — BIC vs silhouette curve → workspace_visualization/pose_clusters/k_sweep.png
+uv run le-probe/dataset/task_workspace_probe/discover_pose_clusters.py \
+  --feature skeleton --all-views --sweep-k --k-min 3 --k-max 12
+
+# Fit chosen k (e.g. from max silhouette on sweep)
+uv run le-probe/dataset/task_workspace_probe/discover_pose_clusters.py \
+  --feature skeleton --all-views --k 8
+uv run le-probe/dataset/task_workspace_probe/relabel_probe_segments.py --scheme pose
+```
 
 ## Notes
 
-- Segment labels: spatial grid in `segments.py` (left/right × front/back + center_front, center_right). Refresh: `relabel_probe_segments.py` then re-run B4/B6 (**no re-encode**).
+- Segment schemes (`segments.py`): `lateral` | `distance` | `pose` (from `discover_pose_clusters.py`).  
+  `relabel_probe_segments.py --scheme …` → re-run B4/B6 (no re-encode).
 - B6 does **not** use `manifold_data.pt` or any training frames.

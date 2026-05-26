@@ -36,7 +36,12 @@ WORKSPACE_VIZ_DIR = LE_PROBE_ROOT / "workspace_visualization"
 if str(LE_PROBE_ROOT) not in sys.path:
     sys.path.insert(0, str(LE_PROBE_ROOT))
 
-from dataset.task_workspace_probe.segments import SEGMENT_COLORS, SEGMENT_ORDER
+from dataset.task_workspace_probe.segments import (
+    SEGMENT_COLORS,
+    infer_scheme_from_labels,
+    segment_colors_for_labels,
+    segment_order,
+)
 
 
 def _axis_limits(
@@ -105,15 +110,26 @@ def embed_probes(
     raise ValueError(f"Unsupported method: {method} (use pca, umap, tsne)")
 
 
+def _palette_for(segments) -> dict[str, str]:
+    return segment_colors_for_labels(segments)
+
+
+def _segment_order_for(segments) -> tuple[str, ...]:
+    scheme = infer_scheme_from_labels(segments)
+    return segment_order(scheme, present_labels=segments)
+
+
 def _ordered_segments(segments) -> list[str]:
     present = set(segments)
-    out = [s for s in SEGMENT_ORDER if s in present]
+    order = _segment_order_for(segments)
+    out = [s for s in order if s in present]
     out.extend(sorted(present - set(out)))
     return out
 
 
 def _probe_silhouette(probe_3d: np.ndarray, segments) -> float | None:
-    seg_to_id = {k: i for i, k in enumerate(SEGMENT_ORDER)}
+    order = _segment_order_for(segments)
+    seg_to_id = {k: i for i, k in enumerate(order)}
     labels = np.array([seg_to_id.get(s, -1) for s in segments])
     valid = labels >= 0
     if valid.sum() < 10 or len(np.unique(labels[valid])) < 2:
@@ -124,6 +140,10 @@ def _probe_silhouette(probe_3d: np.ndarray, segments) -> float | None:
         return None
 
 
+MONO_COLOR = "#4a4a4a"
+MONO_ALPHA = 0.75
+
+
 def save_png(
     probe_3d: np.ndarray,
     segments,
@@ -132,6 +152,8 @@ def save_png(
     title: str,
     out: Path,
     sil: float | None,
+    colors: dict[str, str] | None = None,
+    monochrome: bool = False,
 ) -> None:
     lo, hi = _axis_limits(probe_3d)
     x0, x1 = lo[0], hi[0]
@@ -141,21 +163,33 @@ def save_png(
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
 
-    for seg in _ordered_segments(segments):
-        mask = np.array([s == seg for s in segments])
-        if not mask.any():
-            continue
+    if monochrome:
         ax.scatter(
-            probe_3d[mask, 0],
-            probe_3d[mask, 1],
-            probe_3d[mask, 2],
-            c=SEGMENT_COLORS.get(seg, "#333333"),
-            s=40,
-            alpha=0.9,
-            label=seg,
-            edgecolors="black",
-            linewidths=0.3,
+            probe_3d[:, 0],
+            probe_3d[:, 1],
+            probe_3d[:, 2],
+            c=MONO_COLOR,
+            s=36,
+            alpha=MONO_ALPHA,
+            edgecolors="none",
         )
+    else:
+        palette = colors or SEGMENT_COLORS
+        for seg in _ordered_segments(segments):
+            mask = np.array([s == seg for s in segments])
+            if not mask.any():
+                continue
+            ax.scatter(
+                probe_3d[mask, 0],
+                probe_3d[mask, 1],
+                probe_3d[mask, 2],
+                c=palette.get(seg, "#333333"),
+                s=40,
+                alpha=0.9,
+                label=seg,
+                edgecolors="black",
+                linewidths=0.3,
+            )
 
     ax.set_xlim(x0, x1)
     ax.set_ylim(y0, y1)
@@ -169,11 +203,13 @@ def save_png(
     ax.set_ylabel(_dim_axis_titles(method)[1])
     ax.set_zlabel(_dim_axis_titles(method)[2])
 
-    full_title = title
-    if sil is not None:
-        full_title += f" (silhouette={sil:.3f})"
-    ax.set_title(full_title)
-    ax.legend(loc="upper left", fontsize=8)
+    ax.set_title(
+        title
+        if monochrome
+        else title + (f" (silhouette={sil:.3f})" if sil is not None else "")
+    )
+    if not monochrome:
+        ax.legend(loc="upper left", fontsize=8)
     out.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
@@ -183,54 +219,80 @@ def save_html(
     probe_3d: np.ndarray,
     segments,
     probe_ids,
+    ee_xyz: np.ndarray,
     *,
     method: str,
     title: str,
     out: Path,
     sil: float | None,
+    colors: dict[str, str] | None = None,
+    monochrome: bool = False,
 ) -> None:
     if go is None:
         raise ImportError("plotly required for --html (pip install plotly)")
 
     lo, hi = _axis_limits(probe_3d)
     ax_titles = _dim_axis_titles(method)
+    ee_xyz = np.asarray(ee_xyz, dtype=np.float64).reshape(-1, 3)
 
     fig = go.Figure()
-    for seg in _ordered_segments(segments):
-        mask = np.array([s == seg for s in segments])
-        if not mask.any():
-            continue
-        idx = np.where(mask)[0]
+    if monochrome:
         hover = [
-            f"probe {probe_ids[i]}<br>{seg}<br>"
-            f"({probe_3d[i,0]:.3f}, {probe_3d[i,1]:.3f}, {probe_3d[i,2]:.3f})"
-            for i in idx
+            f"probe {probe_ids[i]}<br>EE (m): ({ee_xyz[i,0]:.3f}, {ee_xyz[i,1]:.3f}, {ee_xyz[i,2]:.3f})"
+            for i in range(len(probe_ids))
         ]
         fig.add_trace(
             go.Scatter3d(
-                x=probe_3d[mask, 0],
-                y=probe_3d[mask, 1],
-                z=probe_3d[mask, 2],
+                x=probe_3d[:, 0],
+                y=probe_3d[:, 1],
+                z=probe_3d[:, 2],
                 mode="markers",
-                name=seg,
-                marker=dict(
-                    size=5,
-                    color=SEGMENT_COLORS.get(seg, "#888888"),
-                    opacity=0.9,
-                    line=dict(width=0.5, color="black"),
-                ),
+                name="probes",
+                marker=dict(size=4, color=MONO_COLOR, opacity=MONO_ALPHA),
                 text=hover,
                 hoverinfo="text",
             )
         )
+    else:
+        palette = colors or SEGMENT_COLORS
+        for seg in _ordered_segments(segments):
+            mask = np.array([s == seg for s in segments])
+            if not mask.any():
+                continue
+            idx = np.where(mask)[0]
+            hover = [
+                f"probe {probe_ids[i]}<br>{seg}<br>"
+                f"EE (m): ({ee_xyz[i,0]:.3f}, {ee_xyz[i,1]:.3f}, {ee_xyz[i,2]:.3f})"
+                for i in idx
+            ]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=probe_3d[mask, 0],
+                    y=probe_3d[mask, 1],
+                    z=probe_3d[mask, 2],
+                    mode="markers",
+                    name=seg,
+                    marker=dict(
+                        size=5,
+                        color=palette.get(seg, "#888888"),
+                        opacity=0.9,
+                        line=dict(width=0.5, color="black"),
+                    ),
+                    text=hover,
+                    hoverinfo="text",
+                )
+            )
 
-    full_title = title
-    if sil is not None:
-        full_title += f" (silhouette={sil:.3f})"
+    layout_title = (
+        title
+        if monochrome
+        else title + (f" (silhouette={sil:.3f})" if sil is not None else "")
+    )
     fig.update_layout(
-        title=full_title,
+        title=layout_title,
         margin=dict(l=0, r=0, t=50, b=0),
-        legend=dict(x=0.01, y=0.99),
+        showlegend=not monochrome,
+        legend=dict(x=0.01, y=0.99) if not monochrome else None,
         scene=dict(
             xaxis=dict(title=ax_titles[0], range=[lo[0], hi[0]]),
             yaxis=dict(title=ax_titles[1], range=[lo[1], hi[1]]),
@@ -249,6 +311,7 @@ def visualize_probe_latents(
     out_png: Path,
     out_html: Path | None,
     variant_label: str,
+    monochrome: bool = False,
 ) -> dict:
     """Reduce and plot **500** workspace probe latents only."""
     probe = torch.load(probes_path, map_location="cpu", weights_only=False)
@@ -263,20 +326,43 @@ def visualize_probe_latents(
     else:
         probe_ids = list(range(len(probe_z)))
 
+    ee = probe.get("ee_achieved_xyz")
+    if ee is not None:
+        ee_xyz = np.asarray(
+            ee.numpy() if hasattr(ee, "numpy") else ee, dtype=np.float64
+        )
+    else:
+        ee_xyz = np.full((len(probe_z), 3), np.nan)
+
     probe_3d, embed_note = embed_probes(method, probe_z)
     sil = _probe_silhouette(probe_3d, segments)
 
+    palette = _palette_for(segments)
     title = f"500 probes — {variant_label} ({method.upper()})"
-    save_png(probe_3d, segments, method=method, title=title, out=out_png, sil=sil)
+    if monochrome:
+        title += " [geometry]"
+    save_png(
+        probe_3d,
+        segments,
+        method=method,
+        title=title,
+        out=out_png,
+        sil=sil,
+        colors=palette,
+        monochrome=monochrome,
+    )
     if out_html is not None:
         save_html(
             probe_3d,
             segments,
             probe_ids,
+            ee_xyz,
             method=method,
             title=title,
             out=out_html,
             sil=sil,
+            colors=palette,
+            monochrome=monochrome,
         )
 
     return {
@@ -285,6 +371,7 @@ def visualize_probe_latents(
         "probes": str(probes_path),
         "variant": variant_label,
         "n_probes": int(len(probe_z)),
+        "monochrome": monochrome,
         "silhouette_probe_segments": sil,
         "segment_counts": {s: segments.count(s) for s in _ordered_segments(segments)},
     }
@@ -313,6 +400,11 @@ def main() -> None:
         default=str(WORKSPACE_VIZ_DIR / "workspace_probe_latent_viz.png"),
     )
     parser.add_argument("--html", type=str, default=None)
+    parser.add_argument(
+        "--monochrome",
+        action="store_true",
+        help="Single gray color — geometry only, no segment legend",
+    )
     args = parser.parse_args()
 
     variant = args.variant or Path(args.probes).stem.replace(
@@ -327,6 +419,7 @@ def main() -> None:
         out_png=out_png,
         out_html=out_html,
         variant_label=variant,
+        monochrome=args.monochrome,
     )
 
     metrics_path = out_png.with_suffix(".metrics.json")

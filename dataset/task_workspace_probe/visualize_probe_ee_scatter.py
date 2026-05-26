@@ -344,6 +344,16 @@ def main() -> None:
     parser.add_argument("--no-html", action="store_true")
     args = parser.parse_args()
 
+    out_path = Path(args.out)
+    html_path = Path(args.html)
+    if out_path.suffix.lower() == ".html" and html_path == Path(
+        REPO_DIR / "workspace_visualization/workspace_probe_ee_scatter.html"
+    ):
+        html_path = out_path
+        out_path = out_path.with_suffix(".png")
+        args.html = str(html_path)
+        args.out = str(out_path)
+
     payload = _load_bundle(args.bundle)
     if np.linalg.norm(payload["cube"] - DEFAULT_CUBE_XYZ) > 1e-4:
         print(
