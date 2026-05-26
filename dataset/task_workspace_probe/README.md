@@ -65,4 +65,4 @@ Legacy hull-only EE targets (no `wire32_rad`) still run IK in B2 unless `--force
 
 - Does **not** modify `task_workspace.py`, `harvest_manifold.py`, or MPC paths.
 - Probes are **single static poses** (one encoder step), same as training manifold harvest.
-- Segment labels are **hints** only; tune thresholds in `segments.py` after the review grid.
+- Segment labels are **hints** from `segments.py` (at_cube / near_table / approach / far). After threshold changes, run `relabel_probe_segments.py` then re-run B4 viz (no re-record).
