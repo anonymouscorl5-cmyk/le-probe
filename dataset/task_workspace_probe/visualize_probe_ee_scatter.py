@@ -17,17 +17,45 @@ REPO_DIR = Path(__file__).resolve().parents[2]
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 
-from dataset.task_workspace_probe.segments import SEGMENT_COLORS
-from gr1_scene_sync import DEFAULT_CUBE_XYZ, TABLE_TOP_Z
+from dataset.task_workspace_probe.segments import SEGMENT_COLORS, SEGMENT_ORDER
+from dataset.task_workspace_probe.viz_bounds import (
+    axis_limits,
+    plotly_scene_from_limits,
+)
+from gr1_scene_sync import CUBE_X_RANGE, CUBE_Y_RANGE, DEFAULT_CUBE_XYZ, TABLE_TOP_Z
 from lewm.task_workspace import build_task_workspace_polytope
 
 # scene_gr1_pickup.xml — table body + geom (world frame)
 TABLE_CENTER = np.array([0.45, 0.0, 0.4], dtype=np.float64)
 TABLE_HALF = np.array([0.2, 0.25, 0.4], dtype=np.float64)
 CUBE_HALF = np.array([0.02, 0.02, 0.02], dtype=np.float64)
-FLOOR_Z = 0.0
-FLOOR_HALF = np.array([1.2, 1.2, 0.01], dtype=np.float64)
-FLOOR_CENTER = np.array([0.45, 0.0, FLOOR_Z - 0.01], dtype=np.float64)
+
+
+def _world_frame_limit_points(ee: np.ndarray, cube: np.ndarray) -> np.ndarray:
+    """Axis limits from fingertips + cube + table footprint only (no floor slab)."""
+    table_corners = np.array(
+        [
+            [CUBE_X_RANGE[0], CUBE_Y_RANGE[0], TABLE_TOP_Z],
+            [CUBE_X_RANGE[1], CUBE_Y_RANGE[0], TABLE_TOP_Z],
+            [CUBE_X_RANGE[1], CUBE_Y_RANGE[1], TABLE_TOP_Z],
+            [CUBE_X_RANGE[0], CUBE_Y_RANGE[1], TABLE_TOP_Z],
+        ],
+        dtype=np.float64,
+    )
+    cube_corners = cube.reshape(1, 3) + np.array(
+        [
+            [-1, -1, -1],
+            [1, -1, -1],
+            [1, 1, -1],
+            [-1, 1, -1],
+            [-1, -1, 1],
+            [1, -1, 1],
+            [1, 1, 1],
+            [-1, 1, 1],
+        ],
+        dtype=np.float64,
+    ) * CUBE_HALF.reshape(1, 3)
+    return np.vstack([ee, cube_corners, table_corners])
 
 
 def _as_numpy(x) -> np.ndarray:
@@ -116,16 +144,7 @@ def _hull_mesh(poly, *, opacity: float = 0.12) -> go.Mesh3d:
 
 
 def _add_sim_scene(fig: go.Figure, cube: np.ndarray) -> None:
-    """Table + cube + floor matching scene_gr1_pickup.xml (no robot)."""
-    fig.add_trace(
-        _box_mesh(
-            FLOOR_CENTER,
-            FLOOR_HALF,
-            color="#3a3a3a",
-            opacity=0.35,
-            name="floor",
-        )
-    )
+    """Table + cube only (world-frame sampling context; no floor / hull in axes)."""
     fig.add_trace(
         _box_mesh(
             TABLE_CENTER,
@@ -188,10 +207,10 @@ def build_interactive_figure(payload: dict) -> go.Figure:
     dist = payload["dist"]
 
     fig = go.Figure()
-    _add_sim_scene(fig, cube)
-
     poly = build_task_workspace_polytope()
+    _add_sim_scene(fig, cube)
     fig.add_trace(_hull_mesh(poly))
+    lo, hi = axis_limits(_world_frame_limit_points(ee, cube))
 
     for seg in sorted(set(segments)):
         mask = np.array([s == seg for s in segments])
@@ -224,14 +243,16 @@ def build_interactive_figure(payload: dict) -> go.Figure:
         title="Workspace probe fingertips (world frame) — drag to orbit, scroll to zoom",
         margin=dict(l=0, r=0, t=40, b=0),
         legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.7)"),
-        scene=dict(
-            xaxis=dict(title="X (m)", backgroundcolor="#1a1a1a"),
-            yaxis=dict(title="Y (m)", backgroundcolor="#1a1a1a"),
-            zaxis=dict(title="Z (m)", backgroundcolor="#1a1a1a"),
-            aspectmode="data",
+        scene=plotly_scene_from_limits(
+            lo,
+            hi,
+            x_title="X (m)",
+            y_title="Y (m)",
+            z_title="Z (m)",
+            backgroundcolor="#1a1a1a",
             camera=dict(
                 eye=dict(x=1.35, y=-1.1, z=0.75),
-                center=dict(x=0.45, y=0.0, z=0.95),
+                center=dict(x=float(cube[0]), y=float(cube[1]), z=float(cube[2])),
                 up=dict(x=0, y=0, z=1),
             ),
         ),
@@ -307,12 +328,16 @@ def main() -> None:
     parser.add_argument(
         "--out",
         type=str,
-        default=str(REPO_DIR / "assets/workspace_probe_ee_scatter.png"),
+        default=str(
+            REPO_DIR / "workspace_visualization/workspace_probe_ee_scatter.png"
+        ),
     )
     parser.add_argument(
         "--html",
         type=str,
-        default=str(REPO_DIR / "assets/workspace_probe_ee_scatter.html"),
+        default=str(
+            REPO_DIR / "workspace_visualization/workspace_probe_ee_scatter.html"
+        ),
         help="Interactive Plotly scene (table + cube + hull + points)",
     )
     parser.add_argument("--no-png", action="store_true")

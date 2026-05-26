@@ -32,7 +32,7 @@ def main() -> None:
     parser.add_argument(
         "--out",
         type=str,
-        default=str(REPO_DIR / "assets/workspace_probe_review_50.png"),
+        default=str(REPO_DIR / "workspace_visualization/workspace_probe_review_50.png"),
     )
     parser.add_argument(
         "--view",
