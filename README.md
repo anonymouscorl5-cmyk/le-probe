@@ -85,10 +85,20 @@ pip install -r requirements.txt
 ### Static Workspace Probes
 
 <div align="center">
-  <img src="assets/task_workspace.png" width="23%" alt="Task workspace">
-  <img src="assets/lateral_table_region.png" width="23%" alt="Lateral regions">
-  <img src="assets/distance_to_cube.png" width="23%" alt="Distance bins">
-  <img src="assets/pose_clusters.png" width="23%" alt="Pose clusters">
+  <table>
+    <tr>
+      <th>Task Workspace</th>
+      <th>Lateral Table Region</th>
+      <th>Distance to Cube</th>
+      <th>Pose Clusters</th>
+    </tr>
+    <tr>
+      <td><img src="assets/task_workspace.png" width="180" alt="Task workspace"></td>
+      <td><img src="assets/lateral_table_region.png" width="180" alt="Lateral regions"></td>
+      <td><img src="assets/distance_to_cube.png" width="180" alt="Distance bins"></td>
+      <td><img src="assets/pose_clusters.png" width="180" alt="Pose clusters"></td>
+    </tr>
+  </table>
 </div>
 
 - **Observed trend:** separability and cluster continuity improve across variants, with strongest structure in `Multi-View RGB + Skeletal Priors` and `Multi-View RGB + Skeletal Priors + DINOv3 Waypoints`.
