@@ -23,15 +23,11 @@ REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 
-RGB_VIDEO_PATH = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets/vedpatwardhan/gr1_pickup_grasp/videos/observation.images.world_center/chunk-000/file-000.mp4"
-SKEL_VIDEO_PATH = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets/vedpatwardhan/gr1_pickup_grasp/videos/observation.images.world_center_skeleton/chunk-000/file-000.mp4"
+RGB_VIDEO_PATH = "/workspace/cortex-os/le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp/videos/observation.images.world_center/chunk-000/file-000.mp4"
+SKEL_VIDEO_PATH = "/workspace/cortex-os/le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp/videos/observation.images.world_center_skeleton/chunk-000/file-000.mp4"
 
-OUT_MP4_PATH = (
-    "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/assets/dino_skeletal_priors.mp4"
-)
-OUT_GIF_PATH = (
-    "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/assets/dino_skeletal_priors.gif"
-)
+OUT_MP4_PATH = "/workspace/cortex-os/le-probe/assets/dino_skeletal_priors.mp4"
+OUT_GIF_PATH = "/workspace/cortex-os/le-probe/assets/dino_skeletal_priors.gif"
 
 
 def main():
@@ -79,9 +75,7 @@ def main():
         ]
     )
 
-    tmp_raw = (
-        "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/assets/temp_tiled_priors.mp4"
-    )
+    tmp_raw = "/workspace/cortex-os/le-probe/assets/temp_tiled_priors.mp4"
 
     # 3 frames side-by-side: each 480x480 -> Total width = 1440, Total height = 480
     video_writer = cv2.VideoWriter(

@@ -5,8 +5,8 @@ Forward path: 4ch pixels -> encoder -> reward_head (no DINO anchors in the loop)
 The checkpoint must still instantiate the same module tree as training (strict load).
 
 Typical pipeline:
-  1. generate_reward_priors.py --repo_id vedpatwardhan/gr1_reward_pred_v2
-  2. audit_priors.py --repo_id vedpatwardhan/gr1_reward_pred_v2 --frames dataset_skel_frames
+  1. generate_reward_priors.py --repo_id gr1_reward_pred_v2
+  2. audit_priors.py --repo_id gr1_reward_pred_v2 --frames dataset_skel_frames
   3. tuner.py --model <gr1_grasp_skeleton_dino_v7>/epoch=99-step=17900.ckpt --frames dataset_skel_frames
 """
 

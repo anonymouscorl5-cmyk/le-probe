@@ -25,8 +25,8 @@ def get_avg_rewards(sidecar_path):
 
 
 def plot_comparison():
-    cup_path = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets/vedpatwardhan/gr1_pickup_cup/progress_sparse.parquet"
-    grasp_path = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets/vedpatwardhan/gr1_pickup_grasp/progress_sparse.parquet"
+    cup_path = "/workspace/cortex-os/le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_cup/progress_sparse.parquet"
+    grasp_path = "/workspace/cortex-os/le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp/progress_sparse.parquet"
 
     avg_cup = get_avg_rewards(cup_path)
     avg_grasp = get_avg_rewards(grasp_path)
@@ -94,9 +94,7 @@ def plot_comparison():
         27.5, plt.ylim()[1] * 0.05, "Lift", color="#888888", ha="center", fontsize=10
     )
 
-    output_path = (
-        "/Users/vedpatwardhan/Desktop/cortex-os/reward_comparison_cup_vs_grasp.png"
-    )
+    output_path = "/workspace/cortex-os/reward_comparison_cup_vs_grasp.png"
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"✅ Comparison plot saved to {output_path}")
 

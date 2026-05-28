@@ -107,7 +107,7 @@ def process_episode(ep_idx, dataset_path, model, transform, device):
     torch.save(stacked_embeddings, out_path)
 
 
-def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
+def main(repo_id="gr1_pickup_grasp"):
     print(f"📦 [DINO CACHE GENERATOR] Initializing: {repo_id}")
     print(f"   Views: {list(DINO_VIEW_KEYS)}")
     print(f"   Output shape per episode: {dino_waypoints_shape()}")
@@ -145,5 +145,5 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
 
 
 if __name__ == "__main__":
-    repo = sys.argv[1] if len(sys.argv) > 1 else "vedpatwardhan/gr1_pickup_grasp"
+    repo = sys.argv[1] if len(sys.argv) > 1 else "gr1_pickup_grasp"
     main(repo)

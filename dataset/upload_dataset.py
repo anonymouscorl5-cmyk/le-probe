@@ -40,8 +40,8 @@ def upload_to_hf(folder_path, repo_id):
 
 if __name__ == "__main__":
     # Path is relative to the root of the workspace
-    DATASET_DIR = "le-probe/datasets/vedpatwardhan/gr1_reward_pred"
-    REPO_ID = "vedpatwardhan/gr1_reward_pred"
+    DATASET_DIR = "le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred"
+    REPO_ID = "gr1_reward_pred"
 
     if os.path.exists(DATASET_DIR):
         upload_to_hf(DATASET_DIR, REPO_ID)

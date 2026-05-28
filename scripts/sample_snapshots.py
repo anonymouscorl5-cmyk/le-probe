@@ -66,7 +66,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         type=str,
-        default="le-probe/datasets/vedpatwardhan/gr1_reward_pred",
+        default="le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred",
     )
     parser.add_argument("--num_samples", type=int, default=10)
     parser.add_argument("--output", type=str, default="snapshot_sample.png")

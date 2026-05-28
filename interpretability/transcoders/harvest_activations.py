@@ -177,7 +177,7 @@ if __name__ == "__main__":
         description="Harvest LeWM activations for transcoder training"
     )
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
-    parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
+    parser.add_argument("--dataset", type=str, default="gr1_pickup_grasp")
     parser.add_argument("--output_dir", type=str, default="activations_granular")
     parser.add_argument("--batches", type=int, default=0)
     parser.add_argument("--shuffle", action="store_true")

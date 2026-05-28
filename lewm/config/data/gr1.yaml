@@ -1,7 +1,7 @@
 dataset:
   num_steps: ${eval:'${wm.num_preds} + ${wm.history_size}'}
   frameskip: 1
-  repo_id: "vedpatwardhan/gr1_pickup_grasp"
+  repo_id: "gr1_pickup_grasp"
   keys_to_load:
     - world_center
     - world_left

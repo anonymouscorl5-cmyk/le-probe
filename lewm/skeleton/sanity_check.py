@@ -67,7 +67,7 @@ def test_data_plugin_tiled_config():
     print("\n🧪 [TEST 2] Testing Tiled Data Configuration...")
     try:
         cfg = {
-            "repo_id": "vedpatwardhan/gr1_pickup_grasp",
+            "repo_id": "gr1_pickup_grasp",
             "keys_to_load": ["world_center", "world_left"],
             "num_steps": 1,
             "use_multi_view": True,
@@ -117,7 +117,7 @@ def test_fusion_logic():
     try:
         # Create a mock plugin
         plugin = SkeletonDataPlugin(
-            repo_id="vedpatwardhan/gr1_pickup_grasp",
+            repo_id="gr1_pickup_grasp",
             keys_to_load=["world_center"],
             num_steps=1,
             use_multi_view=True,

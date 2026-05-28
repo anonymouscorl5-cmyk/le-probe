@@ -14,7 +14,7 @@ from collections import Counter
 
 def find_ragged():
     df = pd.read_parquet(
-        "le-probe/datasets/vedpatwardhan/gr1_reward_pred/dataset.parquet"
+        "le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred/dataset.parquet"
     )
     item = df.iloc[0]["observation.images.world_center"]
 

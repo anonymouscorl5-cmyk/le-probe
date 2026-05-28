@@ -202,7 +202,7 @@ def run(cfg):
     pl.seed_everything(cfg.get("seed", 3072), workers=True)
 
     # 2. Data Ingestion & Transformation setup
-    repo_id = cfg.data.dataset.get("repo_id", "vedpatwardhan/gr1_pickup_grasp")
+    repo_id = cfg.data.dataset.get("repo_id", "gr1_pickup_grasp")
     keys_to_load = [
         "observation.state",
         "action",

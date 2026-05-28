@@ -158,7 +158,7 @@ def compare_models(naive_ckpt, v1_ckpt, v2_ckpt, df):
 
 if __name__ == "__main__":
     parquet_path = Path(
-        "le-probe/datasets/vedpatwardhan/gr1_reward_pred/dataset.parquet"
+        "le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred/dataset.parquet"
     )
 
     if not parquet_path.exists():

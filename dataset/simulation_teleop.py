@@ -260,7 +260,7 @@ class GR1TeleopServer(GR1MuJoCoBase):
             snap_dir = os.path.join(
                 ROOT_DIR,
                 "datasets",
-                "vedpatwardhan",
+                "anonymouscorl5-cmyk",
                 "gr1_reward_pred_v2",
             )
             os.makedirs(snap_dir, exist_ok=True)

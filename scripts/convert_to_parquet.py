@@ -45,12 +45,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--dir", type=str, default="le-probe/datasets/vedpatwardhan/gr1_reward_pred"
+        "--dir",
+        type=str,
+        default="le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred",
     )
     parser.add_argument(
         "--out",
         type=str,
-        default="le-probe/datasets/vedpatwardhan/gr1_reward_pred/dataset.parquet",
+        default="le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred/dataset.parquet",
     )
     args = parser.parse_args()
 

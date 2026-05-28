@@ -20,10 +20,8 @@ REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 
-VIDEO_PATH = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets/vedpatwardhan/gr1_pickup_grasp/videos/observation.images.world_center/chunk-000/file-000.mp4"
-OUTPUT_DIR = (
-    "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/dataset/skeleton/dino_outputs"
-)
+VIDEO_PATH = "/workspace/cortex-os/le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp/videos/observation.images.world_center/chunk-000/file-000.mp4"
+OUTPUT_DIR = "/workspace/cortex-os/le-probe/dataset/skeleton/dino_outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 

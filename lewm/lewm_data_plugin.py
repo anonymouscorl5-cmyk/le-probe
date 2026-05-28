@@ -13,7 +13,6 @@ import time
 import torchvision.transforms.functional as TF
 from pathlib import Path
 import pandas as pd
-from huggingface_hub import hf_hub_download
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 try:
@@ -49,8 +48,11 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
         self.use_multi_view = use_multi_view
         self.img_size = img_size
 
+        # Submission mode: require local dataset resolution, never implicit hub pulls.
+        self.repo_id = self._resolve_local_repo_id(repo_id)
+
         # 1. Base Dataset Discovery
-        self.lerobot_dataset = LeRobotDataset(repo_id)
+        self.lerobot_dataset = LeRobotDataset(self.repo_id)
         self.root = Path(self.lerobot_dataset.root)
         self.hf_dataset = self.lerobot_dataset.hf_dataset
 
@@ -68,7 +70,7 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
         }
 
         # 3. HIGH SPEED METADATA CACHE (Zero Parquet latency)
-        print(f"🚀 Initializing Direct Bypass for {repo_id}...")
+        print(f"🚀 Initializing Direct Bypass for {self.repo_id}...")
         self.episode_indices = torch.from_numpy(
             np.array(self.hf_dataset["episode_index"])
         )
@@ -101,18 +103,6 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
         # Fallback to side-car parquet file (common for research datasets on Colab)
         if not self.has_progress:
             reward_file = self.root / "progress_sparse.parquet"
-            if not reward_file.exists():
-                try:
-                    print(f"📥 Downloading side-car reward file from {self.repo_id}...")
-                    reward_path = hf_hub_download(
-                        repo_id=self.repo_id,
-                        filename="progress_sparse.parquet",
-                        repo_type="dataset",
-                    )
-                    reward_file = Path(reward_path)
-                except Exception as e:
-                    print(f"⚠️ Could not download progress_sparse.parquet: {e}")
-
             if reward_file.exists():
                 df = pd.read_parquet(reward_file)
                 for col in reward_cols:
@@ -121,6 +111,11 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
                         self.has_progress = True
                         print(f"📈 Loaded {col} from side-car file: {reward_file.name}")
                         break
+            else:
+                print(
+                    f"⚠️ Local side-car reward file missing at {reward_file}. "
+                    "HF fallback is disabled in submission mode."
+                )
 
         # 4. LRU Decoder Cache (Worker-local)
         self._decoders = {}
@@ -336,3 +331,47 @@ class LEWMDataPlugin(torch.utils.data.Dataset):
             return self.cached_states.shape[-1]
 
         return len(self.hf_dataset[0][source_key])
+
+    @staticmethod
+    def _resolve_local_repo_id(repo_id: str) -> str:
+        """
+        Resolve a dataset repo_id strictly from local workspace datasets.
+        Never auto-download from HF.
+        """
+        datasets_root = Path(ROOT_DIR) / "datasets"
+
+        if "/" in repo_id:
+            namespace, name = repo_id.split("/", 1)
+            candidate = datasets_root / namespace / name
+            if candidate.exists():
+                return repo_id
+            raise FileNotFoundError(
+                f"Local dataset not found for repo_id '{repo_id}'. "
+                f"Expected directory: {candidate}"
+            )
+
+        # Unqualified repo id: direct folder under datasets/.
+        direct = datasets_root / repo_id
+        if direct.exists():
+            return repo_id
+
+        # Unqualified repo id: resolve unique nested match datasets/*/<repo_id>
+        nested_matches = sorted(
+            p for p in datasets_root.glob(f"*/{repo_id}") if p.is_dir()
+        )
+        if len(nested_matches) == 1:
+            namespace = nested_matches[0].parent.name
+            resolved = f"{namespace}/{repo_id}"
+            print(f"📦 Resolved local dataset alias: {repo_id} -> {resolved}")
+            return resolved
+        if len(nested_matches) > 1:
+            raise FileNotFoundError(
+                f"Ambiguous local dataset alias '{repo_id}'. "
+                f"Matches: {[str(p) for p in nested_matches]}"
+            )
+
+        checked = [str(direct), str(datasets_root / "*/" / repo_id)]
+        raise FileNotFoundError(
+            "Dataset not found locally and HF fallback is disabled. "
+            f"repo_id='{repo_id}', checked: {checked}"
+        )

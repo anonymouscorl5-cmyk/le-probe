@@ -151,8 +151,11 @@ def resolve_dataset_root(dataset_repo: str) -> str:
     try:
         ds = LeRobotDataset(dataset_repo)
         return str(ds.root)
-    except Exception:
-        return "."
+    except Exception as exc:
+        raise RuntimeError(
+            f"Dataset '{dataset_repo}' is not available locally. "
+            "HF fallback is disabled for submission mode."
+        ) from exc
 
 
 def build_goal_mapper(

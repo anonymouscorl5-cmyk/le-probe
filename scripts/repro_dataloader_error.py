@@ -16,7 +16,7 @@ from pathlib import Path
 
 def test_dataloader_repro():
     parquet_file = Path(
-        "le-probe/datasets/vedpatwardhan/gr1_reward_pred/dataset.parquet"
+        "le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred/dataset.parquet"
     )
     if not parquet_file.exists():
         print(f"❌ File not found: {parquet_file}")

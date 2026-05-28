@@ -25,10 +25,12 @@ def get_hash(path):
 
 
 def compare_files():
-    local_path = Path("le-probe/datasets/vedpatwardhan/gr1_reward_pred/dataset.parquet")
+    local_path = Path(
+        "le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred/dataset.parquet"
+    )
     print(f"📥 Downloading from HF...")
     hf_path = hf_hub_download(
-        repo_id="vedpatwardhan/gr1_reward_pred",
+        repo_id="gr1_reward_pred",
         filename="dataset.parquet",
         repo_type="dataset",
     )

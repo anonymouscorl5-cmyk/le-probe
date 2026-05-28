@@ -146,8 +146,8 @@ class RewardValidator:
 
 if __name__ == "__main__":
     # Paths
-    CKPT = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/research/outputs/gr1_grasp_v3/checkpoints/gr1-epoch=99-step=004400.ckpt"
-    DATASET = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets"
+    CKPT = "/workspace/cortex-os/le-probe/research/outputs/gr1_grasp_v3/checkpoints/gr1-epoch=99-step=004400.ckpt"
+    DATASET = "/workspace/cortex-os/le-probe/datasets"
 
     validator = RewardValidator(CKPT, DATASET)
     validator.run_audit(num_samples=200)  # Quick audit

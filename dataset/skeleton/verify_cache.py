@@ -21,7 +21,7 @@ if str(REPO_DIR) not in sys.path:
 from lewm.skeleton.dino_constants import dino_waypoints_shape  # noqa: E402
 
 
-def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
+def main(repo_id="gr1_pickup_grasp"):
     # Dynamically resolve dataset path using LeRobot's own dataset engine or bust
     dataset = LeRobotDataset(repo_id)
     dataset_path = Path(dataset.root)

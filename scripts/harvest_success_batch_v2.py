@@ -25,7 +25,7 @@ def harvest_spectrum_batch_v2_cv2(
     )
 
     # Target Folder
-    output_dir = Path("le-probe/datasets/vedpatwardhan/gr1_reward_pred_v2")
+    output_dir = Path("le-probe/datasets/anonymouscorl5-cmyk/gr1_reward_pred_v2")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load sidecar for rewards
@@ -132,5 +132,6 @@ def extract_frame_cv2(video_path, frame_idx):
 if __name__ == "__main__":
     # Steps: 8, 16, 20, 24, 31
     harvest_spectrum_batch_v2_cv2(
-        "le-probe/datasets/vedpatwardhan/gr1_pickup_grasp", steps=[8, 16, 20, 24, 31]
+        "le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp",
+        steps=[8, 16, 20, 24, 31],
     )

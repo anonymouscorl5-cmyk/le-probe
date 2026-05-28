@@ -65,6 +65,6 @@ def extract_high_reward_frame(parquet_path, output_json, target_step=20):
 
 if __name__ == "__main__":
     extract_high_reward_frame(
-        "le-probe/datasets/vedpatwardhan/gr1_pickup_grasp/data/chunk-000/file-000.parquet",
+        "le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp/data/chunk-000/file-000.parquet",
         "success_test.json",
     )

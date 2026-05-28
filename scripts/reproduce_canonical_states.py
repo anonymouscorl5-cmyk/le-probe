@@ -5,11 +5,11 @@ import numpy as np
 from PIL import Image
 
 # Absolute paths - UPDATED to the correct local path
-DATASET_DIR = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets/vedpatwardhan/gr1_pickup_grasp"
-OUTPUT_DIR = "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/temp_repro"
-JSON_PATH = (
-    "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/canonical_reproduction.json"
+DATASET_DIR = (
+    "/workspace/cortex-os/le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp"
 )
+OUTPUT_DIR = "/workspace/cortex-os/le-probe/temp_repro"
+JSON_PATH = "/workspace/cortex-os/le-probe/canonical_reproduction.json"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

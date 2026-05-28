@@ -32,7 +32,7 @@ def main():
         {
             "img_size": 224,
             "wm": {"history_size": 1, "num_preds": 4},
-            "data": {"dataset": {"repo_id": "vedpatwardhan/gr1_pickup_grasp"}},
+            "data": {"dataset": {"repo_id": "gr1_pickup_grasp"}},
         }
     )
 

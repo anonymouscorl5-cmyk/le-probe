@@ -18,7 +18,10 @@ def validate_compression():
     target_repo = "gr1_pickup_compressed"
 
     parent_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "datasets", "vedpatwardhan"
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "datasets",
+        "anonymouscorl5-cmyk",
     )
     source_path = os.path.join(parent_dir, source_repo)
     target_path = os.path.join(parent_dir, target_repo)

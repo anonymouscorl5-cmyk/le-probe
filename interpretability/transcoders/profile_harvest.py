@@ -201,7 +201,7 @@ def profile_harvest(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Profile activation harvest")
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
-    parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
+    parser.add_argument("--dataset", type=str, default="gr1_pickup_grasp")
     parser.add_argument("--batches", type=int, default=5, help="Timed batches")
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--workers", type=int, default=2)

@@ -3,7 +3,7 @@ import os
 import sys
 
 # Path Setup
-ROOT_DIR = "/Users/vedpatwardhan/Desktop/cortex-os"
+ROOT_DIR = "/workspace/cortex-os"
 LE_PROBE_DIR = os.path.join(ROOT_DIR, "le-probe")
 if LE_PROBE_DIR not in sys.path:
     sys.path.insert(0, LE_PROBE_DIR)

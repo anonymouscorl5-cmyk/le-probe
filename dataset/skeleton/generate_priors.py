@@ -198,7 +198,7 @@ def process_episode(args):
             tmp_raw.unlink()
 
 
-def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
+def main(repo_id="gr1_pickup_grasp"):
     print(f"📦 [SKELETON GENERATOR] Initializing: {repo_id}")
     dataset = LeRobotDataset(repo_id)
     dataset_path = Path(dataset.root)
@@ -221,5 +221,5 @@ def main(repo_id="vedpatwardhan/gr1_pickup_grasp"):
 
 
 if __name__ == "__main__":
-    repo = sys.argv[1] if len(sys.argv) > 1 else "vedpatwardhan/gr1_pickup_grasp"
+    repo = sys.argv[1] if len(sys.argv) > 1 else "gr1_pickup_grasp"
     main(repo)

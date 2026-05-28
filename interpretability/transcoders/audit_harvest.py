@@ -143,7 +143,7 @@ if __name__ == "__main__":
         "--dir", type=str, required=True, help="Path to harvested activations"
     )
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
-    parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
+    parser.add_argument("--dataset", type=str, default="gr1_pickup_grasp")
     add_experiment_args(parser, include_cls_only=True)
     args = parser.parse_args()
 

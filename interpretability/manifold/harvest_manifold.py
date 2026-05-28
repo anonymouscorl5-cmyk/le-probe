@@ -45,8 +45,11 @@ def harvest_manifold(
         ds = LeRobotDataset(dataset_repo)
         resolved_root = ds.root
         print(f"📦 Local Dataset detected: {resolved_root}")
-    except Exception:
-        resolved_root = "."
+    except Exception as exc:
+        raise RuntimeError(
+            f"Dataset '{dataset_repo}' is not available locally. "
+            "HF fallback is disabled for submission mode."
+        ) from exc
 
     # 2. Load Model
     mapper = GoalMapper(
@@ -225,7 +228,7 @@ def harvest_manifold(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
-    parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
+    parser.add_argument("--dataset", type=str, default="gr1_pickup_grasp")
     parser.add_argument(
         "--output",
         type=str,

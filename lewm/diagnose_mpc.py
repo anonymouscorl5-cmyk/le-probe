@@ -273,7 +273,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples", type=int, default=8000)
     parser.add_argument("--var_scale", type=float, default=0.6)
     parser.add_argument("--horizon", type=int, default=15)
-    parser.add_argument("--dataset", type=str, default="vedpatwardhan/gr1_pickup_grasp")
+    parser.add_argument("--dataset", type=str, default="gr1_pickup_grasp")
     args = parser.parse_args()
     from lewm.mpc_logging import MPC_VERBOSE
 
@@ -283,8 +283,11 @@ if __name__ == "__main__":
         ds = LeRobotDataset(args.dataset)
         resolved_root = ds.root
         print(f"📦 Local Dataset detected: {resolved_root}")
-    except Exception:
-        resolved_root = "."
+    except Exception as exc:
+        raise RuntimeError(
+            f"Dataset '{args.dataset}' is not available locally. "
+            "HF fallback is disabled for submission mode."
+        ) from exc
 
     run_diagnostic(
         args.model,

@@ -30,7 +30,7 @@ from lewm.goal_mapper import GoalMapper
 from lewm.lewm_data_plugin import LEWMDataPlugin
 from lewm.skeleton.data import SkeletonDataPlugin
 
-REPO_ID = "vedpatwardhan/gr1_pickup_grasp"
+REPO_ID = "gr1_pickup_grasp"
 
 
 def harvest(

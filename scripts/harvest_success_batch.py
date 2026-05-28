@@ -28,7 +28,7 @@ def harvest_spectrum_batch(dataset_repo, steps=[8, 16, 24, 31], num_episodes=200
     ds = LeRobotDataset(repo_id=repo_id, root=dataset_path)
 
     # Target Folder
-    output_dir = Path("le-probe/datasets/vedpatwardhan/gr1_success_gold")
+    output_dir = Path("le-probe/datasets/anonymouscorl5-cmyk/gr1_success_gold")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load sidecar for rewards
@@ -80,5 +80,6 @@ def harvest_spectrum_batch(dataset_repo, steps=[8, 16, 24, 31], num_episodes=200
 if __name__ == "__main__":
     # Steps: 8, 16 (Mediocre), 20 (Peak), 24, 31 (Post-Grasp)
     harvest_spectrum_batch(
-        "le-probe/datasets/vedpatwardhan/gr1_pickup_grasp", steps=[8, 16, 20, 24, 31]
+        "le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_grasp",
+        steps=[8, 16, 20, 24, 31],
     )

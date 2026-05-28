@@ -16,8 +16,8 @@ dataset:
     - state
 
 seed: 42
-oracle_path: "/Users/vedpatwardhan/Desktop/cortex-os/lewm_baseline/outputs/gr1_prod_v17/checkpoints/gr1-epoch=99-step=005400.ckpt"
-dataset_root: "/Users/vedpatwardhan/Desktop/cortex-os/le-probe/datasets/vedpatwardhan/gr1_pickup_processed"
+oracle_path: "/workspace/cortex-os/lewm_baseline/outputs/gr1_prod_v17/checkpoints/gr1-epoch=99-step=005400.ckpt"
+dataset_root: "/workspace/cortex-os/le-probe/datasets/anonymouscorl5-cmyk/gr1_pickup_processed"
 
 plan_config:
   horizon: 15

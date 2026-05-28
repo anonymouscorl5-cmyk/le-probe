@@ -28,7 +28,7 @@ def visualize_audit(report_path, dataset_dir, output_dir="feature_gallery"):
     # We use a placeholder repo_id since we'll override the local_dir if needed
     print(f"🔄 Initializing Data Plugin for index alignment...")
     plugin = LEWMDataPlugin(
-        repo_id="vedpatwardhan/gr1_pickup_grasp", keys_to_load=["pixels"], num_steps=3
+        repo_id="gr1_pickup_grasp", keys_to_load=["pixels"], num_steps=3
     )
     # Force the plugin to look at the local download directory
     plugin.root = Path(dataset_dir)
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--repo_id",
         type=str,
-        default="vedpatwardhan/gr1_pickup_grasp",
+        default="gr1_pickup_grasp",
         help="HF Repo ID for auto-download",
     )
     parser.add_argument(
