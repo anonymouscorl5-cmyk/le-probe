@@ -1,0 +1,54 @@
+# LeWM checkpoint + engine flags per representation variant.
+# Paths are relative to the le-probe repo root (interpretability/dashboard/../..).
+
+repo_root: "../.."
+
+variants:
+  singleview:
+    tag: singleview
+    checkpoint: checkpoints/lewm_grasp_baseline
+    dataset_repo: gr1_pickup_grasp
+    multi_view: false
+    use_skeleton: false
+    use_dino: false
+    attribution_target: reward
+    meta: activations_granular_baseline/encoder_L0.json
+
+  multiview:
+    tag: multiview
+    checkpoint: checkpoints/lewm_grasp_multiview
+    dataset_repo: gr1_pickup_grasp
+    multi_view: true
+    use_skeleton: false
+    use_dino: false
+    attribution_target: reward
+    meta: activations_granular_multiview/encoder_L0.json
+
+  multiview_skeleton:
+    tag: multiview_skeleton
+    checkpoint: checkpoints/lewm_grasp_multiview_skeleton
+    dataset_repo: gr1_pickup_grasp
+    multi_view: true
+    use_skeleton: true
+    use_dino: false
+    attribution_target: reward
+    meta: activations_granular_multiview_skeleton/encoder_L0.json
+
+  multiview_skeleton_dino:
+    tag: multiview_skeleton_dino
+    checkpoint: checkpoints/lewm_grasp_multiview_skeleton_dino
+    dataset_repo: gr1_pickup_grasp
+    multi_view: true
+    use_skeleton: true
+    use_dino: true
+    # Encoder-only interpretability: reward IG (ignore DINO subgoal path in graphs).
+    attribution_target: reward
+    meta: activations_granular_multiview_skeleton_dino/encoder_L0.json
+
+defaults:
+  probe_bundle: datasets/workspace_probe_grasp/workspace_probe_bundle.pt
+  pose_clusters: datasets/workspace_probe_grasp/workspace_probe_pose_clusters.json
+  transcoder_subdir: transcoder_weights_residual
+  history_size: 3
+  ig_steps: 20
+  min_k: 15

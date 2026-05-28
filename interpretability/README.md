@@ -56,6 +56,51 @@ pip install -r requirements.txt
 
 ## Neuronpedia Visualization
 
+### Static probes (label-scheme exploration)
+
+**Scope:** encoder CLT features only (`encoder_L0`–`encoder_L11`). Tier-A differential
+scores are on `encoder_L0` probe embeddings. Full graph JSONs may still show predictor /
+reward / DINO nodes; `*.nodes.md` sidecars list **encoder features to click** only.
+
+```bash
+cd le-probe
+
+# 1) Shortlist probes per lateral / distance / pose × variant
+.venv/bin/python interpretability/transcoders/build_neuronpedia_probe_playbook.py --pilot
+
+# 2) Precompute IG attribution graphs + node recommendations (no UI yet)
+.venv/bin/python interpretability/dashboard/run_probe_attribution_graphs.py \
+  --variant multiview_skeleton --scheme distance
+
+# Each graph gets sidecars:
+#   distance_at_cube_canonical_pid127.json
+#   distance_at_cube_canonical_pid127.nodes.json   # ranked CLT features to click
+#   distance_at_cube_canonical_pid127.nodes.md     # human-readable brief
+
+# 3) Optional: re-rank nodes from existing graphs only
+.venv/bin/python interpretability/dashboard/recommend_neuronpedia_nodes.py \
+  workspace_visualization/attribution_graphs/multiview_skeleton/
+
+# 4) Neuronpedia UI (probe mode engine)
+cd interpretability/neuronpedia && make webapp-localhost-dev
+
+.venv/bin/python interpretability/dashboard/engine.py \
+  --dataset-source probes \
+  --probe-bundle datasets/workspace_probe_grasp/workspace_probe_bundle.pt \
+  --repo gr1_pickup_grasp \
+  --meta activations_granular_multiview_skeleton/encoder_L0.json \
+  --model checkpoints/lewm_grasp_multiview_skeleton/gr1_reward_tuned_v2.ckpt \
+  --transcoders checkpoints/lewm_grasp_multiview_skeleton/transcoder_weights_residual \
+  --multi_view --use_skeleton --min-k 15
+
+# In Neuronpedia, use prompt probe:<probe_id> (see *.nodes.md for which features to open)
+.venv/bin/python interpretability/dashboard/neuronpedia_server.py
+```
+
+Variant flags and checkpoint paths: `interpretability/dashboard/variant_profiles.yaml`.
+
+### Training episodes (legacy)
+
 ```bash
 cd interpretability/neuronpedia
 make webapp-localhost-dev

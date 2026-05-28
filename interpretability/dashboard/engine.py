@@ -14,6 +14,7 @@ import torch.nn as nn
 import traceback
 
 # LeWM / LeRobot Imports
+from interpretability.dashboard.workspace_probe_dataset import WorkspaceProbeDataset
 from interpretability.lewm_experiment import (
     ExperimentConfig,
     VIEW_NAMES,
@@ -48,6 +49,8 @@ STATE = {
     "meta": None,
     "cfg": None,
     "min_k": 15,
+    "dataset_source": "lerobot",
+    "probe_bundle_path": None,
 }
 
 # --- 1. VISUAL ENDPOINTS (Full Parity with colab_bridge.py) ---
@@ -210,7 +213,7 @@ class LeWMAttributor:
         reward_out = self.model.reward_head(logits[:, -1, :])
         return reward_out.squeeze()
 
-    def attribute(self, sample, target_logit_idx, steps=20):
+    def attribute(self, sample, target_logit_idx, steps=20, trace_id: int = 0):
         """
         Runs attribution to find feature and input importance.
         """
@@ -625,11 +628,11 @@ class LeWMAttributor:
             # E. Final Graph structure
             graph_data = {
                 "metadata": {
-                    "slug": f"robot_trace_{idx}",
+                    "slug": f"robot_trace_{trace_id}",
                     "scan": "lewm-robot",
-                    "trace_id": idx,
+                    "trace_id": trace_id,
                     "prompt_tokens": ["Robotic", "Frame"],
-                    "prompt": f"Robotic Trace {idx}",
+                    "prompt": f"Robotic Trace {trace_id}",
                     "title_prefix": "Robotic Circuit",
                     "schema_version": 0,
                     "node_threshold": 99999,
@@ -710,17 +713,35 @@ async def generate_graph(request: Dict[str, Any]):
             status_code=500, detail="Engine resources (model/transcoders) not loaded"
         )
 
-    # Neuronpedia sends 'prompt'. We treat it as 'index' or 'index:joint'
+    # Neuronpedia sends 'prompt'. Training: index or index:joint. Probes: probe:PID or pid:PID.
     prompt = request.get("prompt", "0")
+    sample_idx = 0
+    target_logit_idx = 7
+    probe_id_meta = None
     try:
         clean_prompt = str(prompt).replace("<bos>", "").strip()
-        if ":" in clean_prompt:
+        lower = clean_prompt.lower()
+        if lower.startswith("probe:") or lower.startswith("pid:"):
+            from interpretability.dashboard.probe_graph_runner import parse_probe_prompt
+
+            _, probe_id_meta = parse_probe_prompt(clean_prompt)
+            dataset = STATE["dataset"]
+            if not hasattr(dataset, "index_for_probe_id"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Engine not in probe mode; restart with --dataset-source probes",
+                )
+            sample_idx = dataset.index_for_probe_id(probe_id_meta)
+            if ":" in clean_prompt and clean_prompt.count(":") >= 2:
+                target_logit_idx = int(clean_prompt.split(":")[-1])
+        elif ":" in clean_prompt:
             parts = clean_prompt.split(":")
             sample_idx = int(parts[0])
             target_logit_idx = int(parts[1])
         else:
             sample_idx = int(clean_prompt)
-            target_logit_idx = 7  # Default to Joint 7
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error parsing prompt '{prompt}': {e}")
         sample_idx = 0
@@ -742,10 +763,14 @@ async def generate_graph(request: Dict[str, Any]):
             if isinstance(v, torch.Tensor):
                 sample[k] = v.unsqueeze(0)
 
-        graph = attributor.attribute(sample, target_logit_idx)
-        # Add metadata for the robotic gallery without overwriting
+        graph = attributor.attribute(sample, target_logit_idx, trace_id=sample_idx)
         graph["metadata"]["trace_id"] = sample_idx
         graph["metadata"]["patch_indices"] = graph.get("_top_patch_indices", [])
+        if probe_id_meta is not None:
+            graph["metadata"]["probe_id"] = int(probe_id_meta)
+            graph["metadata"]["prompt"] = f"probe:{probe_id_meta}"
+            if hasattr(dataset, "probe_id_at"):
+                graph["metadata"]["bundle_index"] = sample_idx
         return graph
 
     except Exception as e:
@@ -809,7 +834,14 @@ async def get_gallery(idx: int, patches: Optional[str] = None):
 
 
 def load_engine_resources(
-    model_path, dataset_repo, transcoder_dir, cfg: ExperimentConfig, device="cuda"
+    model_path,
+    dataset_repo,
+    transcoder_dir,
+    cfg: ExperimentConfig,
+    device="cuda",
+    *,
+    dataset_source: str = "lerobot",
+    probe_bundle_path: str | None = None,
 ):
     print(f"🚀 Initializing Engine Resources | Device: {device}")
     print(
@@ -818,8 +850,18 @@ def load_engine_resources(
     )
 
     dataset_root = resolve_dataset_root(dataset_repo)
-    print(f"🚀 Initializing data plugin for {dataset_repo}")
-    STATE["dataset"] = build_data_plugin(dataset_repo, cfg, num_steps=cfg.history_size)
+    STATE["dataset_source"] = dataset_source
+    STATE["probe_bundle_path"] = probe_bundle_path
+    if dataset_source == "probes":
+        if not probe_bundle_path:
+            raise ValueError("probe_bundle_path required when dataset_source=probes")
+        print(f"📍 Workspace probe dataset: {probe_bundle_path}")
+        STATE["dataset"] = WorkspaceProbeDataset(probe_bundle_path, cfg)
+    else:
+        print(f"🚀 Initializing data plugin for {dataset_repo}")
+        STATE["dataset"] = build_data_plugin(
+            dataset_repo, cfg, num_steps=cfg.history_size
+        )
     STATE["cfg"] = cfg
 
     print(f"🧠 Loading LeWM Model: {model_path}")
@@ -900,6 +942,19 @@ def main():
         default=3,
         help="Temporal history for dataset samples",
     )
+    parser.add_argument(
+        "--dataset-source",
+        type=str,
+        choices=("lerobot", "probes"),
+        default="lerobot",
+        help="lerobot training episodes or static workspace_probe_bundle",
+    )
+    parser.add_argument(
+        "--probe-bundle",
+        type=str,
+        default=None,
+        help="Path to workspace_probe_bundle.pt (required if --dataset-source probes)",
+    )
     add_experiment_args(parser, include_cls_only=False, include_attribution_target=True)
     args = parser.parse_args()
 
@@ -914,8 +969,22 @@ def main():
         meta_cfg = ExperimentConfig.from_metadata(STATE["meta"])
         cfg.cls_only = meta_cfg.cls_only
 
+    probe_bundle = args.probe_bundle
+    if args.dataset_source == "probes" and not probe_bundle:
+        default_bundle = (
+            Path(__file__).resolve().parents[2]
+            / "datasets/workspace_probe_grasp/workspace_probe_bundle.pt"
+        )
+        probe_bundle = str(default_bundle)
+
     load_engine_resources(
-        args.model, args.repo, args.transcoders, cfg, device=args.device
+        args.model,
+        args.repo,
+        args.transcoders,
+        cfg,
+        device=args.device,
+        dataset_source=args.dataset_source,
+        probe_bundle_path=probe_bundle,
     )
 
     # 3. Start Server

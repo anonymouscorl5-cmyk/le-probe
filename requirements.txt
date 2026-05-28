@@ -44,6 +44,7 @@ streamlit   # Teleop & Monitoring UI
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 requests>=2.32.0
+PyYAML>=6.0
 pyzmq  # teleop / interpretability still use ZMQ
 rembg
 rerun-sdk[all]==0.28.2
