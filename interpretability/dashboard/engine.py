@@ -460,19 +460,27 @@ class LeWMAttributor:
 
                     # 3. Use Transcoder Sparse Activations (already captured in forward_hook)
                     sparse_acts = act
-                    if sparse_acts.ndim > 2:
+                    while sparse_acts.ndim > 2:
                         sparse_acts = sparse_acts.squeeze(0)
+                    feat_g = feat_grad
+                    while feat_g.ndim > 2:
+                        feat_g = feat_g.squeeze(0)
+                    if feat_g.ndim == 1:
+                        feat_g = feat_g.unsqueeze(0)
+                    if sparse_acts.ndim == 1:
+                        sparse_acts = sparse_acts.unsqueeze(0)
 
-                # Calculate total influence of each feature across all tokens
-                # sparse_acts: [T, D], feat_grad: [1, T, D]
-                influence_per_feat = (sparse_acts * feat_grad.squeeze(0)).sum(dim=0)
-                # Max activation across tokens for visual scaling
-                max_act_per_feat = sparse_acts.max(dim=0).values.view(-1)
+                # Collapse all token/time dims → one score per dictionary feature
+                token_dims = list(range(sparse_acts.ndim - 1))
+                influence_per_feat = (sparse_acts * feat_g).sum(dim=token_dims).view(-1)
+                max_act_per_feat = sparse_acts.amax(dim=token_dims).view(-1)
 
-                top_vals, top_idx = torch.topk(influence_per_feat.abs(), k=15)
+                k = min(15, int(influence_per_feat.numel()))
+                top_vals, top_idx = torch.topk(influence_per_feat.abs(), k=k)
 
-                for i, (v, feat_idx) in enumerate(zip(top_vals, top_idx)):
-                    feat_idx = int(feat_idx)
+                for i in range(top_idx.numel()):
+                    v = top_vals[i]
+                    feat_idx = int(top_idx[i].item())
                     # Spread features horizontally across the X-axis
                     token_idx = i
                     node_id = f"feat_{lid}_{feat_idx}"
