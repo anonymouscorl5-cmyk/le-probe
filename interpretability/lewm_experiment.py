@@ -173,6 +173,26 @@ def build_goal_mapper(
     )
 
 
+def build_goal_mapper_for_probes(
+    model_path: str,
+    cfg: ExperimentConfig,
+) -> GoalMapper:
+    """
+    GoalMapper for static workspace probes (IG / Neuronpedia).
+
+    Does not require gr1_pickup_grasp: pixels come from workspace_probe_bundle.pt
+    and preprocessing uses ImageNet transforms only (same as harvest_goals.py).
+    """
+    return GoalMapper(
+        model_path=model_path,
+        dataset_root=None,
+        use_multi_view=cfg.multi_view,
+        num_views=cfg.num_views,
+        use_skeleton=cfg.use_skeleton,
+        use_dino=cfg.use_dino,
+    )
+
+
 def data_keys_to_load(cfg: ExperimentConfig) -> list:
     keys = ["action"]
     if cfg.multi_view:

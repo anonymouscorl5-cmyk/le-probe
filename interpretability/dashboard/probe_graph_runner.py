@@ -15,8 +15,7 @@ from interpretability.dashboard.engine import LeWMAttributor
 from interpretability.dashboard.workspace_probe_dataset import WorkspaceProbeDataset
 from interpretability.lewm_experiment import (
     ExperimentConfig,
-    build_goal_mapper,
-    resolve_dataset_root,
+    build_goal_mapper_for_probes,
 )
 
 LE_PROBE_ROOT = Path(__file__).resolve().parents[2]
@@ -88,11 +87,8 @@ def load_probe_resources(
     transcoder_dir = ckpt_dir / defaults.get(
         "transcoder_subdir", "transcoder_weights_residual"
     )
-    dataset_repo = v["dataset_repo"]
-    dataset_root = resolve_dataset_root(dataset_repo)
-
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    mapper = build_goal_mapper(str(model_ckpt), dataset_root, cfg)
+    mapper = build_goal_mapper_for_probes(str(model_ckpt), cfg)
     model = mapper.model.to(dev).eval()
 
     transcoders: dict[str, dict] = {}

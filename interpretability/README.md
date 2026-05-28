@@ -62,6 +62,10 @@ pip install -r requirements.txt
 scores are on `encoder_L0` probe embeddings. Full graph JSONs may still show predictor /
 reward / DINO nodes; `*.nodes.md` sidecars list **encoder features to click** only.
 
+**Colab / local artifacts (no `gr1_pickup_grasp` for this path):** probe bundle + latents,
+four checkpoint trees (`.ckpt` + `transcoder_weights_residual/`). Training teleop dataset
+is not loaded for playbook or `run_probe_attribution_graphs.py`.
+
 ```bash
 cd le-probe
 
@@ -87,7 +91,6 @@ cd interpretability/neuronpedia && make webapp-localhost-dev
 .venv/bin/python interpretability/dashboard/engine.py \
   --dataset-source probes \
   --probe-bundle datasets/workspace_probe_grasp/workspace_probe_bundle.pt \
-  --repo gr1_pickup_grasp \
   --meta activations_granular_multiview_skeleton/encoder_L0.json \
   --model checkpoints/lewm_grasp_multiview_skeleton/gr1_reward_tuned_v2.ckpt \
   --transcoders checkpoints/lewm_grasp_multiview_skeleton/transcoder_weights_residual \

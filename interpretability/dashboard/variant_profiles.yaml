@@ -1,5 +1,6 @@
 # LeWM checkpoint + engine flags per representation variant.
 # Paths are relative to the le-probe repo root (interpretability/dashboard/../..).
+# Probe graphs / playbook do not need gr1_pickup_grasp (see build_goal_mapper_for_probes).
 
 repo_root: "../.."
 
@@ -7,7 +8,6 @@ variants:
   singleview:
     tag: singleview
     checkpoint: checkpoints/lewm_grasp_baseline
-    dataset_repo: gr1_pickup_grasp
     multi_view: false
     use_skeleton: false
     use_dino: false
@@ -17,7 +17,6 @@ variants:
   multiview:
     tag: multiview
     checkpoint: checkpoints/lewm_grasp_multiview
-    dataset_repo: gr1_pickup_grasp
     multi_view: true
     use_skeleton: false
     use_dino: false
@@ -27,7 +26,6 @@ variants:
   multiview_skeleton:
     tag: multiview_skeleton
     checkpoint: checkpoints/lewm_grasp_multiview_skeleton
-    dataset_repo: gr1_pickup_grasp
     multi_view: true
     use_skeleton: true
     use_dino: false
@@ -37,7 +35,6 @@ variants:
   multiview_skeleton_dino:
     tag: multiview_skeleton_dino
     checkpoint: checkpoints/lewm_grasp_multiview_skeleton_dino
-    dataset_repo: gr1_pickup_grasp
     multi_view: true
     use_skeleton: true
     use_dino: true

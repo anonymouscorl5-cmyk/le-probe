@@ -21,6 +21,7 @@ from interpretability.lewm_experiment import (
     add_experiment_args,
     build_data_plugin,
     build_goal_mapper,
+    build_goal_mapper_for_probes,
     config_from_args,
     decode_token_index,
     prepare_pixels_6d,
@@ -849,7 +850,6 @@ def load_engine_resources(
         f"dino={cfg.use_dino}, attribution={cfg.attribution_target}"
     )
 
-    dataset_root = resolve_dataset_root(dataset_repo)
     STATE["dataset_source"] = dataset_source
     STATE["probe_bundle_path"] = probe_bundle_path
     if dataset_source == "probes":
@@ -858,6 +858,8 @@ def load_engine_resources(
         print(f"📍 Workspace probe dataset: {probe_bundle_path}")
         STATE["dataset"] = WorkspaceProbeDataset(probe_bundle_path, cfg)
     else:
+        if not dataset_repo:
+            raise ValueError("dataset_repo required when dataset_source=lerobot")
         print(f"🚀 Initializing data plugin for {dataset_repo}")
         STATE["dataset"] = build_data_plugin(
             dataset_repo, cfg, num_steps=cfg.history_size
@@ -865,7 +867,11 @@ def load_engine_resources(
     STATE["cfg"] = cfg
 
     print(f"🧠 Loading LeWM Model: {model_path}")
-    mapper = build_goal_mapper(model_path, dataset_root, cfg)
+    if dataset_source == "probes":
+        mapper = build_goal_mapper_for_probes(model_path, cfg)
+    else:
+        dataset_root = resolve_dataset_root(dataset_repo)
+        mapper = build_goal_mapper(model_path, dataset_root, cfg)
     STATE["model"] = mapper.model.to(device).eval()
     STATE["mapper"] = mapper
 
@@ -925,7 +931,10 @@ def main():
         "--meta", type=str, required=True, help="Path to layer metadata JSON"
     )
     parser.add_argument(
-        "--repo", type=str, required=True, help="Hugging Face Dataset Repo"
+        "--repo",
+        type=str,
+        default=None,
+        help="Hugging Face dataset repo (required for --dataset-source lerobot only)",
     )
     parser.add_argument("--model", type=str, default="gr1_reward_tuned_v2.ckpt")
     parser.add_argument("--transcoders", type=str, default="transcoder_checkpoints")
@@ -976,6 +985,8 @@ def main():
             / "datasets/workspace_probe_grasp/workspace_probe_bundle.pt"
         )
         probe_bundle = str(default_bundle)
+    if args.dataset_source == "lerobot" and not args.repo:
+        parser.error("--repo is required when --dataset-source lerobot")
 
     load_engine_resources(
         args.model,
