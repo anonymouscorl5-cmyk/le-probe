@@ -134,7 +134,6 @@ pip install -r requirements.txt
 
 #### Interpretability Artifacts
 
-- Activations harvests: [Google Drive folder](https://drive.google.com/drive/folders/1wAUUsT88b458OUQ6qdTsIe8hCzuinNc4?usp=sharing)
 - Transcoder weights: [Google Drive folder](https://drive.google.com/drive/folders/1LRxPy4A02ZTanGnQmsosvC_oxq-8AHM6?usp=sharing)
 - Manifold harvest (Single-View RGB): [manifold_data.pt](https://drive.google.com/file/d/17f2l3ebzrX0chu5Zy0GiWEYqGZ-M0CyK/view?usp=sharing)
 - Manifold harvest (Multi-View RGB): [manifold_data.pt](https://drive.google.com/file/d/1ix3_ISc80CX91RWKafP0pV8ZA9RlO49f/view?usp=sharing)
