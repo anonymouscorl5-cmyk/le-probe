@@ -7,6 +7,7 @@ brain_snapshots
 datasets
 manifold_visualization
 workspace_visualization
+training_metrics
 scratch
 *.log
 run_*/

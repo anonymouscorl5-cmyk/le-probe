@@ -17,7 +17,12 @@ REPO_DIR = Path(__file__).resolve().parents[2]
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 
-from dataset.task_workspace_probe.segments import SEGMENT_COLORS, SEGMENT_ORDER
+from dataset.task_workspace_probe.segments import (
+    SEGMENT_ORDER,
+    infer_scheme_from_labels,
+    segment_colors_for_labels,
+    segment_order,
+)
 from dataset.task_workspace_probe.viz_bounds import (
     axis_limits,
     plotly_scene_from_limits,
@@ -211,8 +216,14 @@ def build_interactive_figure(payload: dict) -> go.Figure:
     _add_sim_scene(fig, cube)
     fig.add_trace(_hull_mesh(poly))
     lo, hi = axis_limits(_world_frame_limit_points(ee, cube))
+    present_labels = set(segments)
+    scheme = infer_scheme_from_labels(present_labels)
+    colors = segment_colors_for_labels(present_labels)
+    ordered = segment_order(scheme, present_labels=present_labels)
+    if not ordered:
+        ordered = tuple(sorted(present_labels))
 
-    for seg in sorted(set(segments)):
+    for seg in ordered:
         mask = np.array([s == seg for s in segments])
         if not mask.any():
             continue
@@ -230,7 +241,7 @@ def build_interactive_figure(payload: dict) -> go.Figure:
                 name=seg,
                 marker=dict(
                     size=4,
-                    color=SEGMENT_COLORS.get(seg, "#888888"),
+                    color=colors.get(seg, "#888888"),
                     opacity=0.85,
                     line=dict(width=0),
                 ),
@@ -242,7 +253,14 @@ def build_interactive_figure(payload: dict) -> go.Figure:
     fig.update_layout(
         title="Workspace probe fingertips (world frame) — drag to orbit, scroll to zoom",
         margin=dict(l=0, r=0, t=40, b=0),
-        legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.7)"),
+        legend=dict(
+            x=0.01,
+            y=0.99,
+            bgcolor="rgba(20,20,20,0.85)",
+            bordercolor="rgba(230,230,230,0.45)",
+            borderwidth=1,
+            font=dict(color="#f2f2f2"),
+        ),
         scene=plotly_scene_from_limits(
             lo,
             hi,
@@ -270,7 +288,14 @@ def save_matplotlib_png(payload: dict, out: Path) -> None:
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
 
-    for seg in sorted(set(segments)):
+    present_labels = set(segments)
+    scheme = infer_scheme_from_labels(present_labels)
+    colors = segment_colors_for_labels(present_labels)
+    ordered = segment_order(scheme, present_labels=present_labels)
+    if not ordered:
+        ordered = tuple(sorted(present_labels))
+
+    for seg in ordered:
         mask = np.array([s == seg for s in segments])
         if not mask.any():
             continue
@@ -278,7 +303,7 @@ def save_matplotlib_png(payload: dict, out: Path) -> None:
             ee[mask, 0],
             ee[mask, 1],
             ee[mask, 2],
-            c=SEGMENT_COLORS.get(seg, "#888"),
+            c=colors.get(seg, "#888"),
             label=seg,
             s=12,
             alpha=0.7,
