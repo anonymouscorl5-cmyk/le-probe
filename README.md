@@ -57,22 +57,20 @@ pip install -r requirements.txt
 ### Behavior Progression
 
 <div align="center">
-  <div style="display:inline-block; margin: 0 6px; text-align:center; vertical-align:top;">
-    <p><b>Single-View RGB</b></p>
-    <img src="assets/lewm_grasp.gif" width="160" alt="Single-View RGB rollout">
-  </div>
-  <div style="display:inline-block; margin: 0 6px; text-align:center; vertical-align:top;">
-    <p><b>Multi-View RGB</b></p>
-    <img src="assets/lewm_grasp_multiview.gif" width="160" alt="Multi-View RGB rollout">
-  </div>
-  <div style="display:inline-block; margin: 0 6px; text-align:center; vertical-align:top;">
-    <p><b>Multi-View RGB + Skeletal Priors</b></p>
-    <img src="assets/lewm_grasp_multiview_skeleton.gif" width="160" alt="Multi-View RGB plus Skeletal Priors rollout">
-  </div>
-  <div style="display:inline-block; margin: 0 6px; text-align:center; vertical-align:top;">
-    <p><b>Multi-View RGB + Skeletal Priors + DINOv3 Waypoints</b></p>
-    <img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="160" alt="Multi-View RGB plus Skeletal Priors plus DINOv3 Waypoints rollout">
-  </div>
+  <table>
+    <tr>
+      <th>Single-View RGB</th>
+      <th>Multi-View RGB</th>
+      <th>Skeletal Priors</th>
+      <th>DINOv3 Waypoints</th>
+    </tr>
+    <tr>
+      <td><img src="assets/lewm_grasp.gif" width="180" alt="Single-View RGB rollout"></td>
+      <td><img src="assets/lewm_grasp_multiview.gif" width="180" alt="Multi-View RGB rollout"></td>
+      <td><img src="assets/lewm_grasp_multiview_skeleton.gif" width="180" alt="Multi-View RGB plus Skeletal Priors rollout"></td>
+      <td><img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="180" alt="Multi-View RGB plus Skeletal Priors plus DINOv3 Waypoints rollout"></td>
+    </tr>
+  </table>
 </div>
 
 ### Training-Manifold Audit (PCA / t-SNE / UMAP)
