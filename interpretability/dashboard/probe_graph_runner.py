@@ -5,11 +5,14 @@ Load LeWM + workspace probes and run LeWMAttributor without the HTTP server.
 from __future__ import annotations
 
 import json
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
 import torch
 import yaml
+from tqdm import tqdm
 
 from interpretability.dashboard.engine import LeWMAttributor
 from interpretability.dashboard.workspace_probe_dataset import WorkspaceProbeDataset
@@ -70,7 +73,13 @@ def load_probe_resources(
     *,
     profiles_path: Path | None = None,
     device: str | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
+    def _say(msg: str) -> None:
+        if verbose:
+            ts = time.strftime("%H:%M:%S")
+            print(f"    [{ts}] {msg}", flush=True)
+
     profiles = load_profiles(profiles_path)
     v = variant_config(profiles, variant_tag)
     cfg = experiment_config_from_variant(v, profiles)
@@ -88,11 +97,25 @@ def load_probe_resources(
         "transcoder_subdir", "transcoder_weights_residual"
     )
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    _say(f"device={dev}")
+    _say(f"loading checkpoint {model_ckpt.name} from {ckpt_dir}")
     mapper = build_goal_mapper_for_probes(str(model_ckpt), cfg)
     model = mapper.model.to(dev).eval()
+    _say("checkpoint loaded")
 
+    tc_paths = sorted(transcoder_dir.glob("*.pt"))
+    _say(f"loading {len(tc_paths)} transcoder weight(s) from {transcoder_dir.name}/")
     transcoders: dict[str, dict] = {}
-    for path in sorted(transcoder_dir.glob("*.pt")):
+    tc_iter = tc_paths
+    if verbose:
+        tc_iter = tqdm(
+            tc_paths,
+            desc="    CLT weights",
+            unit="layer",
+            leave=False,
+            file=sys.stdout,
+        )
+    for path in tc_iter:
         layer_id = path.stem.split("_clt")[0].split("_sae")[0].split("_residual")[0]
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         from interpretability.transcoders.universal_transcoder import Transcoder
@@ -105,9 +128,11 @@ def load_probe_resources(
         tc.load_state_dict(state_dict)
         transcoders[layer_id] = {"model": tc.eval(), "stats": norm_stats}
 
+    _say(f"opening probe bundle {bundle_path.name}")
     dataset = WorkspaceProbeDataset(
         bundle_path, cfg, pose_labels=load_pose_labels(pose_path)
     )
+    _say(f"probe bundle ready ({len(dataset)} poses)")
 
     return {
         "profiles": profiles,

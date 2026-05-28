@@ -232,9 +232,10 @@ def render_markdown(rec: dict, graph_path: Path) -> str:
 def process_graph(
     path: Path,
     *,
-    top_features: int,
-    top_inputs: int,
+    top_features: int = 12,
+    top_inputs: int = 8,
     encoder_only: bool = True,
+    quiet: bool = False,
 ) -> None:
     graph = json.loads(path.read_text())
     rec = rank_nodes(
@@ -247,8 +248,9 @@ def process_graph(
     out_md = path.with_suffix(".nodes.md")
     out_json.write_text(json.dumps(rec, indent=2))
     out_md.write_text(render_markdown(rec, path))
-    print(f"Wrote {out_json}")
-    print(f"Wrote {out_md}")
+    if not quiet:
+        print(f"Wrote {out_json}")
+        print(f"Wrote {out_md}")
 
 
 def main() -> None:
