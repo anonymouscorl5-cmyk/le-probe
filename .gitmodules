@@ -3,5 +3,5 @@
 	url = https://github.com/lucas-maes/le-wm.git
 [submodule "interpretability/neuronpedia"]
 	path = interpretability/neuronpedia
-url = https://github.com/anonymouscorl5-cmyk/neuronpedia.git
+	url = https://github.com/anonymouscorl5-cmyk/neuronpedia.git
 	branch = le-probe-changes
