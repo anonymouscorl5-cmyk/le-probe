@@ -32,11 +32,15 @@ pip install -r requirements.txt
 
 ## Reproduction
 
-```bash
-# 1) Harvest goal gallery for MPC
-.venv/bin/python lewm/harvest_goals.py
+The canonical reference workflow for reproducing LeWM experiments is:
 
-# 2) Start planner server (full variant example)
+- [`lewm/LeWM_Training.ipynb`](./lewm/LeWM_Training.ipynb) for training and checkpoint generation.
+- [`lewm/LeWM_E2E.ipynb`](./lewm/LeWM_E2E.ipynb) for end-to-end planning/inference evaluation.
+
+Notebook-aligned CLI equivalents (including priors, fused cache, trainer/tuner flow) are documented in [`lewm/README.md`](./lewm/README.md).
+
+```bash
+# 1) Start planner server (full variant example)
 .venv/bin/python lewm/lewm_server.py \
   --model <ckpt> \
   --gallery goal_gallery.pth \

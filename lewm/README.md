@@ -51,20 +51,71 @@ pip install -r requirements.txt
 
 ## Quick Workflow
 
+Primary reference notebooks for experiment reproduction:
+
+- [`LeWM_Training.ipynb`](./LeWM_Training.ipynb): canonical training and checkpoint workflow.
+- [`LeWM_E2E.ipynb`](./LeWM_E2E.ipynb): canonical end-to-end planning/inference workflow.
+
+Notebook-aligned CLI flow (mirrors the sequence in `LeWM_Training.ipynb` and `LeWM_E2E.ipynb`):
+
 ```bash
-# 1) Train
+# 0) From repo root
+cd le-probe
+source .venv/bin/activate
+
+# 1) Baseline training (Single-View RGB)
 .venv/bin/python lewm/train_lewm.py data.dataset.repo_id="gr1_pickup_grasp"
 
-# 2) Harvest goal gallery
+# 2) Multi-View RGB + Skeletal Priors data prep
+.venv/bin/python dataset/skeleton/generate_priors.py gr1_pickup_grasp
+.venv/bin/python dataset/skeleton/verify_tiling.py gr1_pickup_grasp/videos/observation.images.world_center_tiled/chunk-000/file-000.mp4
+
+# 3) Train with skeletal priors
+.venv/bin/python lewm/skeleton/trainer.py \
+  --repo_id gr1_pickup_grasp \
+  --multi_view --use_skeleton
+
+# 4) Add DINOv3 waypoints + fused cache
+.venv/bin/python dataset/skeleton/generate_dino_priors.py gr1_pickup_grasp
+.venv/bin/python dataset/skeleton/cache_fused_dataset.py gr1_pickup_grasp
+.venv/bin/python dataset/skeleton/verify_cache.py gr1_pickup_grasp
+
+# 5) Train Multi-View RGB + Skeletal Priors + DINOv3 Waypoints
+.venv/bin/python lewm/skeleton/trainer.py \
+  --repo_id gr1_pickup_grasp \
+  --multi_view --use_skeleton --use_dino
+
+# 6) Reward-head tuning
+.venv/bin/python lewm/tune_reward_head.py \
+  --repo_id gr1_reward_pred
+
+# 7) Prepare reward dataset priors + audit
+.venv/bin/python dataset/skeleton/generate_reward_priors.py \
+  --repo_id gr1_reward_pred_v2
+.venv/bin/python dataset/skeleton/audit_priors.py \
+  --repo_id gr1_reward_pred_v2 --frames dataset_skel_frames
+
+# 8) Optional calibrator/tuner pass on tuned checkpoint
+.venv/bin/python lewm/skeleton/tuner.py \
+  --ckpt <reward_tuned_ckpt> \
+  --repo_id gr1_reward_pred_v2
+
+# 9) Harvest goal gallery for MPC
 .venv/bin/python lewm/harvest_goals.py
 
-# 3) Start planner server (example: Multi-View RGB + Skeletal Priors + DINOv3 Waypoints)
+# 10) Optional MPC diagnostic sweep before serving
+.venv/bin/python lewm/diagnose_mpc.py \
+  --model <ckpt> \
+  --gallery goal_gallery.pth \
+  --multi_view --use_skeleton --use_dino
+
+# 11) Start planner server (LeWM_E2E.ipynb reference)
 .venv/bin/python lewm/lewm_server.py \
   --model <ckpt> \
   --gallery goal_gallery.pth \
   --multi_view --use_skeleton --use_dino
 
-# 4) Run simulation client
+# 12) Run simulation client
 .venv/bin/python lewm/simulation_lewm.py \
   --base_url https://<id>.ngrok-free.app \
   --multi_view --use_skeleton --use_dino
