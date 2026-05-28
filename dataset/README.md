@@ -22,15 +22,14 @@ This module defines how data is created and augmented for the Le-Probe protocol.
 ## Dataset IDs
 
 - `gr1_pickup_grasp`
-- `gr1_pickup_cup`
 - `gr1_reward_pred`
 - `gr1_reward_pred_v2`
 
 ## Dataset Links
 
-- `gr1_pickup_grasp`: [Google Drive folder](https://drive.google.com/drive/folders/18wbnfFm3c51hM97ZnRBc5H2hkrH0RVyy?usp=sharing)
-- `gr1_reward_pred`: [Google Drive folder](https://drive.google.com/drive/folders/1Rb9KgvoqdevNvlJ540QD2sy_ZVDP0f8k?usp=sharing)
-- `gr1_reward_pred_v2`: [Google Drive folder](https://drive.google.com/drive/folders/1fg36JJ4RlNYOWc5y6fXR4Ji1VwGZuAU4?usp=sharing)
+- `gr1_pickup_grasp`: [Google Drive folder](https://drive.google.com/drive/folders/1yYMT7J_eRkQmXDq3tcisNd4kRSWeTI40?usp=sharing)
+- `gr1_reward_pred`: [Google Drive folder](https://drive.google.com/drive/folders/1QWra9dRJ9aceUqOpmj56OG8SaVUCVr-g?usp=sharing)
+- `gr1_reward_pred_v2`: [Google Drive folder](https://drive.google.com/drive/folders/1iwz_1LeEi4vbMWDeIXU_Pb6tVxDqcbNE?usp=sharing)
 
 ## Setup
 
