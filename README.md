@@ -57,10 +57,10 @@ pip install -r requirements.txt
 ### Behavior Progression
 
 <div align="center">
-  <img src="assets/lewm_grasp.gif" width="220" alt="Single-View RGB rollout">
-  <img src="assets/lewm_grasp_multiview.gif" width="220" alt="Multi-View RGB rollout">
-  <img src="assets/lewm_grasp_multiview_skeleton.gif" width="220" alt="Multi-View RGB plus Skeletal Priors rollout">
-  <img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="220" alt="Multi-View RGB plus Skeletal Priors plus DINOv3 Waypoints rollout">
+  <img src="assets/lewm_grasp.gif" width="120" alt="Single-View RGB rollout">
+  <img src="assets/lewm_grasp_multiview.gif" width="120" alt="Multi-View RGB rollout">
+  <img src="assets/lewm_grasp_multiview_skeleton.gif" width="120" alt="Multi-View RGB plus Skeletal Priors rollout">
+  <img src="assets/lewm_grasp_multiview_skeleton_dino.gif" width="120" alt="Multi-View RGB plus Skeletal Priors plus DINOv3 Waypoints rollout">
 </div>
 
 ### Training-Manifold Audit (PCA / t-SNE / UMAP)
