@@ -591,7 +591,8 @@ class LeWMAttributor:
                     )
 
                     scaled_grad = agg_grad * std_t  # Chain rule for normalization
-                    feat_grad = torch.matmul(scaled_grad, W_dec.T)  # [..., D_dict]
+                    # decoder.weight is [d_output, d_dict] (nn.Linear out×in)
+                    feat_grad = torch.matmul(scaled_grad, W_dec)
 
                     # 3. Use Transcoder Sparse Activations (already captured in forward_hook)
                     sparse_acts = self._collapse_to_token_matrix(act)
