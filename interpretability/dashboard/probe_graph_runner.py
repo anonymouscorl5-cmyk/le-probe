@@ -146,7 +146,7 @@ def load_probe_resources(
         "transcoders": transcoders,
         "dataset": dataset,
         "min_k": int(defaults.get("min_k", 15)),
-        "ig_steps": int(defaults.get("ig_steps", 20)),
+        "ig_steps": int(v.get("ig_steps", defaults.get("ig_steps", 10))),
         "bundle_path": bundle_path,
     }
 

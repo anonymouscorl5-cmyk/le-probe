@@ -21,6 +21,7 @@ variants:
     use_skeleton: false
     use_dino: false
     attribution_target: reward
+    ig_steps: 5
     meta: activations_granular_multiview/encoder_L0.json
 
   multiview_skeleton:
@@ -30,6 +31,7 @@ variants:
     use_skeleton: true
     use_dino: false
     attribution_target: reward
+    ig_steps: 5
     meta: activations_granular_multiview_skeleton/encoder_L0.json
 
   multiview_skeleton_dino:
@@ -40,6 +42,7 @@ variants:
     use_dino: true
     # Encoder-only interpretability: reward IG (ignore DINO subgoal path in graphs).
     attribution_target: reward
+    ig_steps: 5
     meta: activations_granular_multiview_skeleton_dino/encoder_L0.json
 
 defaults:
