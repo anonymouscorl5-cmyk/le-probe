@@ -22,7 +22,7 @@ This module covers the analysis side of Le-Probe: why planning behavior changes 
 | **Single-View RGB** | ![PCA](../assets/manifold_3d_pca.png) | ![t-SNE](../assets/manifold_3d_tsne.png) | ![UMAP](../assets/manifold_3d_umap.png) |
 | **Multi-View RGB** | ![PCA](../assets/manifold_3d_multiview_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_umap.png) |
 | **Multi-View RGB + Skeletal Priors** | ![PCA](../assets/manifold_3d_multiview_skeleton_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_skeleton_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_skeleton_umap.png) |
-| **Multi-View RGB + Skeletal Priors + DINOv3 Waypoints** | ![PCA](../assets/manifold_3d_multiview_skeleton_dino_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_skeleton_dino_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_skeleton_dino_umap.png) |
+| **Multi-View RGB + Skeletal Priors + DINOv3 Waypoints** | ![PCA](../assets/manifold_3d_multiview_skeleton_dino_2_pca.png) | ![t-SNE](../assets/manifold_3d_multiview_skeleton_dino_2_tsne.png) | ![UMAP](../assets/manifold_3d_multiview_skeleton_dino_2_umap.png) |
 
 ## Static Probe Results
 
