@@ -49,12 +49,14 @@ def variant_config(profiles: dict, variant_tag: str) -> dict:
 def experiment_config_from_variant(v: dict, profiles: dict) -> ExperimentConfig:
     d = profiles.get("defaults", {})
     num_views = 5 if v.get("multi_view") else 1
+    # Static hull probes: one repeated snapshot is enough (see probe_history_size).
+    history_size = int(d.get("probe_history_size", d.get("history_size", 3)))
     return ExperimentConfig(
         multi_view=bool(v.get("multi_view")),
         use_skeleton=bool(v.get("use_skeleton")),
         use_dino=bool(v.get("use_dino")),
         num_views=num_views,
-        history_size=int(d.get("history_size", 3)),
+        history_size=history_size,
         attribution_target=str(v.get("attribution_target", "reward")),
     )
 

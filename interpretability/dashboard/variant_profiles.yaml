@@ -46,6 +46,8 @@ defaults:
   probe_bundle: datasets/workspace_probe_grasp/workspace_probe_bundle.pt
   pose_clusters: datasets/workspace_probe_grasp/workspace_probe_pose_clusters.json
   transcoder_subdir: transcoder_weights_residual
+  # Trained LeWM uses history_size=3; static workspace probes are single snapshots.
   history_size: 3
-  ig_steps: 20
+  probe_history_size: 1
+  ig_steps: 10
   min_k: 15
