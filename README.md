@@ -1,6 +1,6 @@
 # Le-Probe: Representation Audits for LeWM
 
-Le-Probe is the experiment and analysis stack used in our CoRL 2026 submission to diagnose why latent MPC succeeds or fails across LeRobot World Model variants on a high-DoF cube-pick task.
+Le-Probe is the experiment and analysis stack used in our CoRL 2026 submission to diagnose why latent MPC succeeds or fails with LeWorldModel on a GR-1 cube-pick task.
 
 ## Paper-Aligned Scope
 
