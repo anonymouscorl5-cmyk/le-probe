@@ -8,6 +8,7 @@ datasets
 manifold_visualization
 workspace_visualization
 training_metrics
+neuronpedia_images
 demo_videos
 scratch
 *.log

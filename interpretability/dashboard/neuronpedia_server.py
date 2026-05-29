@@ -31,8 +31,18 @@ async def add_cors_headers(request, call_next):
 
 
 # --- STATIC FILE SERVING ---
-# Serve pre-computed graphs directly
-GRAPH_DIR = os.path.abspath("repos/neuronpedia/apps/webapp/public/graphs/lewm-robot")
+# Serve pre-computed graphs directly (path is relative to this file, not cwd)
+_DEFAULT_GRAPH_DIR = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "neuronpedia",
+    "apps",
+    "webapp",
+    "public",
+    "graphs",
+    "lewm-robot",
+)
+GRAPH_DIR = os.path.abspath(_DEFAULT_GRAPH_DIR)
 if not os.path.exists(GRAPH_DIR):
     os.makedirs(GRAPH_DIR, exist_ok=True)
 
@@ -152,7 +162,9 @@ if __name__ == "__main__":
 
     import uvicorn
 
+    graph_count = sum(1 for name in os.listdir(GRAPH_DIR) if name.endswith(".json"))
     print(f"🚀 Neuronpedia Visual Proxy starting on port {args.port}")
+    print(f"📂 Serving graphs from: {GRAPH_DIR} ({graph_count} .json files)")
     if CONFIG["remote_url"]:
         print(f"🔗 Proxying to cloud: {CONFIG['remote_url']}")
     else:
