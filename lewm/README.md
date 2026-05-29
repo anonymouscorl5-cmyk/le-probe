@@ -1,6 +1,6 @@
 # LeWM: World Model Training and Latent MPC
 
-This module contains the LeRobot World Model training and planning stack used for:
+This module contains the LeWorldModel training and planning stack used for:
 
 `Single-View RGB -> Multi-View RGB -> Multi-View RGB + Skeletal Priors -> Multi-View RGB + Skeletal Priors + DINOv3 Waypoints`
 
