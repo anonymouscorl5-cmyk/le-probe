@@ -13,7 +13,6 @@ import time
 import torch.nn as nn
 import traceback
 
-# LeWM / LeRobot Imports
 from interpretability.dashboard.workspace_probe_dataset import WorkspaceProbeDataset
 from interpretability.lewm_experiment import (
     ExperimentConfig,
@@ -131,6 +130,78 @@ async def get_frame(idx: int):
 # --- 2. ATTRIBUTION ENDPOINTS (New Phase 2 Features) ---
 
 
+def _sync_device(device) -> None:
+    dev = str(device)
+    if dev.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+class _AttrProfiler:
+    """Optional CUDA-synchronized timings for LeWMAttributor.attribute()."""
+
+    def __init__(self, enabled: bool, device) -> None:
+        self.enabled = enabled
+        self.device = device
+        self.times: dict[str, float] = {}
+        self.last_elapsed = 0.0
+
+    def start(self) -> float:
+        if self.enabled:
+            _sync_device(self.device)
+        return time.perf_counter()
+
+    def stop(self, key: str, t0: float) -> float:
+        if self.enabled:
+            _sync_device(self.device)
+        dt = time.perf_counter() - t0
+        self.last_elapsed = dt
+        if self.enabled:
+            self.times[key] = self.times.get(key, 0.0) + dt
+        return dt
+
+    def report(
+        self,
+        *,
+        steps: int,
+        pixel_shape: tuple,
+        action_shape: tuple,
+        n_nodes: int,
+        n_links: int,
+    ) -> dict[str, float]:
+        if not self.enabled:
+            return {}
+        ig_total = self.times.get("ig_forward_backward", 0.0)
+        lines = [
+            "⏱️  Attribution profile "
+            f"(pixels={pixel_shape}, actions={action_shape}, ig_steps={steps}):"
+        ]
+        order = (
+            "register_hooks",
+            "prepare_inputs",
+            "ig_forward_backward",
+            "post_ig_transfer",
+            "build_input_nodes",
+            "build_feature_nodes",
+            "link_scan",
+            "link_prune",
+            "cleanup_hooks",
+        )
+        total = sum(self.times.get(k, 0.0) for k in order)
+        for key in order:
+            sec = self.times.get(key, 0.0)
+            if sec <= 0:
+                continue
+            pct = (100.0 * sec / total) if total else 0.0
+            extra = ""
+            if key == "ig_forward_backward" and steps:
+                extra = f" (~{sec / steps:.2f}s/step)"
+            lines.append(f"    {key:22s} {sec:6.2f}s ({pct:4.0f}%){extra}")
+        lines.append(f"    {'TOTAL':22s} {total:6.2f}s")
+        lines.append(f"    graph: {n_nodes} nodes, {n_links} links")
+        print("\n".join(lines), flush=True)
+        return dict(self.times)
+
+
 class LeWMAttributor:
     """
     Computes hierarchical attribution for the LeWM model.
@@ -145,6 +216,7 @@ class LeWMAttributor:
         cfg: ExperimentConfig,
         device="cuda",
         min_k=15,
+        profile: bool = False,
     ):
         self.model = model
         self.transcoders = transcoders
@@ -152,6 +224,7 @@ class LeWMAttributor:
         self.cfg = cfg
         self.device = device
         self.min_k = min_k
+        self.profile = profile
         self.hooks = {}
         self.activations = {}
         self.gradients = {}
@@ -218,11 +291,15 @@ class LeWMAttributor:
         """
         Runs attribution to find feature and input importance.
         """
+        prof = _AttrProfiler(self.profile, self.device)
         try:
             self.activations.clear()
             self.gradients.clear()
+            t0 = prof.start()
             self._register_hooks()
+            prof.stop("register_hooks", t0)
 
+            t0 = prof.start()
             batch_tensors = {
                 k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                 for k, v in sample.items()
@@ -232,6 +309,7 @@ class LeWMAttributor:
             )
             pixels = pixels.float().detach().requires_grad_(True)
             actions = actions.float().detach().requires_grad_(True)
+            prof.stop("prepare_inputs", t0)
 
             batch_extra = {
                 k: batch_tensors[k]
@@ -243,12 +321,21 @@ class LeWMAttributor:
                 f"📈 Computing Integrated Gradients ({steps} steps) "
                 f"[target={self.cfg.attribution_target}]..."
             )
+            if self.profile:
+                print(
+                    f"    inputs: pixels={tuple(pixels.shape)} "
+                    f"actions={tuple(actions.shape)} "
+                    f"views={self.cfg.num_views} history={self.cfg.history_size}",
+                    flush=True,
+                )
 
             total_pixel_grad = torch.zeros_like(pixels)
             total_action_grad = torch.zeros_like(actions)
             total_trans_grads = {lid: 0 for lid in self.transcoders.keys()}
 
+            t_ig = prof.start()
             for step in range(steps):
+                t_step = prof.start() if self.profile else 0.0
                 alpha = (step + 1) / steps
                 curr_pixels = (pixels.detach() * alpha).requires_grad_(True)
                 curr_actions = (actions.detach() * alpha).requires_grad_(True)
@@ -270,6 +357,16 @@ class LeWMAttributor:
                     if lid in self.gradients:
                         total_trans_grads[lid] += self.gradients[lid].detach()
 
+                if self.profile:
+                    step_sec = prof.stop("_ig_step", t_step)
+                    print(
+                        f"    IG step {step + 1}/{steps}: {step_sec:.2f}s",
+                        flush=True,
+                    )
+
+            prof.stop("ig_forward_backward", t_ig)
+
+            t0 = prof.start()
             pixel_grad = (total_pixel_grad / steps) * pixels
             state_grad = (total_action_grad / steps) * actions
 
@@ -280,6 +377,7 @@ class LeWMAttributor:
             # Capture Input Saliency
             pixel_grad = pixel_grad.detach().cpu()
             state_grad = state_grad.detach().cpu()
+            prof.stop("post_ig_transfer", t0)
 
             # 4. Build compliant CLTGraph structure
             clt_nodes = []
@@ -324,6 +422,7 @@ class LeWMAttributor:
             layer_to_nodes[19] = [logit_node]
 
             # B. Add Visual Input Layer (Layer 0)
+            t0 = prof.start()
             layer_to_nodes[0] = []
             patch_saliency = self._aggregate_spatial_grad(pixel_grad)
             top_patches = torch.topk(patch_saliency.view(-1), k=15)
@@ -379,9 +478,11 @@ class LeWMAttributor:
                 }
                 clt_nodes.append(node)
                 layer_to_nodes[0].append(node)
+            prof.stop("build_input_nodes", t0)
 
             # C. Process Transcoder Features
             # Order the layers properly
+            t0 = prof.start()
             layer_order = [f"encoder_L{i}" for i in range(num_enc)] + [
                 f"predictor_L{i}" for i in range(num_pred)
             ]
@@ -505,9 +606,11 @@ class LeWMAttributor:
                     }
                     clt_nodes.append(node)
                     layer_to_nodes[stream_idx].append(node)
+            prof.stop("build_feature_nodes", t0)
 
             # Causal Links (Scan across all layers: 0-19)
             print(f"🔗 Tracing Global Jump Connections with Min-{self.min_k} Filter...")
+            t0 = prof.start()
             all_potential_links = []
 
             for s_idx in range(20):
@@ -600,8 +703,10 @@ class LeWMAttributor:
                                     )
                             except:
                                 continue
+            prof.stop("link_scan", t0)
 
             # Apply Top-K per node constraint (Separate Incoming/Outgoing)
+            t0 = prof.start()
             outgoing_map = {}  # node_id -> list of links where this is source
             incoming_map = {}  # node_id -> list of links where this is target
 
@@ -630,9 +735,20 @@ class LeWMAttributor:
 
             for s, t, w in final_link_set:
                 clt_links.append({"source": s, "target": t, "weight": w})
+            prof.stop("link_prune", t0)
 
             # Cleanup hooks
+            t0 = prof.start()
             self._cleanup_hooks()
+            prof.stop("cleanup_hooks", t0)
+
+            profile_times = prof.report(
+                steps=steps,
+                pixel_shape=tuple(pixels.shape),
+                action_shape=tuple(actions.shape),
+                n_nodes=len(clt_nodes),
+                n_links=len(clt_links),
+            )
 
             # E. Final Graph structure
             graph_data = {
@@ -662,6 +778,8 @@ class LeWMAttributor:
                 "links": clt_links,
                 "_top_patch_indices": top_patches.indices.tolist(),
             }
+            if profile_times:
+                graph_data["metadata"]["attribution_profile_sec"] = profile_times
         except Exception as e:
             print(f"❌ Error processing layer: {e}")
             traceback.print_exc()

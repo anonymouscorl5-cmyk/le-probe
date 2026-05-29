@@ -147,6 +147,7 @@ def load_probe_resources(
         "dataset": dataset,
         "min_k": int(defaults.get("min_k", 15)),
         "ig_steps": int(v.get("ig_steps", defaults.get("ig_steps", 10))),
+        "profile": False,
         "bundle_path": bundle_path,
     }
 
@@ -229,7 +230,9 @@ def generate_probe_graph(
         resources["transcoders"],
         resources["mapper"],
         resources["cfg"],
+        device=resources["device"],
         min_k=resources["min_k"],
+        profile=bool(resources.get("profile")),
     )
     graph = attributor.attribute(
         batch,

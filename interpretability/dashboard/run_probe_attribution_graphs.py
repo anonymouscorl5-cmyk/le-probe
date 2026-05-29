@@ -106,6 +106,11 @@ def main() -> None:
         dest="recommend",
         help="Skip node recommendation sidecars",
     )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Print per-phase attribution timings (CUDA-synced) and IG step progress",
+    )
     args = parser.parse_args()
     t0 = time.perf_counter()
 
@@ -153,6 +158,7 @@ def main() -> None:
     )
     resources = load_probe_resources(args.variant, device=args.device, verbose=True)
     resources["variant"] = {"tag": args.variant}
+    resources["profile"] = args.profile
     _log(
         f"Stage 2 done — model on {resources['device']}, "
         f"{len(resources['transcoders'])} CLT layer(s), "
