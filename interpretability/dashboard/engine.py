@@ -237,6 +237,35 @@ class LeWMAttributor:
             return t
         return t.reshape(-1, t.shape[-1])
 
+    def _canonicalize_multiview_batch(self, t: torch.Tensor) -> torch.Tensor:
+        """Pool LateFusion's folded view batch (B=num_views) → single stream."""
+        if self.cfg.multi_view and t.ndim >= 2 and t.shape[0] == self.cfg.num_views:
+            return t.mean(dim=0, keepdim=True)
+        return t
+
+    def _align_grad_to_ref(self, g: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+        """Match batch/sequence layout of ref for crosscoder grad concatenation."""
+        g = self._canonicalize_multiview_batch(g)
+        ref = self._canonicalize_multiview_batch(ref)
+        if g.ndim < 2 or ref.ndim < 2:
+            return g
+
+        if g.shape[0] != ref.shape[0]:
+            if g.shape[0] == 1:
+                g = g.expand(ref.shape[0], *g.shape[1:])
+            else:
+                g = g.mean(dim=0, keepdim=True)
+                if ref.shape[0] != 1:
+                    g = g.expand(ref.shape[0], *g.shape[1:])
+
+        if g.ndim >= 3 and ref.ndim >= 3 and g.shape[1] != ref.shape[1]:
+            if g.shape[1] == 1 and ref.shape[1] != 1:
+                g = g.expand(-1, ref.shape[1], -1)
+            elif ref.shape[1] == 1 and g.shape[1] != 1:
+                g = g.mean(dim=1, keepdim=True)
+
+        return g
+
     def _register_hooks(self):
         """Registers forward and backward hooks to capture SAE latents and their gradients."""
         for layer_id, tc_data in self.transcoders.items():
@@ -504,6 +533,9 @@ class LeWMAttributor:
                 if act is None or grad is None or tc_data is None:
                     continue
 
+                grad = self._canonicalize_multiview_batch(grad)
+                act = self._canonicalize_multiview_batch(act)
+
                 tc = tc_data["model"]
                 stats = tc_data["stats"]
 
@@ -542,15 +574,7 @@ class LeWMAttributor:
                         for wid in window_ids:
                             g = self.gradients.get(wid)
                             if g is not None:
-                                # Resolution Alignment (Funnel Fix)
-                                # If current layer (grad) is spatial (257) but window layer (g) is global (1)
-                                if g.shape[1] != grad.shape[1]:
-                                    if g.shape[1] == 1 and grad.shape[1] == 257:
-                                        # Broadcast global to spatial
-                                        g = g.expand(-1, grad.shape[1], -1)
-                                    elif g.shape[1] == 257 and grad.shape[1] == 1:
-                                        # Pool spatial to global
-                                        g = g.mean(dim=1, keepdim=True)
+                                g = self._align_grad_to_ref(g, grad)
                                 grads_to_cat.append(g)
                             else:
                                 # Pad with zeros if gradient missing (e.g. at end of model)
@@ -567,7 +591,7 @@ class LeWMAttributor:
                     )
 
                     scaled_grad = agg_grad * std_t  # Chain rule for normalization
-                    feat_grad = torch.matmul(scaled_grad, W_dec)  # [T, D_dict]
+                    feat_grad = torch.matmul(scaled_grad, W_dec.T)  # [..., D_dict]
 
                     # 3. Use Transcoder Sparse Activations (already captured in forward_hook)
                     sparse_acts = self._collapse_to_token_matrix(act)
