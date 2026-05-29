@@ -229,6 +229,14 @@ class LeWMAttributor:
         self.activations = {}
         self.gradients = {}
 
+    def _collapse_to_token_matrix(self, t: torch.Tensor) -> torch.Tensor:
+        """Merge batch/view/time/patch dims → [N_tokens, D_feat]."""
+        if t.ndim == 1:
+            return t.unsqueeze(0)
+        if t.ndim == 2:
+            return t
+        return t.reshape(-1, t.shape[-1])
+
     def _register_hooks(self):
         """Registers forward and backward hooks to capture SAE latents and their gradients."""
         for layer_id, tc_data in self.transcoders.items():
@@ -379,6 +387,7 @@ class LeWMAttributor:
             state_grad = state_grad.detach().cpu()
             prof.stop("post_ig_transfer", t0)
 
+            print("    post-IG: building input nodes…", flush=True)
             # 4. Build compliant CLTGraph structure
             clt_nodes = []
             clt_links = []
@@ -480,6 +489,7 @@ class LeWMAttributor:
                 layer_to_nodes[0].append(node)
             prof.stop("build_input_nodes", t0)
 
+            print("    post-IG: CLT feature nodes…", flush=True)
             # C. Process Transcoder Features
             # Order the layers properly
             t0 = prof.start()
@@ -560,16 +570,8 @@ class LeWMAttributor:
                     feat_grad = torch.matmul(scaled_grad, W_dec)  # [T, D_dict]
 
                     # 3. Use Transcoder Sparse Activations (already captured in forward_hook)
-                    sparse_acts = act
-                    while sparse_acts.ndim > 2:
-                        sparse_acts = sparse_acts.squeeze(0)
-                    feat_g = feat_grad
-                    while feat_g.ndim > 2:
-                        feat_g = feat_g.squeeze(0)
-                    if feat_g.ndim == 1:
-                        feat_g = feat_g.unsqueeze(0)
-                    if sparse_acts.ndim == 1:
-                        sparse_acts = sparse_acts.unsqueeze(0)
+                    sparse_acts = self._collapse_to_token_matrix(act)
+                    feat_g = self._collapse_to_token_matrix(feat_grad)
 
                 # Collapse all token/time dims → one score per dictionary feature
                 token_dims = list(range(sparse_acts.ndim - 1))
